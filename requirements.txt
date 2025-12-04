@@ -1,6 +1,6 @@
 numpy
 scipy
-torch
+torch>=2.6.0
 sbi
 astropy
 matplotlib
