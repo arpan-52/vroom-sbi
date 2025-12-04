@@ -1,0 +1,10 @@
+numpy
+scipy
+torch
+sbi
+astropy
+matplotlib
+corner
+tqdm
+pyyaml
+pytest

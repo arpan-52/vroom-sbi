@@ -1,0 +1,35 @@
+# VROOM-SBI Configuration File
+
+# Frequency file path
+freq_file: "freq.txt"
+
+# Faraday depth range (rad/m^2)
+phi:
+  min: -1000.0
+  max: 1000.0
+  n_samples: 200
+
+# Prior ranges for parameters
+priors:
+  rm:
+    min: -500.0
+    max: 500.0
+  amp:
+    min: 0.0
+    max: 1.0
+  noise:
+    min: 0.001
+    max: 0.1
+
+# Training settings
+training:
+  n_simulations: 10000
+  batch_size: 50
+  n_rounds: 1
+  device: "cuda"  # or "cpu"
+  validation_fraction: 0.1
+  
+# Model selection
+model_selection:
+  max_components: 5
+  use_log_evidence: true
