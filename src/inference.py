@@ -106,7 +106,9 @@ class RMInference:
             model_path = os.path.join(self.model_dir, f"model_n{n}.pkl")
             
             if os.path.exists(model_path):
-                posterior = torch.load(model_path, map_location=self.device)
+                # Note: weights_only=False is required for loading sbi posterior objects
+                # Only load models from trusted sources
+                posterior = torch.load(model_path, map_location=self.device, weights_only=False)
                 self.posteriors[n] = posterior
                 print(f"  Loaded model for {n} component(s)")
             else:
