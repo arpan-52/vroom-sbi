@@ -43,11 +43,6 @@ models/
 # SBI logs
 sbi-logs/
 
-# Output files
-*.png
-*.jpg
-*.pdf
-results/
 
 # IDEs
 .vscode/
