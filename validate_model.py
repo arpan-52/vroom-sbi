@@ -4,6 +4,7 @@ Simple validation script for VROOM-SBI.
 - 20 test cases
 - Recovery plots (true vs recovered for each parameter)
 - Residual plots for first 5 tests
+- Posterior contour plots
 - Summary statistics
 """
 
@@ -17,6 +18,7 @@ import torch
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import yaml
+import corner
 
 from src.simulator import RMSimulator, sample_prior
 from src.physics import load_frequencies, freq_to_lambda_sq
@@ -59,30 +61,29 @@ def generate_test_cases(
     flat_priors: Dict[str, float],
     seed: int = 42
 ):
-    """Generate synthetic test cases with known ground truth."""
+    """Generate test cases with known parameters."""
     np.random.seed(seed)
+    torch.manual_seed(seed)
     
-    simulator = RMSimulator(freq_file, n_components)
-    theta_true = sample_prior(n_tests, n_components, flat_priors)
+    simulator = RMSimulator(freq_file=freq_file, n_components=n_components)
     
-    x_obs = simulator(theta_true)
-    if x_obs.ndim == 1:
-        x_obs = x_obs.reshape(1, -1)
+    # Sample n_tests parameter sets from prior
+    theta_all = sample_prior(n_tests, n_components, flat_priors)
     
-    return theta_true, x_obs, simulator
+    x_list = []
+    for i in range(n_tests):
+        x = simulator(theta_all[i])
+        x_list.append(x)
+    
+    return theta_all, np.array(x_list)
 
-
-def run_inference(posterior, x_obs: np.ndarray, n_samples: int = 5000, device: str = "cpu"):
-    """Run inference on observed data."""
-    x_tensor = torch.tensor(x_obs, dtype=torch.float32, device=device)
-    
-    with torch.no_grad():
-        samples = posterior.sample((n_samples,), x=x_tensor)
-    
-    return samples.cpu().numpy()
-
-
-def plot_recovery(theta_true_all, theta_recovered_all, theta_std_all, n_components, output_path):
+def plot_recovery(
+    theta_true_all: np.ndarray,
+    theta_recovered_all: np.ndarray,
+    theta_std_all: np.ndarray,
+    n_components: int,
+    output_path: Path
+):
     """
     Plot true vs recovered for all parameters.
     One subplot per parameter type.
@@ -143,10 +144,16 @@ def plot_recovery(theta_true_all, theta_recovered_all, theta_std_all, n_componen
     print(f"Saved: {output_path}")
 
 
-def plot_residuals(theta_true, theta_recovered, x_obs, n_components, freq_file, output_path, test_idx):
-    """
-    Plot Q, U data with model fit and residuals.
-    """
+def plot_residuals(
+    theta_true: np.ndarray,
+    theta_recovered: np.ndarray,
+    x_obs: np.ndarray,
+    n_components: int,
+    freq_file: str,
+    output_path: Path,
+    test_idx: int = 0
+):
+    """Plot residuals between observed and model predictions."""
     frequencies = load_frequencies(freq_file)
     lambda_sq = freq_to_lambda_sq(frequencies)
     n_freq = len(frequencies)
@@ -177,17 +184,15 @@ def plot_residuals(theta_true, theta_recovered, x_obs, n_components, freq_file, 
     Q_true = P_true.real
     U_true = P_true.imag
     
-    # Noise values
-    true_noise = theta_true[-1]
-    inferred_noise = theta_recovered[-1]
-    
     # Residuals
     residuals_Q = Q_obs - Q_model
     residuals_U = U_obs - U_model
-    rms_Q = np.std(residuals_Q)
-    rms_U = np.std(residuals_U)
+    rms_Q = np.sqrt(np.mean(residuals_Q**2))
+    rms_U = np.sqrt(np.mean(residuals_U**2))
     
-    # Create figure
+    true_noise = theta_true[-1]
+    inferred_noise = theta_recovered[-1]
+    
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     
     # Q data + fit
@@ -247,7 +252,69 @@ def plot_residuals(theta_true, theta_recovered, x_obs, n_components, freq_file, 
     print(f"Saved: {output_path}")
 
 
-def print_summary(theta_true_all, theta_recovered_all, n_components):
+def plot_posterior_contours(
+    samples: np.ndarray,
+    theta_true: np.ndarray,
+    n_components: int,
+    output_path: Path,
+    test_idx: int = 0
+):
+    """
+    Plot posterior contours with true values marked.
+    
+    Parameters
+    ----------
+    samples : np.ndarray
+        Posterior samples, shape (n_samples, n_params)
+    theta_true : np.ndarray
+        True parameter values
+    n_components : int
+        Number of RM components
+    output_path : Path
+        Where to save the figure
+    test_idx : int
+        Test case index for title
+    """
+    # Build parameter labels
+    labels = []
+    for i in range(n_components):
+        labels.extend([f"RM$_{i+1}$", f"amp$_{i+1}$", f"$\\chi_{{0,{i+1}}}$"])
+    labels.append("$\\sigma$")
+    
+    # Create corner plot with contours
+    fig = corner.corner(
+        samples,
+        labels=labels,
+        truths=theta_true,
+        truth_color="red",
+        quantiles=[0.16, 0.5, 0.84],
+        show_titles=True,
+        title_fmt=".3f",
+        title_kwargs={"fontsize": 10},
+        levels=(0.68, 0.95),  # 1-sigma and 2-sigma contours
+        plot_contours=True,
+        fill_contours=True,
+        contour_kwargs={"colors": ["#1f77b4", "#1f77b4"], "linewidths": 1.5},
+        contourf_kwargs={"alpha": 0.3},
+        hist_kwargs={"density": True, "alpha": 0.7},
+    )
+    
+    fig.suptitle(
+        f"Test #{test_idx + 1} | N={n_components} components\nRed lines = true values",
+        fontsize=14,
+        y=1.02
+    )
+    
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {output_path}")
+
+
+def print_summary(
+    theta_true_all: np.ndarray,
+    theta_recovered_all: np.ndarray,
+    n_components: int
+):
     """Print summary statistics."""
     param_names = []
     for i in range(n_components):
@@ -255,26 +322,31 @@ def print_summary(theta_true_all, theta_recovered_all, n_components):
     param_names.append("noise")
     
     print("\n" + "="*60)
-    print("SUMMARY STATISTICS")
+    print("VALIDATION SUMMARY")
     print("="*60)
-    print(f"{'Parameter':<12} {'MAE':>12} {'Mean Error':>12} {'Std Error':>12}")
-    print("-"*60)
     
     for i, name in enumerate(param_names):
-        errors = theta_recovered_all[:, i] - theta_true_all[:, i]
-        mae = np.mean(np.abs(errors))
-        mean_err = np.mean(errors)
-        std_err = np.std(errors)
-        print(f"{name:<12} {mae:>12.4f} {mean_err:>12.4f} {std_err:>12.4f}")
+        true_vals = theta_true_all[:, i]
+        rec_vals = theta_recovered_all[:, i]
+        
+        mae = np.mean(np.abs(true_vals - rec_vals))
+        rmse = np.sqrt(np.mean((true_vals - rec_vals)**2))
+        bias = np.mean(rec_vals - true_vals)
+        
+        print(f"\n{name}:")
+        print(f"  MAE:  {mae:.4f}")
+        print(f"  RMSE: {rmse:.4f}")
+        print(f"  Bias: {bias:.4f}")
     
-    print("="*60)
+    print("\n" + "="*60)
 
 
-def main():
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple validation for VROOM-SBI")
     parser.add_argument("--n-tests", type=int, default=20, help="Number of test cases")
     parser.add_argument("--n-samples", type=int, default=5000, help="Posterior samples per test")
     parser.add_argument("--n-residual-plots", type=int, default=5, help="Number of residual plots to make")
+    parser.add_argument("--n-contour-plots", type=int, default=5, help="Number of contour plots to make")
     parser.add_argument("--output-dir", type=str, default="validation_results", help="Output directory")
     parser.add_argument("--model-path", type=str, default="models/posterior_n1.pkl", help="Path to posterior model")
     parser.add_argument("--device", type=str, default="cuda", help="Device (cuda or cpu)")
@@ -291,29 +363,33 @@ def main():
     flat_priors = get_flat_priors(config)
     freq_file = config.get("freq_file", "freq.txt")
     
-    print(f"Loading posterior from {args.model_path}...")
     posterior, model_data = load_posterior(args.model_path)
-    n_components = model_data["n_components"]
-    print(f"Model has {n_components} component(s)")
+    n_components = model_data.get("n_components", 1)
+    
+    print(f"Loaded model for N={n_components} components")
+    print(f"Running {args.n_tests} test cases...")
+    
+    # Set device
+    device = args.device
+    if device == "cuda" and not torch.cuda.is_available():
+        device = "cpu"
+        print("CUDA not available, using CPU")
     
     # Generate test cases
-    print(f"\nGenerating {args.n_tests} test cases...")
-    theta_true_all, x_obs_all, simulator = generate_test_cases(
-        n_components=n_components,
-        n_tests=args.n_tests,
-        freq_file=freq_file,
-        flat_priors=flat_priors,
-        seed=args.seed
+    theta_true_all, x_obs_all = generate_test_cases(
+        n_components, args.n_tests, freq_file, flat_priors, args.seed
     )
     
-    # Run inference on all test cases
-    print(f"\nRunning inference...")
+    # Run inference on each test case
     theta_recovered_all = []
     theta_std_all = []
     all_samples = []
     
-    for i in tqdm(range(args.n_tests), desc="Inferring"):
-        samples = run_inference(posterior, x_obs_all[i], n_samples=args.n_samples, device=args.device)
+    for i in tqdm(range(args.n_tests), desc="Running inference"):
+        x_obs = torch.tensor(x_obs_all[i], dtype=torch.float32).to(device)
+        
+        samples = posterior.sample((args.n_samples,), x=x_obs).cpu().numpy()
+        
         theta_recovered_all.append(np.mean(samples, axis=0))
         theta_std_all.append(np.std(samples, axis=0))
         all_samples.append(samples)
@@ -338,11 +414,16 @@ def main():
             test_idx=i
         )
     
+    # Plot 3: Posterior contour plots for first N tests
+    print(f"\nGenerating {args.n_contour_plots} contour plots...")
+    for i in range(min(args.n_contour_plots, args.n_tests)):
+        plot_posterior_contours(
+            all_samples[i],
+            theta_true_all[i],
+            n_components,
+            output_dir / f"contours_test{i+1}.png",
+            test_idx=i
+        )
+    
     # Print summary
     print_summary(theta_true_all, theta_recovered_all, n_components)
-    
-    print(f"\nDone! Results saved to {output_dir}/")
-
-
-if __name__ == "__main__":
-    main()
