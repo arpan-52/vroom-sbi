@@ -22,7 +22,7 @@ class RMSimulator:
         self.lambda_sq = freq_to_lambda_sq(self.freq)
         self.n_freq = len(self.freq)
         self.n_components = n_components
-        self.n_params = 3 * n_components + 1  # (RM, amp, chi) * N + noise
+        self.n_params = 3 * n_components + 1
 
     def __call__(self, theta: np.ndarray) -> np.ndarray:
         """
@@ -50,7 +50,6 @@ class RMSimulator:
                 amp = theta[b, 3 * i + 1]
                 chi0 = theta[b, 3 * i + 2]
 
-                # P(λ²) = p * exp(2i(χ₀ + RM*λ²))
                 phase = 2 * (chi0 + rm * self.lambda_sq)
                 P += amp * np.exp(1j * phase)
 
@@ -64,15 +63,7 @@ class RMSimulator:
 
 def build_prior(n_components: int, config: dict, device: str = "cpu"):
     """
-    Build SBI BoxUniform prior for N components on the requested device.
-
-    Parameters:
-      n_components: number of Faraday-thin components
-      config: dict with prior bounds (rm_min, rm_max, amp_min, amp_max, noise_min, noise_max)
-      device: 'cpu' or 'cuda' (or 'cuda:0' etc.)
-
-    Returns:
-      sbi.utils.BoxUniform prior with low/high on the requested device
+    Build SBI BoxUniform prior for N components.
     """
     from sbi.utils import BoxUniform
 
@@ -81,9 +72,9 @@ def build_prior(n_components: int, config: dict, device: str = "cpu"):
 
     for _ in range(n_components):
         low.extend([
-            config["rm_min"],   # RM
-            config["amp_min"],  # amplitude
-            0.0,                # chi0
+            config["rm_min"],
+            config["amp_min"],
+            0.0,
         ])
         high.extend([
             config["rm_max"],
@@ -91,7 +82,6 @@ def build_prior(n_components: int, config: dict, device: str = "cpu"):
             np.pi,
         ])
 
-    # Noise
     low.append(config["noise_min"])
     high.append(config["noise_max"])
 
@@ -103,8 +93,7 @@ def build_prior(n_components: int, config: dict, device: str = "cpu"):
 
 def sample_prior(n_samples: int, n_components: int, config: dict) -> np.ndarray:
     """
-    Sample from prior with log-uniform for amplitude and noise.
-    Returns numpy array on CPU (for simulator).
+    Sample from prior - UNIFORM for all to match BoxUniform prior.
     """
     theta = np.zeros((n_samples, 3 * n_components + 1))
 
@@ -113,16 +102,16 @@ def sample_prior(n_samples: int, n_components: int, config: dict) -> np.ndarray:
         theta[:, 3 * i] = np.random.uniform(
             config["rm_min"], config["rm_max"], n_samples
         )
-        # Amplitude: log-uniform
-        theta[:, 3 * i + 1] = np.exp(np.random.uniform(
-            np.log(config["amp_min"]), np.log(config["amp_max"]), n_samples
-        ))
+        # Amplitude: uniform (matches BoxUniform)
+        theta[:, 3 * i + 1] = np.random.uniform(
+            config["amp_min"], config["amp_max"], n_samples
+        )
         # Chi0: uniform [0, π]
         theta[:, 3 * i + 2] = np.random.uniform(0, np.pi, n_samples)
 
-    # Noise: log-uniform
-    theta[:, -1] = np.exp(np.random.uniform(
-        np.log(config["noise_min"]), np.log(config["noise_max"]), n_samples
-    ))
+    # Noise: uniform (matches BoxUniform)
+    theta[:, -1] = np.random.uniform(
+        config["noise_min"], config["noise_max"], n_samples
+    )
 
     return theta
