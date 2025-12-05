@@ -261,54 +261,88 @@ def plot_posterior_contours(
 ):
     """
     Plot posterior contours with true values marked.
-    
-    Parameters
-    ----------
-    samples : np.ndarray
-        Posterior samples, shape (n_samples, n_params)
-    theta_true : np.ndarray
-        True parameter values
-    n_components : int
-        Number of RM components
-    output_path : Path
-        Where to save the figure
-    test_idx : int
-        Test case index for title
+    Vibrant pink/cyan/red style.
     """
     # Build parameter labels
     labels = []
     for i in range(n_components):
-        labels.extend([f"RM$_{i+1}$", f"amp$_{i+1}$", f"$\\chi_{{0,{i+1}}}$"])
+        labels.extend([f"RM$_{{{i+1}}}$", f"A$_{{{i+1}}}$", f"$\\chi_{{0,{i+1}}}$"])
     labels.append("$\\sigma$")
     
-    # Create corner plot with contours
+    n_params = len(labels)
+    
+    # Set up the style
+    plt.style.use('default')
+    
+    # Color scheme - vibrant pink/magenta
+    color = "#FF1493"  # Deep pink / magenta
+    truth_color = "#00FFFF"  # Cyan
+    
+    # Create corner plot
     fig = corner.corner(
         samples,
         labels=labels,
         truths=theta_true,
-        truth_color="red",
+        truth_color=truth_color,
         quantiles=[0.16, 0.5, 0.84],
         show_titles=True,
         title_fmt=".3f",
-        title_kwargs={"fontsize": 10},
-        levels=(0.68, 0.95),  # 1-sigma and 2-sigma contours
+        title_kwargs={"fontsize": 11},
+        label_kwargs={"fontsize": 12},
+        levels=[0.393, 0.865, 0.989],  # 1, 2, 3 sigma
+        smooth=1.2,
+        smooth1d=1.0,
         plot_contours=True,
         fill_contours=True,
-        contour_kwargs={"colors": ["#1f77b4", "#1f77b4"], "linewidths": 1.5},
-        contourf_kwargs={"alpha": 0.3},
-        hist_kwargs={"density": True, "alpha": 0.7},
+        plot_datapoints=False,
+        plot_density=False,
+        color=color,
     )
     
+    # Style the axes
+    axes = np.array(fig.axes).reshape((n_params, n_params))
+    
+    for i in range(n_params):
+        for j in range(n_params):
+            if j > i:
+                continue
+            ax = axes[i, j]
+            
+            # Clean up spines
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_linewidth(0.8)
+            ax.spines['bottom'].set_linewidth(0.8)
+            
+            # Tick styling
+            ax.tick_params(axis='both', which='major', labelsize=9, 
+                          direction='out', length=4, width=0.8)
+            
+            # Add subtle grid to 2D panels
+            if j < i:
+                ax.grid(True, alpha=0.15, linestyle='-', linewidth=0.5)
+    
+    # Add title
     fig.suptitle(
-        f"Test #{test_idx + 1} | N={n_components} components\nRed lines = true values",
+        f"Posterior Distribution — Test {test_idx + 1}",
         fontsize=14,
-        y=1.02
+        fontweight='medium',
+        y=1.01
     )
     
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    # Add legend
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color=truth_color, linewidth=2, linestyle='--', label='True value'),
+        Line2D([0], [0], color=color, linewidth=8, alpha=0.7, label='Posterior'),
+    ]
+    fig.legend(handles=legend_elements, loc='upper right', fontsize=10, 
+               frameon=True, fancybox=False, edgecolor='none', 
+               bbox_to_anchor=(0.98, 0.98))
+    
+    plt.savefig(output_path, dpi=200, bbox_inches="tight", facecolor='white')
     plt.close(fig)
     print(f"Saved: {output_path}")
-
 
 def print_summary(
     theta_true_all: np.ndarray,
