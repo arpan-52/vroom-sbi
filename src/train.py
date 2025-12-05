@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Training utilities for VROOM-SBI tailored to the provided config layout.
+Training utilities for VROOM-SBI tailored to the provided config layout. 
 
-This module expects config.yaml with the exact structure you provided:
+This module expects config. yaml with the exact structure you provided:
 - freq_file
 - phi: min, max, n_samples
 - priors: rm {min,max}, amp {min,max}, noise {min,max}
@@ -22,12 +22,12 @@ from tqdm import tqdm
 
 from sbi.inference import SNPE
 
-from .simulator import RMSimulator, build_prior, sample_prior
+from . simulator import RMSimulator, build_prior, sample_prior
 
 
 def _flatten_priors(cfg: Dict[str, Any]) -> Dict[str, float]:
     """Turn the config['priors'] block into the flat prior dict used by simulator functions."""
-    pri = cfg.get("priors", {})
+    pri = cfg. get("priors", {})
     rm = pri.get("rm", {})
     amp = pri.get("amp", {})
     noise = pri.get("noise", {})
@@ -35,7 +35,7 @@ def _flatten_priors(cfg: Dict[str, Any]) -> Dict[str, float]:
     rm_min = float(rm.get("min", -800.0))
     rm_max = float(rm.get("max", 800.0))
 
-    amp_min = float(amp.get("min", 1e-6))  # avoid zero for log-uniform sampling
+    amp_min = float(amp.get("min", 1e-6))
     amp_max = float(amp.get("max", 1.0))
 
     noise_min = float(noise.get("min", 1e-9))
@@ -60,7 +60,7 @@ def _flatten_priors(cfg: Dict[str, Any]) -> Dict[str, float]:
 def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Extract training hyperparameters from the exact config layout you provided."""
     training = cfg.get("training", {}) or {}
-    model_selection = cfg.get("model_selection", {}) or {}
+    model_selection = cfg. get("model_selection", {}) or {}
 
     max_components = int(model_selection.get("max_components", 5))
     n_simulations = int(training.get("n_simulations", 10000))
@@ -68,6 +68,9 @@ def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     n_rounds = int(training.get("n_rounds", 1))
     device = training.get("device", "cpu")
     validation_fraction = float(training.get("validation_fraction", 0.1))
+    
+    # NEW: scaling factor for complex models
+    simulation_scaling = training.get("simulation_scaling", True)
 
     output_dir = Path(training.get("save_dir", "models"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -80,7 +83,38 @@ def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "device": device,
         "validation_fraction": validation_fraction,
         "output_dir": output_dir,
+        "simulation_scaling": simulation_scaling,
     }
+
+
+def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bool = True) -> int:
+    """
+    Scale the number of simulations based on model complexity.
+    
+    Higher-dimensional models need more training data for good posterior coverage.
+    
+    Parameters
+    ----------
+    n_components : int
+        Number of RM components
+    base_simulations : int
+        Base number of simulations (for N=1)
+    scaling : bool
+        Whether to apply scaling (if False, returns base_simulations)
+    
+    Returns
+    -------
+    int
+        Scaled number of simulations
+    """
+    if not scaling:
+        return base_simulations
+    
+    # Scaling factors: N=1 -> 1x, N=2 -> 2x, N=3 -> 4x, N=4 -> 6x, N=5 -> 8x
+    scaling_factors = {1: 1, 2: 2, 3: 4, 4: 6, 5: 8}
+    factor = scaling_factors. get(n_components, n_components * 2)
+    
+    return base_simulations * factor
 
 
 def train_model(
@@ -95,7 +129,7 @@ def train_model(
 ) -> Dict[str, Any]:
     """
     Train a single model with n_components, using the provided flat_priors
-    (keys: rm_min, rm_max, amp_min, amp_max, noise_min, noise_max).
+    (keys: rm_min, rm_max, amp_min, amp_max, noise_min, noise_max). 
 
     Saves the posterior to output_dir/posterior_n{n_components}.pkl and returns metadata dict.
     """
@@ -105,11 +139,10 @@ def train_model(
 
     simulator = RMSimulator(freq_file, n_components)
 
-    # Build prior on requested device (build_prior in simulator supports device kwarg)
+    # Build prior on requested device
     try:
         prior = build_prior(n_components, flat_priors, device=device)
     except TypeError:
-        # Backwards-compat fallback (if older build_prior doesn't accept device)
         prior = build_prior(n_components, flat_priors)
 
     print(f"Simulator params: n_params={simulator.n_params}, n_freq={simulator.n_freq}")
@@ -125,14 +158,13 @@ def train_model(
         xs.append(simulator(batch_theta))
     x = np.vstack(xs)
 
-    # Convert to torch and move to device (sbi requires prior tensors on same device)
+    # Convert to torch and move to device
     try:
         theta_t = torch.tensor(theta, dtype=torch.float32, device=device)
         x_t = torch.tensor(x, dtype=torch.float32, device=device)
     except Exception:
-        # fallback to CPU tensors if device invalid
         theta_t = torch.tensor(theta, dtype=torch.float32, device="cpu")
-        x_t = torch.tensor(x, dtype=torch.float32, device="cpu")
+        x_t = torch. tensor(x, dtype=torch.float32, device="cpu")
         device = "cpu"
         print("Warning: falling back to CPU tensors (device change).")
 
@@ -174,7 +206,7 @@ def train_model(
     return {
         "posterior": posterior,
         "n_components": n_components,
-        "n_freq": simulator.n_freq,
+        "n_freq": simulator. n_freq,
         "lambda_sq": simulator.lambda_sq,
         "path": str(save_path),
         "flat_priors": flat_priors,
@@ -183,24 +215,35 @@ def train_model(
 
 def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     """
-    Train models for N = 1 .. max_components using the exact config structure
-    the repository is using. Returns dict mapping n_components -> saved data dict.
+    Train models for N = 1 ..  max_components using the exact config structure
+    the repository is using.  Returns dict mapping n_components -> saved data dict.
+    
+    Now with automatic scaling of simulations for complex models!
     """
     if not isinstance(config, dict):
         raise ValueError("config must be a dict loaded from YAML.")
 
-    freq_file = config.get("freq_file", "freq.txt")
+    freq_file = config. get("freq_file", "freq.txt")
     training_cfg = _extract_training_cfg(config)
     flat_priors = _flatten_priors(config)
 
     results: Dict[int, Dict[str, Any]] = {}
 
     for n in range(1, training_cfg["max_components"] + 1):
+        # Scale simulations for complex models
+        n_sims = get_scaled_simulations(
+            n_components=n,
+            base_simulations=training_cfg["n_simulations"],
+            scaling=training_cfg["simulation_scaling"],
+        )
+        
+        print(f"\n>>> Model N={n}: Using {n_sims:,} simulations (base: {training_cfg['n_simulations']:,})")
+        
         data = train_model(
             n_components=n,
             freq_file=freq_file,
             flat_priors=flat_priors,
-            n_simulations=training_cfg["n_simulations"],
+            n_simulations=n_sims,
             batch_size=training_cfg["batch_size"],
             device=training_cfg["device"],
             validation_fraction=training_cfg["validation_fraction"],
@@ -208,5 +251,5 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
         )
         results[n] = data
 
-    print("\nAll done. Trained models for N =", list(results.keys()))
+    print("\nAll done.  Trained models for N =", list(results.keys()))
     return results

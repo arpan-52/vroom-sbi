@@ -5,7 +5,7 @@ freq_file: "freq.txt"
 
 # Faraday depth range (rad/m^2)
 phi:
-  min: -1000.0
+  min: -1000. 0
   max: 1000.0
   n_samples: 200
 
@@ -23,13 +23,15 @@ priors:
 
 # Training settings
 training:
-  n_simulations: 10000
+  n_simulations: 10000        # Base simulations (for N=1)
+  simulation_scaling: true    # Scale up for complex models (N=2,3,4,5)
   batch_size: 50
   n_rounds: 1
   device: "cuda"  # or "cpu"
   validation_fraction: 0.1
+  save_dir: "models"
   
 # Model selection
 model_selection:
-  max_components: 5
+  max_components: 1
   use_log_evidence: true
