@@ -1,146 +1,212 @@
+#!/usr/bin/env python3
 """
-Training functions for neural posterior estimation
-"""
+Training utilities for VROOM-SBI tailored to the provided config layout.
 
-import os
+This module expects config.yaml with the exact structure you provided:
+- freq_file
+- phi: min, max, n_samples
+- priors: rm {min,max}, amp {min,max}, noise {min,max}
+- training: n_simulations, batch_size, n_rounds, device, validation_fraction
+- model_selection: max_components, use_log_evidence
+
+Public API:
+- train_all_models(config: dict) -> dict[int, dict]
+"""
+from pathlib import Path
+import pickle
+from typing import Dict, Any
+
+import numpy as np
 import torch
-from sbi.inference import SNPE
 from tqdm import tqdm
 
-from .simulator import RMSimulator, build_prior
+from sbi.inference import SNPE
+
+from .simulator import RMSimulator, build_prior, sample_prior
 
 
-def train_model(freq_file, n_components, n_simulations=10000, 
-                config=None, device="cuda"):
+def _flatten_priors(cfg: Dict[str, Any]) -> Dict[str, float]:
+    """Turn the config['priors'] block into the flat prior dict used by simulator functions."""
+    pri = cfg.get("priors", {})
+    rm = pri.get("rm", {})
+    amp = pri.get("amp", {})
+    noise = pri.get("noise", {})
+
+    rm_min = float(rm.get("min", -800.0))
+    rm_max = float(rm.get("max", 800.0))
+
+    amp_min = float(amp.get("min", 1e-6))  # avoid zero for log-uniform sampling
+    amp_max = float(amp.get("max", 1.0))
+
+    noise_min = float(noise.get("min", 1e-9))
+    noise_max = float(noise.get("max", 0.1))
+
+    # Safety guards
+    if amp_min <= 0:
+        amp_min = 1e-6
+    if noise_min <= 0:
+        noise_min = 1e-9
+
+    return {
+        "rm_min": rm_min,
+        "rm_max": rm_max,
+        "amp_min": amp_min,
+        "amp_max": amp_max,
+        "noise_min": noise_min,
+        "noise_max": noise_max,
+    }
+
+
+def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract training hyperparameters from the exact config layout you provided."""
+    training = cfg.get("training", {}) or {}
+    model_selection = cfg.get("model_selection", {}) or {}
+
+    max_components = int(model_selection.get("max_components", 5))
+    n_simulations = int(training.get("n_simulations", 10000))
+    batch_size = int(training.get("batch_size", 10000))
+    n_rounds = int(training.get("n_rounds", 1))
+    device = training.get("device", "cpu")
+    validation_fraction = float(training.get("validation_fraction", 0.1))
+
+    output_dir = Path(training.get("save_dir", "models"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    return {
+        "max_components": max_components,
+        "n_simulations": n_simulations,
+        "batch_size": batch_size,
+        "n_rounds": n_rounds,
+        "device": device,
+        "validation_fraction": validation_fraction,
+        "output_dir": output_dir,
+    }
+
+
+def train_model(
+    n_components: int,
+    freq_file: str,
+    flat_priors: Dict[str, float],
+    n_simulations: int = 10000,
+    batch_size: int = 10000,
+    device: str = "cpu",
+    validation_fraction: float = 0.1,
+    output_dir: Path = Path("models"),
+) -> Dict[str, Any]:
     """
-    Train a neural posterior estimator for a given number of components.
-    
-    Parameters
-    ----------
-    freq_file : str
-        Path to frequency file
-    n_components : int
-        Number of RM components
-    n_simulations : int
-        Number of simulations for training
-    config : dict, optional
-        Configuration dictionary with prior ranges and training settings
-    device : str
-        Device to use ('cuda' or 'cpu')
-        
-    Returns
-    -------
-    posterior : sbi posterior
-        Trained posterior estimator
+    Train a single model with n_components, using the provided flat_priors
+    (keys: rm_min, rm_max, amp_min, amp_max, noise_min, noise_max).
+
+    Saves the posterior to output_dir/posterior_n{n_components}.pkl and returns metadata dict.
     """
-    # Set default config
-    if config is None:
-        config = {
-            'priors': {
-                'rm': {'min': -500.0, 'max': 500.0},
-                'amp': {'min': 0.0, 'max': 1.0},
-                'noise': {'min': 0.001, 'max': 0.1}
-            },
-            'training': {
-                'batch_size': 50,
-                'validation_fraction': 0.1
-            }
-        }
-    
-    # Extract config
-    rm_range = (config['priors']['rm']['min'], config['priors']['rm']['max'])
-    amp_range = (config['priors']['amp']['min'], config['priors']['amp']['max'])
-    noise_range = (config['priors']['noise']['min'], config['priors']['noise']['max'])
-    
-    # Create simulator and prior
-    simulator = RMSimulator(freq_file, n_components=n_components)
-    prior = build_prior(n_components, rm_range=rm_range, 
-                       amp_range=amp_range, noise_range=noise_range)
-    
-    # Initialize SNPE
+    print(f"\n{'='*60}")
+    print(f"Training model N={n_components} on device={device}")
+    print(f"{'='*60}")
+
+    simulator = RMSimulator(freq_file, n_components)
+
+    # Build prior on requested device (build_prior in simulator supports device kwarg)
+    try:
+        prior = build_prior(n_components, flat_priors, device=device)
+    except TypeError:
+        # Backwards-compat fallback (if older build_prior doesn't accept device)
+        prior = build_prior(n_components, flat_priors)
+
+    print(f"Simulator params: n_params={simulator.n_params}, n_freq={simulator.n_freq}")
+    print(f"Simulations: {n_simulations:,}, batch_size: {batch_size}, validation_fraction: {validation_fraction}")
+
+    # Generate simulations (numpy)
+    theta = sample_prior(n_simulations, n_components, flat_priors)
+
+    # Simulate in batches to avoid excessive memory usage
+    xs = []
+    for i in tqdm(range(0, n_simulations, batch_size), desc="Simulating"):
+        batch_theta = theta[i:i + batch_size]
+        xs.append(simulator(batch_theta))
+    x = np.vstack(xs)
+
+    # Convert to torch and move to device (sbi requires prior tensors on same device)
+    try:
+        theta_t = torch.tensor(theta, dtype=torch.float32, device=device)
+        x_t = torch.tensor(x, dtype=torch.float32, device=device)
+    except Exception:
+        # fallback to CPU tensors if device invalid
+        theta_t = torch.tensor(theta, dtype=torch.float32, device="cpu")
+        x_t = torch.tensor(x, dtype=torch.float32, device="cpu")
+        device = "cpu"
+        print("Warning: falling back to CPU tensors (device change).")
+
+    # Create SNPE inference object
     inference = SNPE(prior=prior, device=device)
-    
-    print(f"Training model for {n_components} component(s)...")
-    print(f"  Number of parameters: {3 * n_components + 1}")
-    print(f"  Number of simulations: {n_simulations}")
-    print(f"  Device: {device}")
-    
-    # Generate training data
-    print("Generating training data...")
-    theta = prior.sample((n_simulations,))
-    
-    # Simulate observations
-    x = []
-    for i in tqdm(range(n_simulations), desc="Simulating"):
-        x_i = simulator(theta[i])
-        x.append(x_i)
-    
-    x = torch.stack(x)
-    
-    # Train the density estimator
-    print("Training neural density estimator...")
-    inference.append_simulations(theta, x)
-    
+
+    # Append simulations and train
+    inference.append_simulations(theta_t, x_t)
+
     density_estimator = inference.train(
-        training_batch_size=config['training'].get('batch_size', 50),
-        validation_fraction=config['training'].get('validation_fraction', 0.1)
+        training_batch_size=min(4096, max(1, batch_size)),
+        learning_rate=5e-4,
+        show_train_summary=True,
+        validation_fraction=validation_fraction,
     )
-    
-    # Build posterior
+
     posterior = inference.build_posterior(density_estimator)
-    
-    print(f"Training complete for {n_components} component(s)!\n")
-    
-    return posterior
+
+    # Save posterior and metadata
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_path = output_dir / f"posterior_n{n_components}.pkl"
+    with open(save_path, "wb") as f:
+        pickle.dump({
+            "posterior": posterior,
+            "n_components": n_components,
+            "n_freq": simulator.n_freq,
+            "lambda_sq": simulator.lambda_sq,
+            "flat_priors": flat_priors,
+            "config_used": {
+                "freq_file": freq_file,
+                "n_simulations": n_simulations,
+                "batch_size": batch_size,
+                "device": device,
+            },
+        }, f)
+
+    print(f"Saved posterior -> {save_path}")
+
+    return {
+        "posterior": posterior,
+        "n_components": n_components,
+        "n_freq": simulator.n_freq,
+        "lambda_sq": simulator.lambda_sq,
+        "path": str(save_path),
+        "flat_priors": flat_priors,
+    }
 
 
-def train_all_models(freq_file, max_components=5, n_simulations=10000,
-                     config=None, device="cuda", save_dir="models"):
+def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     """
-    Train neural posterior estimators for all component numbers from 1 to max_components.
-    
-    Parameters
-    ----------
-    freq_file : str
-        Path to frequency file
-    max_components : int
-        Maximum number of components
-    n_simulations : int
-        Number of simulations for each model
-    config : dict, optional
-        Configuration dictionary
-    device : str
-        Device to use ('cuda' or 'cpu')
-    save_dir : str
-        Directory to save trained models
-        
-    Returns
-    -------
-    posteriors : dict
-        Dictionary mapping n_components -> posterior
+    Train models for N = 1 .. max_components using the exact config structure
+    the repository is using. Returns dict mapping n_components -> saved data dict.
     """
-    # Create save directory
-    os.makedirs(save_dir, exist_ok=True)
-    
-    posteriors = {}
-    
-    for n_components in range(1, max_components + 1):
-        # Train model
-        posterior = train_model(
+    if not isinstance(config, dict):
+        raise ValueError("config must be a dict loaded from YAML.")
+
+    freq_file = config.get("freq_file", "freq.txt")
+    training_cfg = _extract_training_cfg(config)
+    flat_priors = _flatten_priors(config)
+
+    results: Dict[int, Dict[str, Any]] = {}
+
+    for n in range(1, training_cfg["max_components"] + 1):
+        data = train_model(
+            n_components=n,
             freq_file=freq_file,
-            n_components=n_components,
-            n_simulations=n_simulations,
-            config=config,
-            device=device
+            flat_priors=flat_priors,
+            n_simulations=training_cfg["n_simulations"],
+            batch_size=training_cfg["batch_size"],
+            device=training_cfg["device"],
+            validation_fraction=training_cfg["validation_fraction"],
+            output_dir=training_cfg["output_dir"],
         )
-        
-        # Save model
-        model_path = os.path.join(save_dir, f"model_n{n_components}.pkl")
-        torch.save(posterior, model_path)
-        print(f"Model saved to {model_path}")
-        
-        posteriors[n_components] = posterior
-    
-    print(f"\nAll {max_components} models trained and saved!")
-    
-    return posteriors
+        results[n] = data
+
+    print("\nAll done. Trained models for N =", list(results.keys()))
+    return results
