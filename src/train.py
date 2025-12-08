@@ -152,10 +152,26 @@ def train_model(
     theta = sample_prior(n_simulations, n_components, flat_priors)
 
     # Simulate in batches to avoid excessive memory usage
+    # Apply weight augmentation if enabled
+    from .augmentation import augment_weights_combined
+    
     xs = []
     for i in tqdm(range(0, n_simulations, batch_size), desc="Simulating"):
         batch_theta = theta[i:i + batch_size]
-        xs.append(simulator(batch_theta))
+        batch_size_actual = len(batch_theta)
+        
+        # Generate augmented weights for this batch
+        augmented_weights = np.zeros((batch_size_actual, simulator.n_freq))
+        for j in range(batch_size_actual):
+            augmented_weights[j] = augment_weights_combined(simulator.weights)
+        
+        # Simulate with augmented weights
+        batch_xs = []
+        for j in range(batch_size_actual):
+            x_sample = simulator(batch_theta[j:j+1], weights=augmented_weights[j])
+            batch_xs.append(x_sample)
+        xs.append(np.vstack(batch_xs))
+    
     x = np.vstack(xs)
 
     # Convert to torch and move to device
@@ -213,23 +229,158 @@ def train_model(
     }
 
 
+def train_decision_layer(
+    freq_file: str,
+    flat_priors: Dict[str, float],
+    config: Dict[str, Any],
+    output_dir: Path = Path("models"),
+) -> Dict[str, Any]:
+    """
+    Train the decision layer classifier for 1-comp vs 2-comp selection.
+    
+    Parameters
+    ----------
+    freq_file : str
+        Path to frequency file
+    flat_priors : Dict[str, float]
+        Flattened prior configuration
+    config : Dict[str, Any]
+        Full configuration dictionary
+    output_dir : Path
+        Directory to save the trained model
+        
+    Returns
+    -------
+    Dict[str, Any]
+        Training results and metadata
+    """
+    from .simulator import RMSimulator, sample_prior
+    from .decision import DecisionLayerTrainer
+    from .augmentation import augment_weights_combined
+    
+    print(f"\n{'='*60}")
+    print("Training Decision Layer (1-comp vs 2-comp classifier)")
+    print(f"{'='*60}")
+    
+    # Get decision layer config
+    decision_cfg = config.get("decision_layer", {})
+    n_samples = decision_cfg.get("n_training_samples", 5000)
+    n_epochs = decision_cfg.get("n_epochs", 20)
+    batch_size = decision_cfg.get("batch_size", 64)
+    val_fraction = decision_cfg.get("validation_fraction", 0.2)
+    device = config.get("training", {}).get("device", "cpu")
+    
+    # Create simulators for 1-comp and 2-comp
+    sim_1comp = RMSimulator(freq_file, 1)
+    sim_2comp = RMSimulator(freq_file, 2)
+    n_freq = sim_1comp.n_freq
+    
+    print(f"Generating {n_samples} samples per class...")
+    
+    # Generate training data
+    X_train = []
+    y_train = []
+    
+    # Generate 1-component samples (label = 0)
+    theta_1comp = sample_prior(n_samples, 1, flat_priors)
+    for i in tqdm(range(n_samples), desc="Simulating 1-comp"):
+        aug_weights = augment_weights_combined(sim_1comp.weights)
+        qu = sim_1comp(theta_1comp[i:i+1], weights=aug_weights).flatten()
+        # Input: [Q, U, weights]
+        x = np.concatenate([qu, aug_weights])
+        X_train.append(x)
+        y_train.append(0)  # 1-component = class 0
+    
+    # Generate 2-component samples (label = 1)
+    theta_2comp = sample_prior(n_samples, 2, flat_priors)
+    for i in tqdm(range(n_samples), desc="Simulating 2-comp"):
+        aug_weights = augment_weights_combined(sim_2comp.weights)
+        qu = sim_2comp(theta_2comp[i:i+1], weights=aug_weights).flatten()
+        # Input: [Q, U, weights]
+        x = np.concatenate([qu, aug_weights])
+        X_train.append(x)
+        y_train.append(1)  # 2-component = class 1
+    
+    X_train = np.array(X_train)
+    y_train = np.array(y_train)
+    
+    # Shuffle and split
+    indices = np.random.permutation(len(X_train))
+    X_train = X_train[indices]
+    y_train = y_train[indices]
+    
+    n_val = int(len(X_train) * val_fraction)
+    X_val = X_train[:n_val]
+    y_val = y_train[:n_val]
+    X_train = X_train[n_val:]
+    y_train = y_train[n_val:]
+    
+    print(f"Training samples: {len(X_train)}, Validation samples: {len(X_val)}")
+    
+    # Convert to torch
+    X_train_t = torch.tensor(X_train, dtype=torch.float32)
+    y_train_t = torch.tensor(y_train, dtype=torch.long)
+    X_val_t = torch.tensor(X_val, dtype=torch.float32)
+    y_val_t = torch.tensor(y_val, dtype=torch.long)
+    
+    # Create data loaders
+    train_dataset = torch.utils.data.TensorDataset(X_train_t, y_train_t)
+    val_dataset = torch.utils.data.TensorDataset(X_val_t, y_val_t)
+    
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True
+    )
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False
+    )
+    
+    # Train
+    trainer = DecisionLayerTrainer(n_freq=n_freq, device=device)
+    history = trainer.train(train_loader, val_loader, n_epochs=n_epochs, verbose=True)
+    
+    # Save model
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_path = output_dir / "decision_layer.pkl"
+    trainer.save(str(save_path))
+    
+    print(f"\nSaved decision layer -> {save_path}")
+    print(f"Final validation accuracy: {history['val_accuracy'][-1]:.2f}%")
+    
+    return {
+        "model_path": str(save_path),
+        "n_freq": n_freq,
+        "history": history,
+        "final_val_accuracy": history['val_accuracy'][-1],
+    }
+
+
 def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     """
     Train models for N = 1 ..  max_components using the exact config structure
     the repository is using.  Returns dict mapping n_components -> saved data dict.
     
-    Now with automatic scaling of simulations for complex models!
+    Now with two-layer system:
+    - Train worker models (1-comp and 2-comp)
+    - Train decision layer classifier
     """
     if not isinstance(config, dict):
         raise ValueError("config must be a dict loaded from YAML.")
 
-    freq_file = config. get("freq_file", "freq.txt")
+    freq_file = config.get("freq_file", "freq.txt")
     training_cfg = _extract_training_cfg(config)
     flat_priors = _flatten_priors(config)
 
     results: Dict[int, Dict[str, Any]] = {}
 
-    for n in range(1, training_cfg["max_components"] + 1):
+    # Train worker models (limit to 1 and 2 components for two-layer system)
+    max_comp = min(training_cfg["max_components"], 2)
+    
+    print(f"\n{'='*60}")
+    print("TRAINING TWO-LAYER SYSTEM")
+    print(f"{'='*60}")
+    print("Phase 1: Training Worker Models (1-comp and 2-comp)")
+    
+    for n in range(1, max_comp + 1):
         # Scale simulations for complex models
         n_sims = get_scaled_simulations(
             n_components=n,
@@ -251,5 +402,26 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
         )
         results[n] = data
 
-    print("\nAll done.  Trained models for N =", list(results.keys()))
+    print("\n" + "="*60)
+    print("Phase 2: Training Decision Layer")
+    print("="*60)
+    
+    # Train decision layer if enabled
+    model_selection = config.get("model_selection", {})
+    if model_selection.get("use_decision_layer", True):
+        decision_result = train_decision_layer(
+            freq_file=freq_file,
+            flat_priors=flat_priors,
+            config=config,
+            output_dir=training_cfg["output_dir"],
+        )
+        results["decision_layer"] = decision_result
+    
+    print("\n" + "="*60)
+    print("TRAINING COMPLETE")
+    print(f"{'='*60}")
+    print(f"Worker models trained: N = {[n for n in results.keys() if isinstance(n, int)]}")
+    if "decision_layer" in results:
+        print(f"Decision layer accuracy: {results['decision_layer']['final_val_accuracy']:.2f}%")
+    
     return results

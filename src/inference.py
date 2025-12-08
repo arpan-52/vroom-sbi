@@ -76,7 +76,7 @@ class RMInference:
     selecting the best number of components via log evidence.
     """
     
-    def __init__(self, model_dir="models", device="cuda"):
+    def __init__(self, model_dir="models", device="cuda", use_decision_layer=True):
         """
         Initialize the inference engine.
         
@@ -86,14 +86,18 @@ class RMInference:
             Directory containing trained models
         device : str
             Device to use ('cuda' or 'cpu')
+        use_decision_layer : bool
+            Whether to use decision layer for model selection
         """
         self.model_dir = model_dir
         self.device = device
         self.posteriors = {}
+        self.use_decision_layer = use_decision_layer
+        self.decision_layer = None
         
     def load_models(self, max_components=5):
         """
-        Load trained posterior models.
+        Load trained posterior models and decision layer.
         
         Parameters
         ----------
@@ -102,21 +106,41 @@ class RMInference:
         """
         print(f"Loading models from {self.model_dir}...")
         
+        # Load worker models (posteriors)
         for n in range(1, max_components + 1):
-            model_path = os.path.join(self.model_dir, f"model_n{n}.pkl")
+            model_path = os.path.join(self.model_dir, f"posterior_n{n}.pkl")
             
             if os.path.exists(model_path):
                 # Note: weights_only=False is required for loading sbi posterior objects
                 # Only load models from trusted sources
-                posterior = torch.load(model_path, map_location=self.device, weights_only=False)
-                self.posteriors[n] = posterior
-                print(f"  Loaded model for {n} component(s)")
+                import pickle
+                with open(model_path, 'rb') as f:
+                    model_data = pickle.load(f)
+                self.posteriors[n] = model_data['posterior']
+                print(f"  Loaded worker model for {n} component(s)")
             else:
-                print(f"  Warning: Model for {n} component(s) not found at {model_path}")
+                print(f"  Warning: Worker model for {n} component(s) not found at {model_path}")
         
-        print(f"Loaded {len(self.posteriors)} models\n")
+        # Load decision layer if enabled
+        if self.use_decision_layer:
+            decision_path = os.path.join(self.model_dir, "decision_layer.pkl")
+            if os.path.exists(decision_path):
+                from .decision import DecisionLayerTrainer
+                checkpoint = torch.load(decision_path, map_location=self.device)
+                self.decision_layer = DecisionLayerTrainer(
+                    n_freq=checkpoint['n_freq'], 
+                    device=self.device
+                )
+                self.decision_layer.load(decision_path)
+                print(f"  Loaded decision layer from {decision_path}")
+            else:
+                print(f"  Warning: Decision layer not found at {decision_path}")
+                print(f"  Falling back to log evidence for model selection")
+                self.use_decision_layer = False
+        
+        print(f"Loaded {len(self.posteriors)} worker models\n")
     
-    def run_inference(self, qu_obs, n_samples=10000):
+    def run_inference(self, qu_obs, weights=None, n_samples=10000):
         """
         Run inference for all models and select the best one.
         
@@ -124,6 +148,8 @@ class RMInference:
         ----------
         qu_obs : np.ndarray or torch.Tensor
             Observed Q and U values [Q_1, ..., Q_M, U_1, ..., U_M]
+        weights : np.ndarray, optional
+            Channel weights. If None, assumes all weights = 1.0
         n_samples : int
             Number of posterior samples to draw
             
@@ -136,21 +162,58 @@ class RMInference:
         """
         # Convert to torch tensor
         if isinstance(qu_obs, np.ndarray):
-            qu_obs = torch.tensor(qu_obs, dtype=torch.float32, device=self.device)
+            qu_obs_t = torch.tensor(qu_obs, dtype=torch.float32, device=self.device)
+        else:
+            qu_obs_t = qu_obs
+        
+        # Use decision layer if available
+        if self.use_decision_layer and self.decision_layer is not None:
+            print("\n" + "="*60)
+            print("Using Decision Layer for Model Selection")
+            print("="*60)
+            
+            # Prepare input for decision layer: [Q, U, weights]
+            if weights is None:
+                n_freq = len(qu_obs) // 2
+                weights = np.ones(n_freq)
+            
+            decision_input = np.concatenate([qu_obs if isinstance(qu_obs, np.ndarray) else qu_obs.cpu().numpy(), weights])
+            decision_input_t = torch.tensor(decision_input, dtype=torch.float32, device=self.device)
+            
+            # Get prediction
+            best_n = self.decision_layer.predict(decision_input_t)[0]
+            probs = self.decision_layer.predict_proba(decision_input_t)[0]
+            
+            print(f"Decision layer prediction:")
+            print(f"  1-component probability: {probs[0]:.3f}")
+            print(f"  2-component probability: {probs[1]:.3f}")
+            print(f"  Selected: {best_n} component(s)")
+            print("="*60 + "\n")
+            
+            # Only run inference for selected model
+            selected_components = [best_n]
+        else:
+            # Run inference for all available models
+            selected_components = list(self.posteriors.keys())
         
         results = {}
         
-        print("Running inference for all models...")
+        print("Running inference for selected model(s)...")
         
-        for n_components, posterior in self.posteriors.items():
+        for n_components in selected_components:
+            if n_components not in self.posteriors:
+                print(f"  Warning: Model for {n_components} component(s) not loaded")
+                continue
+            
+            posterior = self.posteriors[n_components]
             print(f"\n  Model with {n_components} component(s):")
             
             # Sample from posterior
-            samples = posterior.sample((n_samples,), x=qu_obs)
+            samples = posterior.sample((n_samples,), x=qu_obs_t)
             samples_np = samples.cpu().numpy()
             
             # Compute log probability for evidence estimation
-            log_probs = posterior.log_prob(samples, x=qu_obs)
+            log_probs = posterior.log_prob(samples, x=qu_obs_t)
             log_evidence = torch.logsumexp(log_probs, dim=0) - np.log(n_samples)
             log_evidence = log_evidence.cpu().item()
             
@@ -194,18 +257,19 @@ class RMInference:
             )
             results[n_components] = result
         
-        # Select best model
-        best_n = max(results.keys(), key=lambda n: results[n].log_evidence)
-        best_log_evidence = results[best_n].log_evidence
-        
-        print(f"\n{'='*60}")
-        print(f"BEST MODEL: {best_n} component(s)")
-        print(f"Log evidence: {best_log_evidence:.2f}")
-        print(f"{'='*60}\n")
+        # Select best model (if not already selected by decision layer)
+        if not self.use_decision_layer or self.decision_layer is None:
+            best_n = max(results.keys(), key=lambda n: results[n].log_evidence)
+            best_log_evidence = results[best_n].log_evidence
+            
+            print(f"\n{'='*60}")
+            print(f"BEST MODEL (by log evidence): {best_n} component(s)")
+            print(f"Log evidence: {best_log_evidence:.2f}")
+            print(f"{'='*60}\n")
         
         return results, best_n
     
-    def infer(self, qu_obs, n_samples=10000):
+    def infer(self, qu_obs, weights=None, n_samples=10000):
         """
         Convenience method to run inference and return best result.
         
@@ -213,6 +277,8 @@ class RMInference:
         ----------
         qu_obs : np.ndarray or torch.Tensor
             Observed Q and U values
+        weights : np.ndarray, optional
+            Channel weights
         n_samples : int
             Number of posterior samples
             
@@ -223,5 +289,5 @@ class RMInference:
         all_results : Dict[int, InferenceResult]
             Results for all models
         """
-        results, best_n = self.run_inference(qu_obs, n_samples=n_samples)
+        results, best_n = self.run_inference(qu_obs, weights=weights, n_samples=n_samples)
         return results[best_n], results

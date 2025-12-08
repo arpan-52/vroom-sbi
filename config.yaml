@@ -33,5 +33,23 @@ training:
   
 # Model selection
 model_selection:
-  max_components: 1
+  max_components: 2  # Two-layer system: 1-comp and 2-comp only
   use_log_evidence: true
+  use_decision_layer: true  # Enable decision layer for model selection
+
+# Weight augmentation settings
+weight_augmentation:
+  enable: true
+  scattered_prob: 0.3      # Probability of scattered missing channels
+  gap_prob: 0.3            # Probability of contiguous gaps
+  large_block_prob: 0.1    # Probability of large RFI blocks
+  noise_variation: true    # Add variation to weights
+
+# Decision layer training
+decision_layer:
+  n_epochs: 20
+  batch_size: 64
+  learning_rate: 0.001
+  validation_fraction: 0.2
+  hidden_dims: [256, 128, 64]
+  n_training_samples: 5000  # Samples per class (1-comp and 2-comp)

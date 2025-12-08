@@ -18,26 +18,32 @@ class RMSimulator:
     """
 
     def __init__(self, freq_file: str, n_components: int):
-        self.freq = load_frequencies(freq_file)
+        self.freq, self.weights = load_frequencies(freq_file)
         self.lambda_sq = freq_to_lambda_sq(self.freq)
         self.n_freq = len(self.freq)
         self.n_components = n_components
         self.n_params = 3 * n_components + 1
 
-    def __call__(self, theta: np.ndarray) -> np.ndarray:
+    def __call__(self, theta: np.ndarray, weights: np.ndarray = None) -> np.ndarray:
         """
-        Simulate Q, U from parameters.
+        Simulate Q, U from parameters with optional weighted channels.
 
         Parameters
         ----------
         theta : array (n_params,) or (batch, n_params)
+        weights : array (n_freq,), optional
+            Channel weights (1.0 = best, 0.0 = missing). If None, uses self.weights.
 
         Returns
         -------
         x : array (2*n_freq,) or (batch, 2*n_freq)
+            Simulated Q and U with weighted noise
         """
         theta = np.atleast_2d(theta)
         batch_size = theta.shape[0]
+
+        if weights is None:
+            weights = self.weights
 
         Q = np.zeros((batch_size, self.n_freq))
         U = np.zeros((batch_size, self.n_freq))
@@ -53,9 +59,21 @@ class RMSimulator:
                 phase = 2 * (chi0 + rm * self.lambda_sq)
                 P += amp * np.exp(1j * phase)
 
-            noise = theta[b, -1]
-            Q[b] = P.real + np.random.normal(0, noise, self.n_freq)
-            U[b] = P.imag + np.random.normal(0, noise, self.n_freq)
+            base_noise = theta[b, -1]
+            
+            # Apply weighted noise: σ = base_noise / weight for weight > 0
+            # For weight = 0 (missing channels), set to 0
+            for j in range(self.n_freq):
+                if weights[j] > 0:
+                    # σ = base_noise / weight, but weight = 1/σ_relative
+                    # So actual σ = base_noise / weight
+                    sigma = base_noise / weights[j]
+                    Q[b, j] = P[j].real + np.random.normal(0, sigma)
+                    U[b, j] = P[j].imag + np.random.normal(0, sigma)
+                else:
+                    # Missing channel - set to zero
+                    Q[b, j] = 0.0
+                    U[b, j] = 0.0
 
         x = np.hstack([Q, U])
         return x.squeeze()
