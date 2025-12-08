@@ -24,7 +24,7 @@ from src.augmentation import (
 )
 
 
-def create_demo_observations(freq_file: str):
+def create_demo_observations(freq_file: str, base_noise_level: float = 0.01):
     """
     Create synthetic observations with different weight scenarios.
     
@@ -34,13 +34,13 @@ def create_demo_observations(freq_file: str):
         Dictionary with scenario name -> (qu_obs, weights, true_params)
     """
     # Create simulators
-    sim_1comp = RMSimulator(freq_file, 1)
-    sim_2comp = RMSimulator(freq_file, 2)
+    sim_1comp = RMSimulator(freq_file, 1, base_noise_level=base_noise_level)
+    sim_2comp = RMSimulator(freq_file, 2, base_noise_level=base_noise_level)
     
     observations = {}
     
     # Scenario 1: 1-component, clean data
-    theta_1 = np.array([120.0, 0.6, 0.5, 0.002])  # RM, amp, chi0, noise
+    theta_1 = np.array([120.0, 0.6, 0.5])  # RM, amp, chi0 (no noise parameter)
     weights_clean = np.ones(sim_1comp.n_freq)
     qu_1_clean = sim_1comp(theta_1, weights=weights_clean)
     observations["1-comp Clean"] = {
@@ -63,7 +63,7 @@ def create_demo_observations(freq_file: str):
     }
     
     # Scenario 3: 2-component, clean data
-    theta_2 = np.array([180.0, 0.5, 0.7, -60.0, 0.4, 1.1, 0.002])  # RM1, amp1, chi01, RM2, amp2, chi02, noise
+    theta_2 = np.array([180.0, 0.5, 0.7, -60.0, 0.4, 1.1])  # RM1, amp1, chi01, RM2, amp2, chi02 (no noise parameter)
     qu_2_clean = sim_2comp(theta_2, weights=weights_clean)
     observations["2-comp Clean"] = {
         "qu_obs": qu_2_clean,
@@ -160,10 +160,11 @@ def run_demo(config_path="config.yaml", model_dir="models"):
     
     freq_file = config.get("freq_file", "freq.txt")
     device = config.get("training", {}).get("device", "cpu")
+    base_noise_level = config.get("noise", {}).get("base_level", 0.01)
     
     # Create demo observations
     print("\nCreating demo observations with different weight patterns...")
-    observations = create_demo_observations(freq_file)
+    observations = create_demo_observations(freq_file, base_noise_level=base_noise_level)
     
     # Plot weight patterns
     plot_weight_patterns(observations)

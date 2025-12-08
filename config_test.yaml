@@ -17,9 +17,11 @@ priors:
   amp:
     min: 0.01
     max: 1.0
-  noise:
-    min: 0.001
-    max: 0.01
+
+# Noise configuration
+# Fixed base noise level - actual noise σ = base_level / weight
+noise:
+  base_level: 0.01
 
 # Training settings (small for testing)
 training:

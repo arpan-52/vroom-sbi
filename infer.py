@@ -136,8 +136,6 @@ def main():
         print(f"    q  = {comp.q_mean:.3f} ± {comp.q_std:.3f}")
         print(f"    u  = {comp.u_mean:.3f} ± {comp.u_std:.3f}")
     
-    print(f"\n  Noise: σ = {best_result.noise_mean:.4f} ± {best_result.noise_std:.4f}")
-    
     print("\n" + "="*60)
     
     # Create visualization
