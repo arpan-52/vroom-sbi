@@ -1,0 +1,55 @@
+# VROOM-SBI Test Configuration (small dataset for quick testing)
+
+# Frequency file path
+freq_file: "freq.txt"
+
+# Faraday depth range (rad/m^2)
+phi:
+  min: -1000.0
+  max: 1000.0
+  n_samples: 200
+
+# Prior ranges for parameters
+priors:
+  rm:
+    min: -500.0
+    max: 500.0
+  amp:
+    min: 0.01
+    max: 1.0
+  noise:
+    min: 0.001
+    max: 0.01
+
+# Training settings (small for testing)
+training:
+  n_simulations: 500        # Small for quick testing
+  simulation_scaling: true
+  batch_size: 50
+  n_rounds: 1
+  device: "cpu"  # Use CPU for testing
+  validation_fraction: 0.1
+  save_dir: "models_test"
+  
+# Model selection
+model_selection:
+  max_components: 2  # Two-layer system: 1-comp and 2-comp only
+  use_log_evidence: true
+  use_decision_layer: true
+
+# Weight augmentation settings
+weight_augmentation:
+  enable: true
+  scattered_prob: 0.3
+  gap_prob: 0.3
+  large_block_prob: 0.1
+  noise_variation: true
+
+# Decision layer training
+decision_layer:
+  n_epochs: 5           # Small for testing
+  batch_size: 64
+  learning_rate: 0.001
+  validation_fraction: 0.2
+  hidden_dims: [256, 128, 64]
+  n_training_samples: 200  # Small for testing
