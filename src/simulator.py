@@ -61,17 +61,19 @@ class RMSimulator:
 
             base_noise = theta[b, -1]
             
-            # Apply weighted noise: σ = base_noise / weight for weight > 0
-            # For weight = 0 (missing channels), set to 0
+            # Apply weighted noise based on channel quality
+            # Weight interpretation: weight = 1/σ_relative (normalized so max=1.0)
+            #   - weight = 1.0: best quality (σ = base_noise)
+            #   - weight = 0.5: moderate noise (σ = 2 × base_noise)
+            #   - weight = 0.0: missing/flagged (set to zero, network interpolates)
             for j in range(self.n_freq):
                 if weights[j] > 0:
-                    # σ = base_noise / weight, but weight = 1/σ_relative
-                    # So actual σ = base_noise / weight
+                    # Actual noise: σ = base_noise / weight
                     sigma = base_noise / weights[j]
                     Q[b, j] = P[j].real + np.random.normal(0, sigma)
                     U[b, j] = P[j].imag + np.random.normal(0, sigma)
                 else:
-                    # Missing channel - set to zero
+                    # Missing channel - set to zero for network interpolation
                     Q[b, j] = 0.0
                     U[b, j] = 0.0
 

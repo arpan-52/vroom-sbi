@@ -222,7 +222,7 @@ def train_model(
     return {
         "posterior": posterior,
         "n_components": n_components,
-        "n_freq": simulator. n_freq,
+        "n_freq": simulator.n_freq,
         "lambda_sq": simulator.lambda_sq,
         "path": str(save_path),
         "flat_priors": flat_priors,

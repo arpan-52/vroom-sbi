@@ -177,7 +177,9 @@ class RMInference:
                 n_freq = len(qu_obs) // 2
                 weights = np.ones(n_freq)
             
-            decision_input = np.concatenate([qu_obs if isinstance(qu_obs, np.ndarray) else qu_obs.cpu().numpy(), weights])
+            # Convert qu_obs to numpy if needed
+            qu_obs_np = qu_obs if isinstance(qu_obs, np.ndarray) else qu_obs.cpu().numpy()
+            decision_input = np.concatenate([qu_obs_np, weights])
             decision_input_t = torch.tensor(decision_input, dtype=torch.float32, device=self.device)
             
             # Get prediction

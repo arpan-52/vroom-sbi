@@ -18,7 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from src.simulator import RMSimulator, build_prior
+from src.simulator import RMSimulator
 from src.inference import RMInference
 from src.physics import load_frequencies
 from src.augmentation import (

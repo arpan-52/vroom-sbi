@@ -170,8 +170,9 @@ def run_demo(config_path="config.yaml", model_dir="models"):
     
     # Initialize inference
     print("\nInitializing two-layer inference system...")
+    max_components = config.get("model_selection", {}).get("max_components", 2)
     inference = RMInference(model_dir=model_dir, device=device, use_decision_layer=True)
-    inference.load_models(max_components=2)
+    inference.load_models(max_components=max_components)
     
     # Run inference on all scenarios
     print("\n" + "="*80)
