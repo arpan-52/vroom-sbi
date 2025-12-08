@@ -36,6 +36,7 @@ htmlcov/
 
 # Trained models
 models/
+models_test/
 *.pkl
 *.pth
 *.pt
@@ -62,3 +63,7 @@ Thumbs.db
 # Data files (optional - uncomment if needed)
 # *.fits
 # *.csv
+
+# Validation results
+validation_results.png
+weight_patterns.png
