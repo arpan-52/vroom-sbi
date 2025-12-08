@@ -51,7 +51,9 @@ def config():
         'priors': {
             'rm': {'min': -500.0, 'max': 500.0},
             'amp': {'min': 0.0, 'max': 1.0},
-            'noise': {'min': 0.001, 'max': 0.1}
+        },
+        'noise': {
+            'base_level': 0.01
         },
         'training': {
             'batch_size': 50,
@@ -75,13 +77,13 @@ def test_single_component_recovery(freq_file, model_dir, config):
     true_rm = 100.0
     true_q = 0.5
     true_u = 0.3
-    true_noise = 0.01
+    base_noise_level = 0.01
     
     # Create simulator
-    simulator = RMSimulator(freq_file, n_components=1)
+    simulator = RMSimulator(freq_file, n_components=1, base_noise_level=base_noise_level)
     
     # Generate observation
-    theta_true = torch.tensor([true_rm, true_q, true_u, true_noise], dtype=torch.float32)
+    theta_true = torch.tensor([true_rm, true_q, true_u], dtype=torch.float32)
     
     # Set seed for reproducibility
     torch.manual_seed(42)
@@ -94,7 +96,7 @@ def test_single_component_recovery(freq_file, model_dir, config):
     print(f"  RM = {true_rm} rad/m²")
     print(f"  q = {true_q}")
     print(f"  u = {true_u}")
-    print(f"  noise = {true_noise}")
+    print(f"  base_noise_level = {base_noise_level}")
     
     # Train model with fewer simulations for speed
     print("\nTraining model (this may take a few minutes)...")
@@ -125,13 +127,11 @@ def test_single_component_recovery(freq_file, model_dir, config):
     rm_recovered = np.mean(samples_np[:, 0])
     q_recovered = np.mean(samples_np[:, 1])
     u_recovered = np.mean(samples_np[:, 2])
-    noise_recovered = np.mean(samples_np[:, 3])
     
     print(f"\nRecovered parameters:")
     print(f"  RM = {rm_recovered:.1f} rad/m² (true: {true_rm})")
     print(f"  q = {q_recovered:.3f} (true: {true_q})")
     print(f"  u = {u_recovered:.3f} (true: {true_u})")
-    print(f"  noise = {noise_recovered:.4f} (true: {true_noise})")
     
     # Check recovery (allow for some tolerance due to noise and finite training)
     print("\nVerifying recovery...")
@@ -153,24 +153,22 @@ def test_two_component_recovery(freq_file, model_dir, config):
     print("Testing two component recovery")
     print("="*60)
     
-    # True parameters: [RM1, RM2, q1, q2, u1, u2, noise]
+    # True parameters: [RM1, amp1, chi01, RM2, amp2, chi02]
     true_rm1 = -200.0
+    true_amp1 = 0.4
+    true_chi01 = 0.5
     true_rm2 = 150.0
-    true_q1 = 0.4
-    true_q2 = 0.3
-    true_u1 = 0.2
-    true_u2 = 0.25
-    true_noise = 0.01
+    true_amp2 = 0.3
+    true_chi02 = 1.2
+    base_noise_level = 0.01
     
     # Create simulator
-    simulator = RMSimulator(freq_file, n_components=2)
+    simulator = RMSimulator(freq_file, n_components=2, base_noise_level=base_noise_level)
     
     # Generate observation
     theta_true = torch.tensor([
-        true_rm1, true_rm2,
-        true_q1, true_q2,
-        true_u1, true_u2,
-        true_noise
+        true_rm1, true_amp1, true_chi01,
+        true_rm2, true_amp2, true_chi02
     ], dtype=torch.float32)
     
     # Set seed for reproducibility
@@ -181,9 +179,9 @@ def test_two_component_recovery(freq_file, model_dir, config):
     qu_obs_np = qu_obs.numpy()
     
     print(f"\nTrue parameters:")
-    print(f"  Component 1: RM = {true_rm1} rad/m², q = {true_q1}, u = {true_u1}")
-    print(f"  Component 2: RM = {true_rm2} rad/m², q = {true_q2}, u = {true_u2}")
-    print(f"  Noise = {true_noise}")
+    print(f"  Component 1: RM = {true_rm1} rad/m², amp = {true_amp1}, chi0 = {true_chi01}")
+    print(f"  Component 2: RM = {true_rm2} rad/m², amp = {true_amp2}, chi0 = {true_chi02}")
+    print(f"  Base noise level = {base_noise_level}")
     
     # Train model
     print("\nTraining model (this may take a few minutes)...")
@@ -242,15 +240,15 @@ def test_simulator_forward_model(freq_file):
     for n_components in [1, 2, 3]:
         simulator = RMSimulator(freq_file, n_components=n_components)
         
-        # Create random parameters
-        n_params = 3 * n_components + 1
+        # Create random parameters (no noise parameter)
+        n_params = 3 * n_components
         theta = torch.randn(n_params)
         
         # Run forward model
         qu = simulator(theta)
         
         # Check output shape
-        expected_shape = simulator.n_channels * 2
+        expected_shape = simulator.n_freq * 2
         assert len(qu) == expected_shape, \
             f"Expected output shape {expected_shape}, got {len(qu)}"
         
@@ -259,26 +257,31 @@ def test_simulator_forward_model(freq_file):
     print("✓ Simulator forward model test passed!")
 
 
-def test_prior_sampling(freq_file):
+def test_prior_sampling():
     """Test prior construction and sampling."""
     print("\n" + "="*60)
     print("Testing prior sampling")
     print("="*60)
     
+    flat_priors = {
+        "rm_min": -500.0,
+        "rm_max": 500.0,
+        "amp_min": 0.01,
+        "amp_max": 1.0,
+    }
+    
     for n_components in [1, 2, 3]:
-        prior = build_prior(n_components)
-        
         # Sample from prior
-        samples = sample_prior(prior, n_samples=100)
+        samples = sample_prior(n_samples=100, n_components=n_components, config=flat_priors)
         
-        # Check shape
-        expected_shape = (100, 3 * n_components + 1)
+        # Check shape (no noise parameter)
+        expected_shape = (100, 3 * n_components)
         assert samples.shape == expected_shape, \
             f"Expected shape {expected_shape}, got {samples.shape}"
         
         # Check ranges (rough check)
-        rm_samples = samples[:, :n_components]
-        assert torch.all(rm_samples >= -500) and torch.all(rm_samples <= 500), \
+        rm_samples = samples[:, ::3]  # Every third column starting from 0
+        assert np.all(rm_samples >= -500) and np.all(rm_samples <= 500), \
             "RM samples outside expected range"
         
         print(f"✓ Prior for {n_components} component(s): shape = {samples.shape}")

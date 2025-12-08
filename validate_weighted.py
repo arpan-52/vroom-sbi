@@ -47,17 +47,18 @@ def create_test_cases(freq_file: str, config: dict):
         "rm_max": config["priors"]["rm"]["max"],
         "amp_min": config["priors"]["amp"]["min"],
         "amp_max": config["priors"]["amp"]["max"],
-        "noise_min": config["priors"]["noise"]["min"],
-        "noise_max": config["priors"]["noise"]["max"],
     }
     
-    sim_1comp = RMSimulator(freq_file, 1)
-    sim_2comp = RMSimulator(freq_file, 2)
+    # Get base noise level
+    base_noise_level = config.get("noise", {}).get("base_level", 0.01)
+    
+    sim_1comp = RMSimulator(freq_file, 1, base_noise_level=base_noise_level)
+    sim_2comp = RMSimulator(freq_file, 2, base_noise_level=base_noise_level)
     
     test_cases = []
     
     # Case 1: Clean 1-component data
-    theta_1 = np.array([100.0, 0.5, 0.3, 0.002])  # RM, amp, chi0, noise
+    theta_1 = np.array([100.0, 0.5, 0.3])  # RM, amp, chi0 (no noise parameter)
     weights_clean = np.ones(sim_1comp.n_freq)
     qu_1_clean = sim_1comp(theta_1, weights=weights_clean)
     test_cases.append({
@@ -102,7 +103,7 @@ def create_test_cases(freq_file: str, config: dict):
     })
     
     # Case 5: Clean 2-component data
-    theta_2 = np.array([150.0, 0.4, 0.5, -80.0, 0.3, 1.2, 0.002])  # RM1, amp1, chi01, RM2, amp2, chi02, noise
+    theta_2 = np.array([150.0, 0.4, 0.5, -80.0, 0.3, 1.2])  # RM1, amp1, chi01, RM2, amp2, chi02 (no noise parameter)
     qu_2_clean = sim_2comp(theta_2, weights=weights_clean)
     test_cases.append({
         "name": "2-comp Clean",

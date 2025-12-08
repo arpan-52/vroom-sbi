@@ -53,18 +53,12 @@ class InferenceResult:
         Log marginal likelihood (evidence)
     components : List[ComponentResult]
         Results for each component
-    noise_mean : float
-        Mean noise level
-    noise_std : float
-        Standard deviation of noise level
     all_samples : np.ndarray
         All posterior samples
     """
     n_components: int
     log_evidence: float
     components: List[ComponentResult]
-    noise_mean: float
-    noise_std: float
     all_samples: np.ndarray = field(repr=False)
 
 
@@ -241,20 +235,11 @@ class RMInference:
                 
                 print(f"    Component {i+1}: RM = {component.rm_mean:.1f} ± {component.rm_std:.1f} rad/m²")
             
-            # Noise
-            noise_samples = samples_np[:, 3 * n_components]
-            noise_mean = np.mean(noise_samples)
-            noise_std = np.std(noise_samples)
-            
-            print(f"    Noise: {noise_mean:.4f} ± {noise_std:.4f}")
-            
             # Store results
             result = InferenceResult(
                 n_components=n_components,
                 log_evidence=log_evidence,
                 components=components,
-                noise_mean=noise_mean,
-                noise_std=noise_std,
                 all_samples=samples_np
             )
             results[n_components] = result

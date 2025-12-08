@@ -27,10 +27,9 @@ from . simulator import RMSimulator, build_prior, sample_prior
 
 def _flatten_priors(cfg: Dict[str, Any]) -> Dict[str, float]:
     """Turn the config['priors'] block into the flat prior dict used by simulator functions."""
-    pri = cfg. get("priors", {})
+    pri = cfg.get("priors", {})
     rm = pri.get("rm", {})
     amp = pri.get("amp", {})
-    noise = pri.get("noise", {})
 
     rm_min = float(rm.get("min", -800.0))
     rm_max = float(rm.get("max", 800.0))
@@ -38,23 +37,28 @@ def _flatten_priors(cfg: Dict[str, Any]) -> Dict[str, float]:
     amp_min = float(amp.get("min", 1e-6))
     amp_max = float(amp.get("max", 1.0))
 
-    noise_min = float(noise.get("min", 1e-9))
-    noise_max = float(noise.get("max", 0.1))
-
     # Safety guards
     if amp_min <= 0:
         amp_min = 1e-6
-    if noise_min <= 0:
-        noise_min = 1e-9
 
     return {
         "rm_min": rm_min,
         "rm_max": rm_max,
         "amp_min": amp_min,
         "amp_max": amp_max,
-        "noise_min": noise_min,
-        "noise_max": noise_max,
     }
+
+
+def _get_base_noise_level(cfg: Dict[str, Any]) -> float:
+    """Extract base noise level from config."""
+    noise_cfg = cfg.get("noise", {})
+    base_level = float(noise_cfg.get("base_level", 0.01))
+    
+    # Safety guard
+    if base_level <= 0:
+        base_level = 0.01
+    
+    return base_level
 
 
 def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -121,6 +125,7 @@ def train_model(
     n_components: int,
     freq_file: str,
     flat_priors: Dict[str, float],
+    base_noise_level: float = 0.01,
     n_simulations: int = 10000,
     batch_size: int = 10000,
     device: str = "cpu",
@@ -129,7 +134,7 @@ def train_model(
 ) -> Dict[str, Any]:
     """
     Train a single model with n_components, using the provided flat_priors
-    (keys: rm_min, rm_max, amp_min, amp_max, noise_min, noise_max). 
+    (keys: rm_min, rm_max, amp_min, amp_max). 
 
     Saves the posterior to output_dir/posterior_n{n_components}.pkl and returns metadata dict.
     """
@@ -137,7 +142,7 @@ def train_model(
     print(f"Training model N={n_components} on device={device}")
     print(f"{'='*60}")
 
-    simulator = RMSimulator(freq_file, n_components)
+    simulator = RMSimulator(freq_file, n_components, base_noise_level=base_noise_level)
 
     # Build prior on requested device
     try:
@@ -232,6 +237,7 @@ def train_model(
 def train_decision_layer(
     freq_file: str,
     flat_priors: Dict[str, float],
+    base_noise_level: float,
     config: Dict[str, Any],
     output_dir: Path = Path("models"),
 ) -> Dict[str, Any]:
@@ -244,6 +250,8 @@ def train_decision_layer(
         Path to frequency file
     flat_priors : Dict[str, float]
         Flattened prior configuration
+    base_noise_level : float
+        Fixed base noise level
     config : Dict[str, Any]
         Full configuration dictionary
     output_dir : Path
@@ -271,8 +279,8 @@ def train_decision_layer(
     device = config.get("training", {}).get("device", "cpu")
     
     # Create simulators for 1-comp and 2-comp
-    sim_1comp = RMSimulator(freq_file, 1)
-    sim_2comp = RMSimulator(freq_file, 2)
+    sim_1comp = RMSimulator(freq_file, 1, base_noise_level=base_noise_level)
+    sim_2comp = RMSimulator(freq_file, 2, base_noise_level=base_noise_level)
     n_freq = sim_1comp.n_freq
     
     print(f"Generating {n_samples} samples per class...")
@@ -369,6 +377,7 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     freq_file = config.get("freq_file", "freq.txt")
     training_cfg = _extract_training_cfg(config)
     flat_priors = _flatten_priors(config)
+    base_noise_level = _get_base_noise_level(config)
 
     results: Dict[int, Dict[str, Any]] = {}
 
@@ -394,6 +403,7 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
             n_components=n,
             freq_file=freq_file,
             flat_priors=flat_priors,
+            base_noise_level=base_noise_level,
             n_simulations=n_sims,
             batch_size=training_cfg["batch_size"],
             device=training_cfg["device"],
@@ -412,6 +422,7 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
         decision_result = train_decision_layer(
             freq_file=freq_file,
             flat_priors=flat_priors,
+            base_noise_level=base_noise_level,
             config=config,
             output_dir=training_cfg["output_dir"],
         )
