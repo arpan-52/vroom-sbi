@@ -22,7 +22,15 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from sbi.inference import SNPE
-from sbi.utils import posterior_nn
+
+try:
+    from sbi.utils import posterior_nn
+except ImportError:
+    try:
+        from sbi.neural_nets import posterior_nn
+    except ImportError:
+        # Fallback for older SBI versions
+        posterior_nn = None
 
 from . simulator import RMSimulator, build_prior, sample_prior
 
@@ -233,25 +241,34 @@ def train_model(
         device = "cpu"
         print("Warning: falling back to CPU tensors (device change).")
 
-    # Create SNPE inference object with custom density estimator
-    # Build custom embedding for spectral data
-    input_dim = 2 * simulator.n_freq  # Q and U
-    embedding_net = SpectralEmbedding(input_dim=input_dim, output_dim=64).to(device)
+    # Create SNPE inference object with custom density estimator (if available)
+    if posterior_nn is not None:
+        # Build custom embedding for spectral data
+        input_dim = 2 * simulator.n_freq  # Q and U
+        embedding_net = SpectralEmbedding(input_dim=input_dim, output_dim=64).to(device)
 
-    # Build neural posterior with NSF (Neural Spline Flow) and custom embedding
-    density_estimator_builder = posterior_nn(
-        model="nsf",              # Neural Spline Flow (better than MAF)
-        hidden_features=128,      # Larger hidden layers for complex posteriors
-        num_transforms=10,        # More transforms for better expressivity
-        num_bins=16,              # Spline resolution
-        embedding_net=embedding_net
-    )
+        # Build neural posterior with NSF (Neural Spline Flow) and custom embedding
+        try:
+            density_estimator_builder = posterior_nn(
+                model="nsf",              # Neural Spline Flow (better than MAF)
+                hidden_features=128,      # Larger hidden layers for complex posteriors
+                num_transforms=10,        # More transforms for better expressivity
+                num_bins=16,              # Spline resolution
+                embedding_net=embedding_net
+            )
 
-    print(f"Using Neural Spline Flow with custom spectral embedding:")
-    print(f"  Input dim: {input_dim}, Embedding dim: 64")
-    print(f"  Hidden features: 128, Num transforms: 10")
+            print(f"Using Neural Spline Flow with custom spectral embedding:")
+            print(f"  Input dim: {input_dim}, Embedding dim: 64")
+            print(f"  Hidden features: 128, Num transforms: 10")
 
-    inference = SNPE(prior=prior, density_estimator=density_estimator_builder, device=device)
+            inference = SNPE(prior=prior, density_estimator=density_estimator_builder, device=device)
+        except Exception as e:
+            print(f"Warning: Could not create custom density estimator: {e}")
+            print("Falling back to default SNPE configuration")
+            inference = SNPE(prior=prior, device=device)
+    else:
+        print("Using default SNPE configuration (posterior_nn not available)")
+        inference = SNPE(prior=prior, device=device)
 
     # Append simulations and train
     inference.append_simulations(theta_t, x_t)
