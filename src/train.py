@@ -194,7 +194,7 @@ def train_model(
     print(f"Training model N={n_components} on device={device}")
     print(f"{'='*60}")
 
-    simulator = RMSimulator(freq_file, n_components, base_noise_level=base_noise_level)
+    simulator = RMSimulator(freq_file, n_components)
 
     # Build prior on requested device
     try:
@@ -209,26 +209,12 @@ def train_model(
     theta = sample_prior(n_simulations, n_components, flat_priors)
 
     # Simulate in batches to avoid excessive memory usage
-    # Apply weight augmentation if enabled
-    from .augmentation import augment_weights_combined
-    
     xs = []
     for i in tqdm(range(0, n_simulations, batch_size), desc="Simulating"):
         batch_theta = theta[i:i + batch_size]
-        batch_size_actual = len(batch_theta)
-        
-        # Generate augmented weights for this batch
-        augmented_weights = np.zeros((batch_size_actual, simulator.n_freq))
-        for j in range(batch_size_actual):
-            augmented_weights[j] = augment_weights_combined(simulator.weights)
-        
-        # Simulate with augmented weights
-        batch_xs = []
-        for j in range(batch_size_actual):
-            x_sample = simulator(batch_theta[j:j+1], weights=augmented_weights[j])
-            batch_xs.append(x_sample)
-        xs.append(np.vstack(batch_xs))
-    
+        batch_x = simulator(batch_theta)
+        xs.append(batch_x)
+
     x = np.vstack(xs)
 
     # Convert to torch and move to device
@@ -348,7 +334,6 @@ def train_decision_layer(
     """
     from .simulator import RMSimulator, sample_prior
     from .decision import QualityPredictionTrainer
-    from .augmentation import augment_weights_combined
 
     print(f"\n{'='*60}")
     print("Training Quality Prediction Decision Layer")
@@ -364,8 +349,8 @@ def train_decision_layer(
     hidden_dims = decision_cfg.get("hidden_dims", [256, 128, 64])
 
     # Create simulators
-    sim_1comp = RMSimulator(freq_file, 1, base_noise_level=base_noise_level)
-    sim_2comp = RMSimulator(freq_file, 2, base_noise_level=base_noise_level)
+    sim_1comp = RMSimulator(freq_file, 1)
+    sim_2comp = RMSimulator(freq_file, 2)
     n_freq = sim_1comp.n_freq
 
     # Build priors for SBI
@@ -414,21 +399,18 @@ def train_decision_layer(
 
         for i in tqdm(range(n_samples), desc=f"Processing {n_comp}-comp"):
             # Simulate spectrum
-            aug_weights = augment_weights_combined(simulator.weights)
-            qu_obs = simulator(theta_samples[i:i+1], weights=aug_weights).flatten()
+            qu_obs = simulator(theta_samples[i:i+1]).flatten()
 
-            # Input: [Q, U, weights]
-            x_input = np.concatenate([qu_obs, aug_weights])
+            # Input: [Q, U, weights] - using uniform weights
+            weights = np.ones(n_freq)
+            x_input = np.concatenate([qu_obs, weights])
 
             # Now fit BOTH models to this spectrum (expensive!)
             # For computational efficiency, use small number of simulations
 
             # Fit 1-comp model
             theta_1 = sample_prior(500, 1, flat_priors)  # Reduced for speed
-            x_1 = []
-            for j in range(len(theta_1)):
-                x_1.append(sim_1comp(theta_1[j:j+1], weights=aug_weights).flatten())
-            x_1 = np.array(x_1)
+            x_1 = sim_1comp(theta_1)
 
             theta_1_t = torch.tensor(theta_1, dtype=torch.float32, device=device)
             x_1_t = torch.tensor(x_1, dtype=torch.float32, device=device)
@@ -440,10 +422,7 @@ def train_decision_layer(
 
             # Fit 2-comp model
             theta_2 = sample_prior(500, 2, flat_priors)
-            x_2 = []
-            for j in range(len(theta_2)):
-                x_2.append(sim_2comp(theta_2[j:j+1], weights=aug_weights).flatten())
-            x_2 = np.array(x_2)
+            x_2 = sim_2comp(theta_2)
 
             theta_2_t = torch.tensor(theta_2, dtype=torch.float32, device=device)
             x_2_t = torch.tensor(x_2, dtype=torch.float32, device=device)
