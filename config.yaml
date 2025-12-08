@@ -17,9 +17,11 @@ priors:
   amp:
     min: 0.01
     max: 1.0
-  noise:
-    min: 0.001
-    max: 0.01
+
+# Noise configuration
+# Fixed base noise level - actual noise σ = base_level / weight
+noise:
+  base_level: 0.01
 
 # Training settings
 training:
@@ -33,5 +35,34 @@ training:
   
 # Model selection
 model_selection:
-  max_components: 1
+  max_components: 2  # Two-layer system: 1-comp and 2-comp only
   use_log_evidence: true
+  use_decision_layer: true  # Enable decision layer for model selection
+
+# Weight augmentation settings
+weight_augmentation:
+  enable: true
+  scattered_prob: 0.3      # Probability of scattered missing channels
+  gap_prob: 0.3            # Probability of contiguous gaps
+  large_block_prob: 0.1    # Probability of large RFI blocks
+  noise_variation: true    # Add variation to weights
+
+# Quality Prediction Decision Layer
+# NOTE: This is expensive during training because we fit both SBI models
+# to each simulated spectrum to compute true AIC/BIC/log_evidence
+decision_layer:
+  n_training_samples: 1000  # Reduced (each sample requires fitting 2 SBI models!)
+  n_epochs: 50              # More epochs for regression task
+  batch_size: 32            # Smaller batch size
+  learning_rate: 0.0005     # Lower learning rate for stability
+  validation_fraction: 0.2
+  hidden_dims: [256, 128, 64]  # Network architecture
+  selection_strategy: 'ensemble'  # Options: 'log_evidence', 'aic', 'bic', 'ensemble'
+
+# SBI Architecture (Neural Posterior Estimation)
+sbi:
+  model: 'nsf'               # Neural Spline Flow (better than MAF)
+  hidden_features: 128       # Size of hidden layers in flow
+  num_transforms: 10         # Number of flow transforms (more = better expressivity)
+  num_bins: 16               # Spline resolution
+  embedding_dim: 64          # Output dimension of spectral embedding
