@@ -154,6 +154,7 @@ def test_two_component_recovery(freq_file, model_dir, config):
     print("="*60)
     
     # True parameters: [RM1, amp1, chi01, RM2, amp2, chi02]
+    # Note: No noise parameter - noise is encoded in weights via base_noise_level
     true_rm1 = -200.0
     true_amp1 = 0.4
     true_chi01 = 0.5
@@ -237,8 +238,9 @@ def test_simulator_forward_model(freq_file):
     print("Testing simulator forward model")
     print("="*60)
     
+    base_noise_level = 0.01
     for n_components in [1, 2, 3]:
-        simulator = RMSimulator(freq_file, n_components=n_components)
+        simulator = RMSimulator(freq_file, n_components=n_components, base_noise_level=base_noise_level)
         
         # Create random parameters (no noise parameter)
         n_params = 3 * n_components
