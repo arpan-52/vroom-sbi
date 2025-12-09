@@ -22,7 +22,16 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from sbi.inference import SNPE
-from sbi.utils import posterior_nn
+
+# Handle different SBI versions - posterior_nn location varies
+try:
+    from sbi.utils import posterior_nn
+except ImportError:
+    try:
+        from sbi.neural_nets import posterior_nn
+    except ImportError:
+        # Fallback for older versions
+        from sbi.utils.get_nn_models import posterior_nn
 
 from . simulator import RMSimulator, build_prior, sample_prior
 
