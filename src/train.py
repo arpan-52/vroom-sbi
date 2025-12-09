@@ -22,15 +22,7 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from sbi.inference import SNPE
-
-try:
-    from sbi.utils import posterior_nn
-except ImportError:
-    try:
-        from sbi.neural_nets import posterior_nn
-    except ImportError:
-        # Fallback for older SBI versions
-        posterior_nn = None
+from sbi.utils import posterior_nn
 
 from . simulator import RMSimulator, build_prior, sample_prior
 
@@ -194,7 +186,7 @@ def train_model(
     print(f"Training model N={n_components} on device={device}")
     print(f"{'='*60}")
 
-    simulator = RMSimulator(freq_file, n_components)
+    simulator = RMSimulator(freq_file, n_components, base_noise_level=base_noise_level)
 
     # Build prior on requested device
     try:
@@ -209,12 +201,26 @@ def train_model(
     theta = sample_prior(n_simulations, n_components, flat_priors)
 
     # Simulate in batches to avoid excessive memory usage
+    # Apply weight augmentation if enabled
+    from .augmentation import augment_weights_combined
+    
     xs = []
     for i in tqdm(range(0, n_simulations, batch_size), desc="Simulating"):
         batch_theta = theta[i:i + batch_size]
-        batch_x = simulator(batch_theta)
-        xs.append(batch_x)
-
+        batch_size_actual = len(batch_theta)
+        
+        # Generate augmented weights for this batch
+        augmented_weights = np.zeros((batch_size_actual, simulator.n_freq))
+        for j in range(batch_size_actual):
+            augmented_weights[j] = augment_weights_combined(simulator.weights)
+        
+        # Simulate with augmented weights
+        batch_xs = []
+        for j in range(batch_size_actual):
+            x_sample = simulator(batch_theta[j:j+1], weights=augmented_weights[j])
+            batch_xs.append(x_sample)
+        xs.append(np.vstack(batch_xs))
+    
     x = np.vstack(xs)
 
     # Convert to torch and move to device
@@ -227,34 +233,25 @@ def train_model(
         device = "cpu"
         print("Warning: falling back to CPU tensors (device change).")
 
-    # Create SNPE inference object with custom density estimator (if available)
-    if posterior_nn is not None:
-        # Build custom embedding for spectral data
-        input_dim = 2 * simulator.n_freq  # Q and U
-        embedding_net = SpectralEmbedding(input_dim=input_dim, output_dim=64).to(device)
+    # Create SNPE inference object with custom density estimator
+    # Build custom embedding for spectral data
+    input_dim = 2 * simulator.n_freq  # Q and U
+    embedding_net = SpectralEmbedding(input_dim=input_dim, output_dim=64).to(device)
 
-        # Build neural posterior with NSF (Neural Spline Flow) and custom embedding
-        try:
-            density_estimator_builder = posterior_nn(
-                model="nsf",              # Neural Spline Flow (better than MAF)
-                hidden_features=128,      # Larger hidden layers for complex posteriors
-                num_transforms=10,        # More transforms for better expressivity
-                num_bins=16,              # Spline resolution
-                embedding_net=embedding_net
-            )
+    # Build neural posterior with NSF (Neural Spline Flow) and custom embedding
+    density_estimator_builder = posterior_nn(
+        model="nsf",              # Neural Spline Flow (better than MAF)
+        hidden_features=128,      # Larger hidden layers for complex posteriors
+        num_transforms=10,        # More transforms for better expressivity
+        num_bins=16,              # Spline resolution
+        embedding_net=embedding_net
+    )
 
-            print(f"Using Neural Spline Flow with custom spectral embedding:")
-            print(f"  Input dim: {input_dim}, Embedding dim: 64")
-            print(f"  Hidden features: 128, Num transforms: 10")
+    print(f"Using Neural Spline Flow with custom spectral embedding:")
+    print(f"  Input dim: {input_dim}, Embedding dim: 64")
+    print(f"  Hidden features: 128, Num transforms: 10")
 
-            inference = SNPE(prior=prior, density_estimator=density_estimator_builder, device=device)
-        except Exception as e:
-            print(f"Warning: Could not create custom density estimator: {e}")
-            print("Falling back to default SNPE configuration")
-            inference = SNPE(prior=prior, device=device)
-    else:
-        print("Using default SNPE configuration (posterior_nn not available)")
-        inference = SNPE(prior=prior, device=device)
+    inference = SNPE(prior=prior, density_estimator=density_estimator_builder, device=device)
 
     # Append simulations and train
     inference.append_simulations(theta_t, x_t)
@@ -334,6 +331,7 @@ def train_decision_layer(
     """
     from .simulator import RMSimulator, sample_prior
     from .decision import QualityPredictionTrainer
+    from .augmentation import augment_weights_combined
 
     print(f"\n{'='*60}")
     print("Training Quality Prediction Decision Layer")
@@ -349,8 +347,8 @@ def train_decision_layer(
     hidden_dims = decision_cfg.get("hidden_dims", [256, 128, 64])
 
     # Create simulators
-    sim_1comp = RMSimulator(freq_file, 1)
-    sim_2comp = RMSimulator(freq_file, 2)
+    sim_1comp = RMSimulator(freq_file, 1, base_noise_level=base_noise_level)
+    sim_2comp = RMSimulator(freq_file, 2, base_noise_level=base_noise_level)
     n_freq = sim_1comp.n_freq
 
     # Build priors for SBI
@@ -399,18 +397,21 @@ def train_decision_layer(
 
         for i in tqdm(range(n_samples), desc=f"Processing {n_comp}-comp"):
             # Simulate spectrum
-            qu_obs = simulator(theta_samples[i:i+1]).flatten()
+            aug_weights = augment_weights_combined(simulator.weights)
+            qu_obs = simulator(theta_samples[i:i+1], weights=aug_weights).flatten()
 
-            # Input: [Q, U, weights] - using uniform weights
-            weights = np.ones(n_freq)
-            x_input = np.concatenate([qu_obs, weights])
+            # Input: [Q, U, weights]
+            x_input = np.concatenate([qu_obs, aug_weights])
 
             # Now fit BOTH models to this spectrum (expensive!)
             # For computational efficiency, use small number of simulations
 
             # Fit 1-comp model
             theta_1 = sample_prior(500, 1, flat_priors)  # Reduced for speed
-            x_1 = sim_1comp(theta_1)
+            x_1 = []
+            for j in range(len(theta_1)):
+                x_1.append(sim_1comp(theta_1[j:j+1], weights=aug_weights).flatten())
+            x_1 = np.array(x_1)
 
             theta_1_t = torch.tensor(theta_1, dtype=torch.float32, device=device)
             x_1_t = torch.tensor(x_1, dtype=torch.float32, device=device)
@@ -422,7 +423,10 @@ def train_decision_layer(
 
             # Fit 2-comp model
             theta_2 = sample_prior(500, 2, flat_priors)
-            x_2 = sim_2comp(theta_2)
+            x_2 = []
+            for j in range(len(theta_2)):
+                x_2.append(sim_2comp(theta_2[j:j+1], weights=aug_weights).flatten())
+            x_2 = np.array(x_2)
 
             theta_2_t = torch.tensor(theta_2, dtype=torch.float32, device=device)
             x_2_t = torch.tensor(x_2, dtype=torch.float32, device=device)

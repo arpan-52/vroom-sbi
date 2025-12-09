@@ -12,32 +12,39 @@ class RMSimulator:
     Simulator for N Faraday-thin components.
 
     Parameters per component: RM, amplitude, chi0
-    Plus: noise level
+    Noise is encoded in weights, not as a parameter.
 
-    Total params = 3*N + 1
+    Total params = 3*N
     """
 
-    def __init__(self, freq_file: str, n_components: int):
-        self.freq = load_frequencies(freq_file)
+    def __init__(self, freq_file: str, n_components: int, base_noise_level: float = 0.01):
+        self.freq, self.weights = load_frequencies(freq_file)
         self.lambda_sq = freq_to_lambda_sq(self.freq)
         self.n_freq = len(self.freq)
         self.n_components = n_components
-        self.n_params = 3 * n_components + 1
+        self.n_params = 3 * n_components
+        self.base_noise_level = base_noise_level
 
-    def __call__(self, theta: np.ndarray) -> np.ndarray:
+    def __call__(self, theta: np.ndarray, weights: np.ndarray = None) -> np.ndarray:
         """
-        Simulate Q, U from parameters.
+        Simulate Q, U from parameters with optional weighted channels.
 
         Parameters
         ----------
         theta : array (n_params,) or (batch, n_params)
+        weights : array (n_freq,), optional
+            Channel weights (1.0 = best, 0.0 = missing). If None, uses self.weights.
 
         Returns
         -------
         x : array (2*n_freq,) or (batch, 2*n_freq)
+            Simulated Q and U with weighted noise
         """
         theta = np.atleast_2d(theta)
         batch_size = theta.shape[0]
+
+        if weights is None:
+            weights = self.weights
 
         Q = np.zeros((batch_size, self.n_freq))
         U = np.zeros((batch_size, self.n_freq))
@@ -52,10 +59,22 @@ class RMSimulator:
 
                 phase = 2 * (chi0 + rm * self.lambda_sq)
                 P += amp * np.exp(1j * phase)
-
-            noise = theta[b, -1]
-            Q[b] = P.real + np.random.normal(0, noise, self.n_freq)
-            U[b] = P.imag + np.random.normal(0, noise, self.n_freq)
+            
+            # Apply weighted noise based on channel quality
+            # Weight interpretation: weight = 1/σ_relative (normalized so max=1.0)
+            #   - weight = 1.0: best quality (σ = base_noise_level)
+            #   - weight = 0.5: moderate noise (σ = 2 × base_noise_level)
+            #   - weight = 0.0: missing/flagged (set to zero, network interpolates)
+            for j in range(self.n_freq):
+                if weights[j] > 0:
+                    # Actual noise: σ = base_noise_level / weight
+                    sigma = self.base_noise_level / weights[j]
+                    Q[b, j] = P[j].real + np.random.normal(0, sigma)
+                    U[b, j] = P[j].imag + np.random.normal(0, sigma)
+                else:
+                    # Missing channel - set to zero for network interpolation
+                    Q[b, j] = 0.0
+                    U[b, j] = 0.0
 
         x = np.hstack([Q, U])
         return x.squeeze()
@@ -64,6 +83,7 @@ class RMSimulator:
 def build_prior(n_components: int, config: dict, device: str = "cpu"):
     """
     Build SBI BoxUniform prior for N components.
+    Note: Noise is not a parameter - it's encoded in weights.
     """
     from sbi.utils import BoxUniform
 
@@ -82,9 +102,6 @@ def build_prior(n_components: int, config: dict, device: str = "cpu"):
             np.pi,
         ])
 
-    low.append(config["noise_min"])
-    high.append(config["noise_max"])
-
     low_t = torch.tensor(low, dtype=torch.float32, device=device)
     high_t = torch.tensor(high, dtype=torch.float32, device=device)
 
@@ -94,8 +111,9 @@ def build_prior(n_components: int, config: dict, device: str = "cpu"):
 def sample_prior(n_samples: int, n_components: int, config: dict) -> np.ndarray:
     """
     Sample from prior - UNIFORM for all to match BoxUniform prior.
+    Note: Noise is not a parameter - it's encoded in weights.
     """
-    theta = np.zeros((n_samples, 3 * n_components + 1))
+    theta = np.zeros((n_samples, 3 * n_components))
 
     for i in range(n_components):
         # RM: uniform
@@ -108,10 +126,5 @@ def sample_prior(n_samples: int, n_components: int, config: dict) -> np.ndarray:
         )
         # Chi0: uniform [0, π]
         theta[:, 3 * i + 2] = np.random.uniform(0, np.pi, n_samples)
-
-    # Noise: uniform (matches BoxUniform)
-    theta[:, -1] = np.random.uniform(
-        config["noise_min"], config["noise_max"], n_samples
-    )
 
     return theta
