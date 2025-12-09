@@ -319,13 +319,13 @@ def train_decision_layer(
     output_dir: Path = Path("models"),
 ) -> Dict[str, Any]:
     """
-    Train the quality prediction decision layer.
+    Train the quality prediction decision layer using PRE-TRAINED models.
 
     This function trains a neural network to predict AIC, BIC, and log evidence
     for both 1-comp and 2-comp models given an observed spectrum.
 
-    NOTE: This is expensive during training because we must fit both SBI models
-    to each simulated spectrum to get the true quality metrics.
+    Uses the already-trained worker models (posterior_n1.pkl, posterior_n2.pkl)
+    to compute quality metrics, rather than fitting new models from scratch.
 
     Parameters
     ----------
@@ -348,31 +348,40 @@ def train_decision_layer(
     from .simulator import RMSimulator, sample_prior
     from .decision import QualityPredictionTrainer
     from .augmentation import augment_weights_combined, augment_base_noise_level
+    import pickle
 
     print(f"\n{'='*60}")
     print("Training Quality Prediction Decision Layer")
     print(f"{'='*60}")
-    
+
     # Get decision layer config
     decision_cfg = config.get("decision_layer", {})
-    n_samples = decision_cfg.get("n_training_samples", 1000)  # Fewer samples (expensive!)
+    n_samples = decision_cfg.get("n_training_samples", 1000)
     n_epochs = decision_cfg.get("n_epochs", 50)
     batch_size = decision_cfg.get("batch_size", 32)
     val_fraction = decision_cfg.get("validation_fraction", 0.2)
     device = config.get("training", {}).get("device", "cpu")
     hidden_dims = decision_cfg.get("hidden_dims", [256, 128, 64])
 
+    # Load PRE-TRAINED posteriors
+    print("\nLoading pre-trained worker models...")
+    with open(output_dir / "posterior_n1.pkl", "rb") as f:
+        data_1 = pickle.load(f)
+        posterior_1 = data_1["posterior"]
+    print("  ✓ Loaded 1-comp posterior")
+
+    with open(output_dir / "posterior_n2.pkl", "rb") as f:
+        data_2 = pickle.load(f)
+        posterior_2 = data_2["posterior"]
+    print("  ✓ Loaded 2-comp posterior")
+
     # Create simulators
     sim_1comp = RMSimulator(freq_file, 1, base_noise_level=base_noise_level)
     sim_2comp = RMSimulator(freq_file, 2, base_noise_level=base_noise_level)
     n_freq = sim_1comp.n_freq
 
-    # Build priors for SBI
-    prior_1comp = build_prior(1, flat_priors, device=device)
-    prior_2comp = build_prior(2, flat_priors, device=device)
-
-    print(f"Generating {n_samples} training samples (this will take a while)...")
-    print(f"For each sample, we fit BOTH 1-comp and 2-comp models to compute true quality metrics.")
+    print(f"\nGenerating {n_samples} training samples per model...")
+    print(f"Using PRE-TRAINED posteriors to compute quality metrics (FAST!)")
 
     # Data containers
     X_all = []  # Spectra + weights
@@ -421,45 +430,12 @@ def train_decision_layer(
             # Input: [Q, U, weights]
             x_input = np.concatenate([qu_obs, aug_weights])
 
-            # Now fit BOTH models to this spectrum (expensive!)
-            # For computational efficiency, use small number of simulations
+            # Use PRE-TRAINED models to compute quality metrics (FAST!)
+            n_params_1 = 3  # RM, amp, chi0
+            n_params_2 = 6  # 2 * (RM, amp, chi0)
 
-            # Fit 1-comp model
-            theta_1 = sample_prior(500, 1, flat_priors)  # Reduced for speed
-            x_1 = []
-            for j in range(len(theta_1)):
-                x_1.append(sim_1comp(theta_1[j:j+1], weights=aug_weights).flatten())
-            x_1 = np.array(x_1)
-
-            theta_1_t = torch.tensor(theta_1, dtype=torch.float32, device=device)
-            x_1_t = torch.tensor(x_1, dtype=torch.float32, device=device)
-
-            inf_1 = SNPE(prior=prior_1comp, device=device, show_progress_bars=False)
-            inf_1.append_simulations(theta_1_t, x_1_t)
-            dens_1 = inf_1.train(training_batch_size=128, show_train_summary=False)
-            post_1 = inf_1.build_posterior(dens_1)
-
-            # Fit 2-comp model
-            theta_2 = sample_prior(500, 2, flat_priors)
-            x_2 = []
-            for j in range(len(theta_2)):
-                x_2.append(sim_2comp(theta_2[j:j+1], weights=aug_weights).flatten())
-            x_2 = np.array(x_2)
-
-            theta_2_t = torch.tensor(theta_2, dtype=torch.float32, device=device)
-            x_2_t = torch.tensor(x_2, dtype=torch.float32, device=device)
-
-            inf_2 = SNPE(prior=prior_2comp, device=device, show_progress_bars=False)
-            inf_2.append_simulations(theta_2_t, x_2_t)
-            dens_2 = inf_2.train(training_batch_size=128, show_train_summary=False)
-            post_2 = inf_2.build_posterior(dens_2)
-
-            # Compute quality metrics
-            n_params_1 = 3  # RM, q, u
-            n_params_2 = 6  # 2*RM, 2*q, 2*u
-
-            log_ev_1, aic_1, bic_1 = compute_quality_metrics(post_1, qu_obs, n_params_1)
-            log_ev_2, aic_2, bic_2 = compute_quality_metrics(post_2, qu_obs, n_params_2)
+            log_ev_1, aic_1, bic_1 = compute_quality_metrics(posterior_1, qu_obs, n_params_1)
+            log_ev_2, aic_2, bic_2 = compute_quality_metrics(posterior_2, qu_obs, n_params_2)
 
             # Store
             X_all.append(x_input)
