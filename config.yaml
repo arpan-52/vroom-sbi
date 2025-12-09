@@ -19,9 +19,14 @@ priors:
     max: 1.0
 
 # Noise configuration
-# Fixed base noise level - actual noise σ = base_level / weight
+# Base noise level - actual noise σ = base_level / weight
+# During training, base_level is randomly varied for robustness
 noise:
-  base_level: 0.01
+  base_level: 0.01           # Default/reference noise level
+  augmentation:
+    enable: true             # Enable random noise level variation
+    min_factor: 0.5          # Minimum: 0.5 × base_level
+    max_factor: 2.0          # Maximum: 2.0 × base_level
 
 # Training settings
 training:

@@ -201,25 +201,32 @@ def train_model(
     theta = sample_prior(n_simulations, n_components, flat_priors)
 
     # Simulate in batches to avoid excessive memory usage
-    # Apply weight augmentation if enabled
-    from .augmentation import augment_weights_combined
-    
+    # Apply weight and noise augmentation if enabled
+    from .augmentation import augment_weights_combined, augment_base_noise_level
+
     xs = []
     for i in tqdm(range(0, n_simulations, batch_size), desc="Simulating"):
         batch_theta = theta[i:i + batch_size]
         batch_size_actual = len(batch_theta)
-        
+
         # Generate augmented weights for this batch
         augmented_weights = np.zeros((batch_size_actual, simulator.n_freq))
         for j in range(batch_size_actual):
             augmented_weights[j] = augment_weights_combined(simulator.weights)
-        
-        # Simulate with augmented weights
+
+        # Simulate with augmented weights and noise levels
         batch_xs = []
         for j in range(batch_size_actual):
+            # Augment base noise level for this sample
+            aug_noise = augment_base_noise_level(base_noise_level, min_factor=0.5, max_factor=2.0)
+            simulator.base_noise_level = aug_noise
+
             x_sample = simulator(batch_theta[j:j+1], weights=augmented_weights[j])
             batch_xs.append(x_sample)
         xs.append(np.vstack(batch_xs))
+
+    # Restore original base noise level
+    simulator.base_noise_level = base_noise_level
     
     x = np.vstack(xs)
 
@@ -331,7 +338,7 @@ def train_decision_layer(
     """
     from .simulator import RMSimulator, sample_prior
     from .decision import QualityPredictionTrainer
-    from .augmentation import augment_weights_combined
+    from .augmentation import augment_weights_combined, augment_base_noise_level
 
     print(f"\n{'='*60}")
     print("Training Quality Prediction Decision Layer")
@@ -396,8 +403,10 @@ def train_decision_layer(
         simulator = sim_1comp if n_comp == 1 else sim_2comp
 
         for i in tqdm(range(n_samples), desc=f"Processing {n_comp}-comp"):
-            # Simulate spectrum
+            # Simulate spectrum with augmented weights and noise
             aug_weights = augment_weights_combined(simulator.weights)
+            aug_noise = augment_base_noise_level(base_noise_level, min_factor=0.5, max_factor=2.0)
+            simulator.base_noise_level = aug_noise
             qu_obs = simulator(theta_samples[i:i+1], weights=aug_weights).flatten()
 
             # Input: [Q, U, weights]

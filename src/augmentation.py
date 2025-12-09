@@ -182,26 +182,58 @@ def augment_weights_combined(weights: np.ndarray,
     return aug_weights
 
 
-def generate_augmented_weights_batch(base_weights: np.ndarray, 
+def generate_augmented_weights_batch(base_weights: np.ndarray,
                                      batch_size: int) -> np.ndarray:
     """
     Generate a batch of augmented weights for training.
-    
+
     Parameters
     ----------
     base_weights : np.ndarray
         Original channel weights
     batch_size : int
         Number of augmented weight arrays to generate
-        
+
     Returns
     -------
     np.ndarray
         Array of shape (batch_size, n_channels) with augmented weights
     """
     augmented_batch = np.zeros((batch_size, len(base_weights)))
-    
+
     for i in range(batch_size):
         augmented_batch[i] = augment_weights_combined(base_weights)
-    
+
     return augmented_batch
+
+
+def augment_base_noise_level(base_level: float,
+                              min_factor: float = 0.5,
+                              max_factor: float = 2.0) -> float:
+    """
+    Randomly vary the base noise level for training robustness.
+
+    The network learns to handle different overall noise floors without
+    needing to predict the noise level.
+
+    Parameters
+    ----------
+    base_level : float
+        Reference base noise level
+    min_factor : float
+        Minimum multiplicative factor (default: 0.5 for half noise)
+    max_factor : float
+        Maximum multiplicative factor (default: 2.0 for double noise)
+
+    Returns
+    -------
+    float
+        Augmented base noise level
+
+    Examples
+    --------
+    >>> augment_base_noise_level(0.01, 0.5, 2.0)
+    0.0173  # Random value between 0.005 and 0.02
+    """
+    factor = np.random.uniform(min_factor, max_factor)
+    return base_level * factor
