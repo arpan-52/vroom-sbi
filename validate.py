@@ -1190,6 +1190,372 @@ def run_decision_tests(decision_trainer, val_cfg: ValidationConfig) -> List[Vali
 
 
 # =============================================================================
+# PART 3 (Alternative): Classifier Tests
+# =============================================================================
+
+def run_classifier_tests(classifier, val_cfg: ValidationConfig) -> List[ValidationResult]:
+    """Run all classifier tests."""
+    print_header("PART 3: Model Selection Classifier Tests")
+    
+    results = []
+    
+    sim_1comp = RMSimulator(val_cfg.freq_file, n_components=1, base_noise_level=val_cfg.base_noise_level)
+    sim_2comp = RMSimulator(val_cfg.freq_file, n_components=2, base_noise_level=val_cfg.base_noise_level)
+    n_freq = sim_1comp.n_freq
+    
+    # 3.1 Clear 1-Component Cases
+    print_subheader("3.1 Clear 1-Component Cases")
+    for rm in [val_cfg.rm_mid, val_cfg.rm_max * 0.7]:
+        theta = np.array([[rm, val_cfg.amp_mid, 0.5]])
+        qu_obs = sim_1comp(theta).flatten()
+        weights = np.ones(n_freq)
+        
+        x_input = np.concatenate([qu_obs, weights])
+        x_input_t = torch.tensor(x_input, dtype=torch.float32, device=val_cfg.device)
+        
+        predicted_n, prob_dict = classifier.predict(x_input_t)
+        passed = predicted_n == 1
+        confidence = prob_dict[predicted_n]
+        
+        result = ValidationResult(
+            test_name=f"Classifier: 1-comp data (RM={rm:.0f})",
+            passed=passed,
+            message=f"Predicted: {predicted_n}-comp (conf={confidence:.1%})",
+            details=prob_dict
+        )
+        print_result(result)
+        results.append(result)
+    
+    # 3.2 Clear 2-Component Cases
+    print_subheader("3.2 Clear 2-Component Cases")
+    for sep_frac in [0.4, 0.6]:
+        separation = val_cfg.rm_range * sep_frac
+        rm1 = val_cfg.rm_mid + separation / 2
+        rm2 = val_cfg.rm_mid - separation / 2
+        if rm1 < rm2:
+            rm1, rm2 = rm2, rm1
+        
+        theta = np.array([[rm1, val_cfg.amp_mid, 0.5, rm2, val_cfg.amp_mid * 0.8, 1.5]])
+        qu_obs = sim_2comp(theta).flatten()
+        weights = np.ones(n_freq)
+        
+        x_input = np.concatenate([qu_obs, weights])
+        x_input_t = torch.tensor(x_input, dtype=torch.float32, device=val_cfg.device)
+        
+        predicted_n, prob_dict = classifier.predict(x_input_t)
+        passed = predicted_n == 2
+        confidence = prob_dict[predicted_n]
+        
+        result = ValidationResult(
+            test_name=f"Classifier: 2-comp data (sep={separation:.0f})",
+            passed=passed,
+            message=f"Predicted: {predicted_n}-comp (conf={confidence:.1%})",
+            details=prob_dict
+        )
+        print_result(result)
+        results.append(result)
+    
+    # 3.3 Weak Second Component (Edge Cases)
+    print_subheader("3.3 Edge Case: Weak Second Component")
+    for amp_ratio in [3.0, 5.0, 10.0]:
+        rm1 = val_cfg.rm_mid + val_cfg.rm_range * 0.25
+        rm2 = val_cfg.rm_mid - val_cfg.rm_range * 0.25
+        if rm1 < rm2:
+            rm1, rm2 = rm2, rm1
+        
+        theta = np.array([[rm1, val_cfg.amp_mid, 0.5, rm2, val_cfg.amp_mid / amp_ratio, 1.5]])
+        qu_obs = sim_2comp(theta).flatten()
+        weights = np.ones(n_freq)
+        
+        x_input = np.concatenate([qu_obs, weights])
+        x_input_t = torch.tensor(x_input, dtype=torch.float32, device=val_cfg.device)
+        
+        predicted_n, prob_dict = classifier.predict(x_input_t)
+        confidence = prob_dict[predicted_n]
+        
+        # For very weak components, either answer is acceptable
+        if amp_ratio >= 5.0:
+            passed = True  # Either answer acceptable
+            note = "(either answer acceptable)"
+        else:
+            passed = predicted_n == 2
+            note = ""
+        
+        result = ValidationResult(
+            test_name=f"Classifier: Weak 2nd comp (ratio={amp_ratio:.0f}:1) {note}",
+            passed=passed,
+            message=f"Predicted: {predicted_n}-comp (conf={confidence:.1%})",
+            details=prob_dict
+        )
+        print_result(result)
+        results.append(result)
+    
+    # 3.4 Missing Channels
+    print_subheader("3.4 With Missing Channels")
+    for missing_frac in [0.1, 0.2]:
+        # 1-comp with missing
+        theta_1 = np.array([[val_cfg.rm_mid, val_cfg.amp_mid, 0.5]])
+        weights_1 = np.ones(n_freq)
+        n_missing = int(n_freq * missing_frac)
+        missing_idx = np.random.choice(n_freq, n_missing, replace=False)
+        weights_1[missing_idx] = 0.0
+        
+        qu_obs_1 = sim_1comp(theta_1, weights=weights_1).flatten()
+        x_input_1 = np.concatenate([qu_obs_1, weights_1])
+        x_input_1_t = torch.tensor(x_input_1, dtype=torch.float32, device=val_cfg.device)
+        
+        pred_1, prob_1 = classifier.predict(x_input_1_t)
+        
+        result = ValidationResult(
+            test_name=f"Classifier: 1-comp ({missing_frac*100:.0f}% missing)",
+            passed=pred_1 == 1,
+            message=f"Predicted: {pred_1}-comp (conf={prob_1[pred_1]:.1%})",
+            details=prob_1
+        )
+        print_result(result)
+        results.append(result)
+    
+    print_summary(results, "PART 3 (Classifier)")
+    return results
+
+
+def plot_classifier(
+    classifier,
+    val_cfg: ValidationConfig,
+    output_dir: Path,
+    n_samples: int = 100
+):
+    """
+    Plot classifier performance: confusion matrix and probability distributions.
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+    
+    sim_1comp = RMSimulator(val_cfg.freq_file, n_components=1, base_noise_level=val_cfg.base_noise_level)
+    sim_2comp = RMSimulator(val_cfg.freq_file, n_components=2, base_noise_level=val_cfg.base_noise_level)
+    n_freq = sim_1comp.n_freq
+    
+    # Generate predictions
+    true_labels = []
+    pred_labels = []
+    probs_1comp = []
+    probs_2comp = []
+    
+    # 1-component data
+    for _ in range(n_samples):
+        rm = np.random.uniform(val_cfg.rm_min + 0.1 * val_cfg.rm_range,
+                               val_cfg.rm_max - 0.1 * val_cfg.rm_range)
+        amp = np.random.uniform(val_cfg.amp_min + 0.1 * (val_cfg.amp_max - val_cfg.amp_min),
+                                val_cfg.amp_max - 0.1 * (val_cfg.amp_max - val_cfg.amp_min))
+        
+        theta = np.array([[rm, amp, np.random.uniform(0, np.pi)]])
+        qu_obs = sim_1comp(theta).flatten()
+        weights = np.ones(n_freq)
+        
+        x_input = np.concatenate([qu_obs, weights])
+        x_input_t = torch.tensor(x_input, dtype=torch.float32, device=val_cfg.device)
+        
+        pred_n, prob_dict = classifier.predict(x_input_t)
+        
+        true_labels.append(1)
+        pred_labels.append(pred_n)
+        probs_1comp.append(prob_dict[1])
+        probs_2comp.append(prob_dict[2])
+    
+    # 2-component data
+    for _ in range(n_samples):
+        separation = np.random.uniform(0.3, 0.7) * val_cfg.rm_range
+        rm1 = val_cfg.rm_mid + separation / 2
+        rm2 = val_cfg.rm_mid - separation / 2
+        if rm1 < rm2:
+            rm1, rm2 = rm2, rm1
+        
+        amp1 = np.random.uniform(val_cfg.amp_min + 0.1 * (val_cfg.amp_max - val_cfg.amp_min),
+                                 val_cfg.amp_max - 0.1 * (val_cfg.amp_max - val_cfg.amp_min))
+        amp_ratio = np.random.uniform(1.0, 3.0)
+        amp2 = amp1 / amp_ratio
+        
+        theta = np.array([[rm1, amp1, np.random.uniform(0, np.pi), 
+                          rm2, amp2, np.random.uniform(0, np.pi)]])
+        qu_obs = sim_2comp(theta).flatten()
+        weights = np.ones(n_freq)
+        
+        x_input = np.concatenate([qu_obs, weights])
+        x_input_t = torch.tensor(x_input, dtype=torch.float32, device=val_cfg.device)
+        
+        pred_n, prob_dict = classifier.predict(x_input_t)
+        
+        true_labels.append(2)
+        pred_labels.append(pred_n)
+        probs_1comp.append(prob_dict[1])
+        probs_2comp.append(prob_dict[2])
+    
+    true_labels = np.array(true_labels)
+    pred_labels = np.array(pred_labels)
+    probs_1comp = np.array(probs_1comp)
+    probs_2comp = np.array(probs_2comp)
+    
+    # Plot 1: Confusion Matrix
+    ax1 = axes[0, 0]
+    cm = np.zeros((2, 2), dtype=int)
+    for t, p in zip(true_labels, pred_labels):
+        cm[t-1, p-1] += 1
+    
+    im = ax1.imshow(cm, interpolation='nearest', cmap='Blues')
+    ax1.set_xticks([0, 1])
+    ax1.set_yticks([0, 1])
+    ax1.set_xticklabels(['1-comp', '2-comp'])
+    ax1.set_yticklabels(['1-comp', '2-comp'])
+    ax1.set_xlabel('Predicted', fontsize=12)
+    ax1.set_ylabel('True', fontsize=12)
+    ax1.set_title('Confusion Matrix', fontsize=14, fontweight='bold')
+    
+    for i in range(2):
+        for j in range(2):
+            color = 'white' if cm[i, j] > cm.max()/2 else 'black'
+            ax1.text(j, i, cm[i, j], ha='center', va='center', color=color, fontsize=16)
+    
+    accuracy = (cm[0,0] + cm[1,1]) / cm.sum()
+    ax1.text(0.5, -0.15, f'Accuracy: {accuracy*100:.1f}%', 
+             transform=ax1.transAxes, ha='center', fontsize=12)
+    
+    # Plot 2: Probability distribution for 1-comp data
+    ax2 = axes[0, 1]
+    mask_1 = true_labels == 1
+    ax2.hist(probs_2comp[mask_1], bins=20, alpha=0.7, color='steelblue', edgecolor='black')
+    ax2.axvline(0.5, color='red', linestyle='--', lw=2, label='Decision boundary')
+    ax2.set_xlabel('P(2-component)', fontsize=12)
+    ax2.set_ylabel('Count', fontsize=12)
+    ax2.set_title('1-comp Data: P(2-comp) Distribution', fontsize=14, fontweight='bold')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Probability distribution for 2-comp data
+    ax3 = axes[0, 2]
+    mask_2 = true_labels == 2
+    ax3.hist(probs_2comp[mask_2], bins=20, alpha=0.7, color='darkorange', edgecolor='black')
+    ax3.axvline(0.5, color='red', linestyle='--', lw=2, label='Decision boundary')
+    ax3.set_xlabel('P(2-component)', fontsize=12)
+    ax3.set_ylabel('Count', fontsize=12)
+    ax3.set_title('2-comp Data: P(2-comp) Distribution', fontsize=14, fontweight='bold')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    # Plot 4: Accuracy vs amplitude ratio
+    ax4 = axes[1, 0]
+    amp_ratios = [1.0, 2.0, 3.0, 4.0, 5.0]
+    accuracies = []
+    
+    for ratio in amp_ratios:
+        correct = 0
+        total = 20
+        
+        for _ in range(total):
+            separation = 0.4 * val_cfg.rm_range
+            rm1 = val_cfg.rm_mid + separation / 2
+            rm2 = val_cfg.rm_mid - separation / 2
+            if rm1 < rm2:
+                rm1, rm2 = rm2, rm1
+            
+            theta = np.array([[rm1, val_cfg.amp_mid, 0.5, rm2, val_cfg.amp_mid / ratio, 1.5]])
+            qu_obs = sim_2comp(theta).flatten()
+            
+            x_input = np.concatenate([qu_obs, np.ones(n_freq)])
+            x_input_t = torch.tensor(x_input, dtype=torch.float32, device=val_cfg.device)
+            
+            pred_n, _ = classifier.predict(x_input_t)
+            if pred_n == 2:
+                correct += 1
+        
+        accuracies.append(correct / total * 100)
+    
+    ax4.bar(np.arange(len(amp_ratios)), accuracies, color='steelblue', alpha=0.7, edgecolor='black')
+    ax4.axhline(50, color='red', linestyle='--', lw=2, label='Chance level')
+    ax4.set_xticks(np.arange(len(amp_ratios)))
+    ax4.set_xticklabels([f'{r}:1' for r in amp_ratios])
+    ax4.set_xlabel('Amplitude Ratio', fontsize=12)
+    ax4.set_ylabel('2-comp Detection Rate (%)', fontsize=12)
+    ax4.set_title('Detection vs Amplitude Ratio', fontsize=14, fontweight='bold')
+    ax4.set_ylim(0, 105)
+    ax4.legend()
+    ax4.grid(True, alpha=0.3, axis='y')
+    
+    # Plot 5: Accuracy vs RM separation
+    ax5 = axes[1, 1]
+    separations = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    accuracies = []
+    
+    for sep_frac in separations:
+        correct = 0
+        total = 20
+        
+        for _ in range(total):
+            separation = sep_frac * val_cfg.rm_range
+            rm1 = val_cfg.rm_mid + separation / 2
+            rm2 = val_cfg.rm_mid - separation / 2
+            if rm1 < rm2:
+                rm1, rm2 = rm2, rm1
+            
+            theta = np.array([[rm1, val_cfg.amp_mid, 0.5, rm2, val_cfg.amp_mid * 0.8, 1.5]])
+            qu_obs = sim_2comp(theta).flatten()
+            
+            x_input = np.concatenate([qu_obs, np.ones(n_freq)])
+            x_input_t = torch.tensor(x_input, dtype=torch.float32, device=val_cfg.device)
+            
+            pred_n, _ = classifier.predict(x_input_t)
+            if pred_n == 2:
+                correct += 1
+        
+        accuracies.append(correct / total * 100)
+    
+    ax5.bar(np.arange(len(separations)), accuracies, color='darkorange', alpha=0.7, edgecolor='black')
+    ax5.axhline(50, color='red', linestyle='--', lw=2, label='Chance level')
+    ax5.set_xticks(np.arange(len(separations)))
+    ax5.set_xticklabels([f'{int(s*100)}%' for s in separations])
+    ax5.set_xlabel('RM Separation (% of range)', fontsize=12)
+    ax5.set_ylabel('2-comp Detection Rate (%)', fontsize=12)
+    ax5.set_title('Detection vs RM Separation', fontsize=14, fontweight='bold')
+    ax5.set_ylim(0, 105)
+    ax5.legend()
+    ax5.grid(True, alpha=0.3, axis='y')
+    
+    # Plot 6: Performance summary
+    ax6 = axes[1, 2]
+    ax6.axis('off')
+    
+    acc_1comp = cm[0, 0] / cm[0].sum() * 100
+    acc_2comp = cm[1, 1] / cm[1].sum() * 100
+    overall_acc = (cm[0,0] + cm[1,1]) / cm.sum() * 100
+    
+    summary_text = f"""
+    Classifier Performance Summary
+    ══════════════════════════════
+    
+    Overall Accuracy:     {overall_acc:.1f}%
+    
+    1-Component:
+      • Correct:          {cm[0,0]} / {cm[0].sum()}
+      • Accuracy:         {acc_1comp:.1f}%
+    
+    2-Component:
+      • Correct:          {cm[1,1]} / {cm[1].sum()}
+      • Accuracy:         {acc_2comp:.1f}%
+    
+    Mean P(2-comp) for 1-comp data: {probs_2comp[mask_1].mean():.3f}
+    Mean P(2-comp) for 2-comp data: {probs_2comp[mask_2].mean():.3f}
+    """
+    
+    ax6.text(0.1, 0.9, summary_text, transform=ax6.transAxes, fontsize=11,
+             verticalalignment='top', fontfamily='monospace',
+             bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+    
+    plt.tight_layout()
+    save_path = output_dir / 'validation_classifier.png'
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {save_path}")
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -1259,11 +1625,32 @@ def main():
                                        base_noise_level=val_cfg.base_noise_level)
             plot_2comp_recovery(posterior_2, simulator_2, val_cfg, plot_dir)
     
-    # PART 3
+    # PART 3: Model Selection
     if args.part is None or args.part == 3:
-        print(f"\nLoading decision layer...")
+        # Try new classifier first, fall back to decision layer
+        classifier_path = models_dir / "classifier.pkl"
         decision_path = models_dir / "decision_layer.pkl"
-        if decision_path.exists():
+        
+        if classifier_path.exists():
+            print(f"\nLoading classifier...")
+            from src.classifier import ClassifierTrainer
+            freq, _ = load_frequencies(val_cfg.freq_file)
+            
+            classifier = ClassifierTrainer(
+                n_freq=len(freq),
+                n_classes=2,
+                device=val_cfg.device
+            )
+            classifier.load(str(classifier_path))
+            
+            results_3 = run_classifier_tests(classifier, val_cfg)
+            all_results.extend(results_3)
+            
+            if args.plot:
+                print("\nGenerating classifier validation plots...")
+                plot_classifier(classifier, val_cfg, plot_dir)
+        elif decision_path.exists():
+            print(f"\nLoading decision layer (legacy)...")
             freq, _ = load_frequencies(val_cfg.freq_file)
             decision_trainer = QualityPredictionTrainer(n_freq=len(freq), device=val_cfg.device)
             decision_trainer.load(str(decision_path))
@@ -1275,7 +1662,7 @@ def main():
                 print("\nGenerating decision layer validation plots...")
                 plot_decision_layer(decision_trainer, val_cfg, plot_dir)
         else:
-            print(f"  Decision layer not found at {decision_path}, skipping Part 3")
+            print(f"  No classifier or decision layer found, skipping Part 3")
     
     # Final Summary
     print_header("FINAL SUMMARY")
@@ -1300,3 +1687,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+    

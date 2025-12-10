@@ -67,10 +67,10 @@ class RMInference:
     RM inference with model selection.
     
     Loads trained posterior models and performs inference on observed data,
-    selecting the best number of components via log evidence.
+    selecting the best number of components via classifier or log evidence.
     """
     
-    def __init__(self, model_dir="models", device="cuda", use_decision_layer=True):
+    def __init__(self, model_dir="models", device="cuda", use_classifier=True):
         """
         Initialize the inference engine.
         
@@ -80,18 +80,18 @@ class RMInference:
             Directory containing trained models
         device : str
             Device to use ('cuda' or 'cpu')
-        use_decision_layer : bool
-            Whether to use decision layer for model selection
+        use_classifier : bool
+            Whether to use classifier for model selection
         """
         self.model_dir = model_dir
         self.device = device
         self.posteriors = {}
-        self.use_decision_layer = use_decision_layer
-        self.decision_layer = None
+        self.use_classifier = use_classifier
+        self.classifier = None
         
     def load_models(self, max_components=5):
         """
-        Load trained posterior models and decision layer.
+        Load trained posterior models and classifier.
         
         Parameters
         ----------
@@ -115,22 +115,29 @@ class RMInference:
             else:
                 print(f"  Warning: Worker model for {n} component(s) not found at {model_path}")
         
-        # Load decision layer if enabled
-        if self.use_decision_layer:
-            decision_path = os.path.join(self.model_dir, "decision_layer.pkl")
-            if os.path.exists(decision_path):
-                from .decision import QualityPredictionTrainer
-                checkpoint = torch.load(decision_path, map_location=self.device)
-                self.decision_layer = QualityPredictionTrainer(
-                    n_freq=checkpoint['n_freq'],
+        # Load classifier if enabled
+        if self.use_classifier:
+            classifier_path = os.path.join(self.model_dir, "classifier.pkl")
+            if os.path.exists(classifier_path):
+                from .classifier import ClassifierTrainer
+                # Get n_freq from first posterior
+                n_freq = None
+                for n, posterior in self.posteriors.items():
+                    # Try to infer n_freq from posterior data
+                    break
+                
+                # Load classifier
+                self.classifier = ClassifierTrainer(
+                    n_freq=1,  # Will be overwritten by load
+                    n_classes=max_components,
                     device=self.device
                 )
-                self.decision_layer.load(decision_path)
-                print(f"  Loaded quality prediction decision layer from {decision_path}")
+                self.classifier.load(classifier_path)
+                print(f"  Loaded model selection classifier from {classifier_path}")
             else:
-                print(f"  Warning: Decision layer not found at {decision_path}")
+                print(f"  Warning: Classifier not found at {classifier_path}")
                 print(f"  Falling back to log evidence for model selection")
-                self.use_decision_layer = False
+                self.use_classifier = False
         
         print(f"Loaded {len(self.posteriors)} worker models\n")
     
@@ -160,48 +167,38 @@ class RMInference:
         else:
             qu_obs_t = qu_obs
         
-        # Use decision layer if available
-        if self.use_decision_layer and self.decision_layer is not None:
+        # Use classifier if available
+        if self.use_classifier and self.classifier is not None:
             print("\n" + "="*60)
-            print("Using Quality Prediction Decision Layer")
+            print("Using Model Selection Classifier")
             print("="*60)
 
-            # Prepare input for decision layer: [Q, U, weights]
+            # Prepare input for classifier: [Q, U, weights]
             if weights is None:
                 n_freq = len(qu_obs) // 2
                 weights = np.ones(n_freq)
 
             # Convert qu_obs to numpy if needed
             qu_obs_np = qu_obs if isinstance(qu_obs, np.ndarray) else qu_obs.cpu().numpy()
-            decision_input = np.concatenate([qu_obs_np, weights])
-            decision_input_t = torch.tensor(decision_input, dtype=torch.float32, device=self.device)
+            classifier_input = np.concatenate([qu_obs_np, weights])
+            classifier_input_t = torch.tensor(classifier_input, dtype=torch.float32, device=self.device)
 
-            # Get quality predictions and model selection
-            best_n, info = self.decision_layer.select_model(decision_input_t, strategy='ensemble')
+            # Get prediction from classifier
+            best_n, prob_dict = self.classifier.predict(classifier_input_t)
 
             # Display predictions
-            print(f"\nPredicted Quality Metrics:")
-            print(f"  Model 1 (1-component):")
-            print(f"    Log Evidence: {info['log_evidence'][0]:.2f}")
-            print(f"    AIC: {info['aic'][0]:.2f}")
-            print(f"    BIC: {info['bic'][0]:.2f}")
-            print(f"  Model 2 (2-component):")
-            print(f"    Log Evidence: {info['log_evidence'][1]:.2f}")
-            print(f"    AIC: {info['aic'][1]:.2f}")
-            print(f"    BIC: {info['bic'][1]:.2f}")
-
-            print(f"\nModel Selection:")
-            print(f"  By Log Evidence: {info['selection_by_log_ev']} component(s)")
-            print(f"  By AIC: {info['selection_by_aic']} component(s)")
-            print(f"  By BIC: {info['selection_by_bic']} component(s)")
-            print(f"  Ensemble (majority vote): {best_n} component(s)")
-
-            confidence = info['confidence']
-            agreement_str = "✓ All agree" if confidence['agreement'] else "✗ Disagreement"
-            print(f"\nConfidence: {agreement_str}")
-            print(f"  Log Evidence diff: {confidence['log_ev_diff']:.2f}")
-            print(f"  AIC diff: {confidence['aic_diff']:.2f}")
-            print(f"  BIC diff: {confidence['bic_diff']:.2f}")
+            print(f"\nClassifier Prediction:")
+            for n_comp, prob in prob_dict.items():
+                print(f"  P({n_comp}-component) = {prob:.3f} ({prob*100:.1f}%)")
+            print(f"\nSelected: {best_n} component(s)")
+            
+            confidence = max(prob_dict.values())
+            if confidence > 0.9:
+                print(f"Confidence: HIGH ({confidence:.1%})")
+            elif confidence > 0.7:
+                print(f"Confidence: MEDIUM ({confidence:.1%})")
+            else:
+                print(f"Confidence: LOW ({confidence:.1%})")
             print("="*60 + "\n")
 
             # Only run inference for selected model
