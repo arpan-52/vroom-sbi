@@ -144,6 +144,19 @@ def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _extract_sbi_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract SBI architecture settings from config."""
+    sbi_cfg = cfg.get("sbi", {}) or {}
+    
+    return {
+        "model": sbi_cfg.get("model", "nsf"),
+        "hidden_features": int(sbi_cfg.get("hidden_features", 128)),
+        "num_transforms": int(sbi_cfg.get("num_transforms", 10)),
+        "num_bins": int(sbi_cfg.get("num_bins", 16)),
+        "embedding_dim": int(sbi_cfg.get("embedding_dim", 64)),
+    }
+
+
 def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bool = True) -> int:
     """
     Scale the number of simulations based on model complexity.
@@ -184,6 +197,7 @@ def train_model(
     device: str = "cpu",
     validation_fraction: float = 0.1,
     output_dir: Path = Path("models"),
+    sbi_cfg: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     """
     Train a single model with n_components, using the provided flat_priors
@@ -191,6 +205,16 @@ def train_model(
 
     Saves the posterior to output_dir/posterior_n{n_components}.pkl and returns metadata dict.
     """
+    # Default SBI config if not provided
+    if sbi_cfg is None:
+        sbi_cfg = {
+            "model": "nsf",
+            "hidden_features": 128,
+            "num_transforms": 10,
+            "num_bins": 16,
+            "embedding_dim": 64,
+        }
+    
     print(f"\n{'='*60}")
     print(f"Training model N={n_components} on device={device}")
     print(f"{'='*60}")
@@ -245,27 +269,28 @@ def train_model(
         x_t = torch.tensor(x, dtype=torch.float32, device=device)
     except Exception:
         theta_t = torch.tensor(theta, dtype=torch.float32, device="cpu")
-        x_t = torch. tensor(x, dtype=torch.float32, device="cpu")
+        x_t = torch.tensor(x, dtype=torch.float32, device="cpu")
         device = "cpu"
         print("Warning: falling back to CPU tensors (device change).")
 
     # Create SNPE inference object with custom density estimator
     # Build custom embedding for spectral data
     input_dim = 2 * simulator.n_freq  # Q and U
-    embedding_net = SpectralEmbedding(input_dim=input_dim, output_dim=64).to(device)
+    embedding_dim = sbi_cfg["embedding_dim"]
+    embedding_net = SpectralEmbedding(input_dim=input_dim, output_dim=embedding_dim).to(device)
 
-    # Build neural posterior with NSF (Neural Spline Flow) and custom embedding
+    # Build neural posterior with settings from config
     density_estimator_builder = posterior_nn(
-        model="nsf",              # Neural Spline Flow (better than MAF)
-        hidden_features=128,      # Larger hidden layers for complex posteriors
-        num_transforms=10,        # More transforms for better expressivity
-        num_bins=16,              # Spline resolution
+        model=sbi_cfg["model"],
+        hidden_features=sbi_cfg["hidden_features"],
+        num_transforms=sbi_cfg["num_transforms"],
+        num_bins=sbi_cfg["num_bins"],
         embedding_net=embedding_net
     )
 
-    print(f"Using Neural Spline Flow with custom spectral embedding:")
-    print(f"  Input dim: {input_dim}, Embedding dim: 64")
-    print(f"  Hidden features: 128, Num transforms: 10")
+    print(f"Using {sbi_cfg['model'].upper()} with custom spectral embedding:")
+    print(f"  Input dim: {input_dim}, Embedding dim: {embedding_dim}")
+    print(f"  Hidden features: {sbi_cfg['hidden_features']}, Num transforms: {sbi_cfg['num_transforms']}")
 
     inference = SNPE(prior=prior, density_estimator=density_estimator_builder, device=device)
 
@@ -287,6 +312,7 @@ def train_model(
     with open(save_path, "wb") as f:
         pickle.dump({
             "posterior": posterior,
+            "prior": prior,  # Save prior for AIC/BIC computation in decision layer
             "n_components": n_components,
             "n_freq": simulator.n_freq,
             "lambda_sq": simulator.lambda_sq,
@@ -296,6 +322,7 @@ def train_model(
                 "n_simulations": n_simulations,
                 "batch_size": batch_size,
                 "device": device,
+                "sbi_cfg": sbi_cfg,
             },
         }, f)
 
@@ -303,6 +330,7 @@ def train_model(
 
     return {
         "posterior": posterior,
+        "prior": prior,
         "n_components": n_components,
         "n_freq": simulator.n_freq,
         "lambda_sq": simulator.lambda_sq,
@@ -381,7 +409,7 @@ def train_decision_layer(
     n_freq = sim_1comp.n_freq
 
     print(f"\nGenerating {n_samples} training samples per model...")
-    print(f"Using PRE-TRAINED posteriors to compute quality metrics (FAST!)")
+    print(f"Using PRE-TRAINED posteriors to compute quality metrics")
 
     # Data containers
     X_all = []  # Spectra + weights
@@ -390,28 +418,63 @@ def train_decision_layer(
     targets_bic = []  # [BIC_1, BIC_2]
     true_n_list = []  # Ground truth N (1 or 2)
 
-    # Helper function to compute AIC/BIC
-    def compute_quality_metrics(posterior, x_obs, n_params, n_data_points=100, n_samples=1000):
-        """Compute log evidence, AIC, and BIC for a posterior."""
+    # Load priors for likelihood computation
+    prior_1 = data_1.get("prior", None)
+    prior_2 = data_2.get("prior", None)
+
+    # Helper function to compute AIC/BIC - FIXED VERSION
+    def compute_quality_metrics(posterior, prior, x_obs, n_params, n_data_points, n_samples=1000):
+        """
+        Compute log evidence, AIC, and BIC for a posterior.
+        
+        FIXED: Uses correct computation:
+        - Find MAP estimate (point with highest posterior density)
+        - Compute log_likelihood = log_posterior - log_prior at MAP
+        - Use this for AIC/BIC
+        
+        Note: The log_likelihood is only defined up to a constant (the evidence),
+        but this constant cancels when comparing models.
+        """
         x_obs_t = torch.tensor(x_obs, dtype=torch.float32, device=device)
+        if x_obs_t.dim() == 1:
+            x_obs_t = x_obs_t.unsqueeze(0)
 
         # Sample from posterior
-        samples = posterior.sample((n_samples,), x=x_obs_t)
+        with torch.no_grad():
+            samples = posterior.sample((n_samples,), x=x_obs_t)
+            
+            # Find MAP estimate (sample with highest log posterior)
+            log_probs = posterior.log_prob(samples, x=x_obs_t)
+            map_idx = torch.argmax(log_probs)
+            theta_map = samples[map_idx]
+            
+            # Log posterior at MAP
+            log_posterior_map = log_probs[map_idx].item()
+            
+            # Log prior at MAP
+            if prior is not None:
+                log_prior_map = prior.log_prob(theta_map.unsqueeze(0)).item()
+            else:
+                # If prior not available, assume uniform (log_prior = constant)
+                log_prior_map = 0.0
+            
+            # Log likelihood at MAP (up to constant)
+            # log P(x|θ) = log P(θ|x) - log P(θ) + log P(x)
+            # The log P(x) term is constant across θ, so for AIC/BIC comparison it cancels
+            log_likelihood_map = log_posterior_map - log_prior_map
+            
+            # Compute log evidence estimate via importance sampling
+            # This is an approximation: E[p(x|θ)] where θ ~ p(θ|x)
+            log_evidence = torch.logsumexp(log_probs, dim=0).item() - np.log(n_samples)
 
-        # Compute log evidence via importance sampling
-        log_probs = posterior.log_prob(samples, x=x_obs_t)
-        log_evidence = torch.logsumexp(log_probs, dim=0).item() - np.log(n_samples)
+        # AIC = 2k - 2 * log(L_max)
+        aic = 2 * n_params - 2 * log_likelihood_map
 
-        # Compute log likelihood (average of log probs)
-        log_likelihood = torch.mean(log_probs).item()
-
-        # AIC = 2k - 2 * log(L)
-        aic = 2 * n_params - 2 * log_likelihood
-
-        # BIC = k * log(n) - 2 * log(L)
-        bic = n_params * np.log(n_data_points) - 2 * log_likelihood
+        # BIC = k * log(n) - 2 * log(L_max)
+        bic = n_params * np.log(n_data_points) - 2 * log_likelihood_map
 
         return log_evidence, aic, bic
+
 
     # Generate samples from both 1-comp and 2-comp
     for class_label, n_comp in enumerate([1, 2]):
@@ -430,12 +493,13 @@ def train_decision_layer(
             # Input: [Q, U, weights]
             x_input = np.concatenate([qu_obs, aug_weights])
 
-            # Use PRE-TRAINED models to compute quality metrics (FAST!)
+            # Use PRE-TRAINED models to compute quality metrics
             n_params_1 = 3  # RM, amp, chi0
             n_params_2 = 6  # 2 * (RM, amp, chi0)
+            n_data_points = 2 * n_freq  # Q and U observations
 
-            log_ev_1, aic_1, bic_1 = compute_quality_metrics(posterior_1, qu_obs, n_params_1)
-            log_ev_2, aic_2, bic_2 = compute_quality_metrics(posterior_2, qu_obs, n_params_2)
+            log_ev_1, aic_1, bic_1 = compute_quality_metrics(posterior_1, prior_1, qu_obs, n_params_1, n_data_points)
+            log_ev_2, aic_2, bic_2 = compute_quality_metrics(posterior_2, prior_2, qu_obs, n_params_2, n_data_points)
 
             # Store
             X_all.append(x_input)
@@ -563,6 +627,7 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     training_cfg = _extract_training_cfg(config)
     flat_priors = _flatten_priors(config)
     base_noise_level = _get_base_noise_level(config)
+    sbi_cfg = _extract_sbi_cfg(config)
 
     results: Dict[int, Dict[str, Any]] = {}
 
@@ -573,6 +638,8 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     print("TRAINING TWO-LAYER SYSTEM")
     print(f"{'='*60}")
     print("Phase 1: Training Worker Models (1-comp and 2-comp)")
+    print(f"SBI Architecture: {sbi_cfg['model'].upper()}, hidden={sbi_cfg['hidden_features']}, "
+          f"transforms={sbi_cfg['num_transforms']}, embedding_dim={sbi_cfg['embedding_dim']}")
     
     for n in range(1, max_comp + 1):
         # Scale simulations for complex models
@@ -594,6 +661,7 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
             device=training_cfg["device"],
             validation_fraction=training_cfg["validation_fraction"],
             output_dir=training_cfg["output_dir"],
+            sbi_cfg=sbi_cfg,
         )
         results[n] = data
 
