@@ -357,7 +357,7 @@ def plot_2comp_recovery(
     colors = ['green' if op else 'red' for op in ordering_preserved]
     
     for i, (r1, r2, c) in enumerate(zip(rec_rm1s, rec_rm2s, colors)):
-        ax2.plot([i, i], [r1, r2], c + '-', lw=2)
+        ax2.plot([i, i], [r1, r2], color=c, linestyle='-', lw=2)
         ax2.plot(i, r1, 'o', color=c, markersize=8)
         ax2.plot(i, r2, 's', color=c, markersize=8)
     
