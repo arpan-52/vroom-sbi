@@ -46,8 +46,9 @@ def main():
     print(f"  Simulations per model: {n_sim}")
     print(f"  Save directory: {save_dir}")
     print(f"  Classifier only: {classifier_only}")
-    print(f"\nClassifier settings:")
-    print(f"  Hidden dims: {classifier_cfg.get('hidden_dims', [256, 128, 64])}")
+    print(f"\nClassifier settings (1D CNN):")
+    print(f"  Conv channels: {classifier_cfg.get('conv_channels', [32, 64, 128])}")
+    print(f"  Kernel sizes: {classifier_cfg.get('kernel_sizes', [7, 5, 3])}")
     print(f"  Epochs: {classifier_cfg.get('n_epochs', 50)}")
     print(f"  Batch size: {classifier_cfg.get('batch_size', 128)}")
 

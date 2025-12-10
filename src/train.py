@@ -782,8 +782,9 @@ def train_classifier(
     classifier_cfg = ClassifierConfig.from_config(config)
     device = config.get("training", {}).get("device", "cpu")
     
-    print(f"\nClassifier configuration:")
-    print(f"  Hidden dims: {classifier_cfg.hidden_dims}")
+    print(f"\nClassifier configuration (1D CNN):")
+    print(f"  Conv channels: {classifier_cfg.conv_channels}")
+    print(f"  Kernel sizes: {classifier_cfg.kernel_sizes}")
     print(f"  Dropout: {classifier_cfg.dropout}")
     print(f"  Epochs: {classifier_cfg.n_epochs}")
     print(f"  Batch size: {classifier_cfg.batch_size}")

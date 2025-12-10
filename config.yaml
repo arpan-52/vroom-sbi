@@ -53,16 +53,20 @@ weight_augmentation:
   large_block_prob: 0.1       # Probability of large RFI blocks
   noise_variation: true       # Add variation to weights
 
-# Model Selection Classifier
-# A direct classifier that learns to predict N from spectra
+# Model Selection Classifier (1D CNN)
+# A convolutional classifier that learns to predict N from spectra
 # Uses the same simulations as posterior training (no extra cost!)
 classifier:
-  hidden_dims: [256, 128, 64] # Network architecture
-  dropout: 0.1                # Dropout for regularization
-  n_epochs: 50                # Training epochs
-  batch_size: 128             # Batch size (can be large, fast training)
-  learning_rate: 0.001        # Adam learning rate
-  validation_fraction: 0.2    # Fraction for validation
+  # CNN Architecture
+  conv_channels: [32, 64, 128]  # Channels in each conv layer
+  kernel_sizes: [7, 5, 3]       # Kernel size for each conv layer
+  dropout: 0.1                  # Dropout for regularization
+  
+  # Training
+  n_epochs: 50                  # Training epochs
+  batch_size: 128               # Batch size (can be large, fast training)
+  learning_rate: 0.001          # Adam learning rate
+  validation_fraction: 0.2      # Fraction for validation
   use_posterior_simulations: true  # Reuse simulations from posterior training
 
 # SBI Architecture (Neural Posterior Estimation)
