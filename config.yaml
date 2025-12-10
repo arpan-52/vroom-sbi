@@ -43,7 +43,7 @@ model_selection:
   max_components: 2  # Two-layer system: 1-comp and 2-comp only
   use_log_evidence: true
   use_decision_layer: true  # Enable decision layer for model selection
-
+  decision_layer_only: true # If true, skip worker model training (posteriors must exist)
 # Weight augmentation settings
 weight_augmentation:
   enable: true
