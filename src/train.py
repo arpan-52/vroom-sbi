@@ -390,6 +390,7 @@ def train_decision_layer(
     val_fraction = decision_cfg.get("validation_fraction", 0.2)
     device = config.get("training", {}).get("device", "cpu")
     hidden_dims = decision_cfg.get("hidden_dims", [256, 128, 64])
+    n_posterior_samples = decision_cfg.get("n_posterior_samples", 1000)  # NEW: configurable
 
     # Load PRE-TRAINED posteriors
     print("\nLoading pre-trained worker models...")
@@ -410,6 +411,7 @@ def train_decision_layer(
 
     print(f"\nGenerating {n_samples} training samples per model...")
     print(f"Using PRE-TRAINED posteriors to compute quality metrics")
+    print(f"Posterior samples for metric computation: {n_posterior_samples}")
 
     # Data containers
     X_all = []  # Spectra + weights
@@ -423,7 +425,7 @@ def train_decision_layer(
     prior_2 = data_2.get("prior", None)
 
     # Helper function to compute AIC/BIC - FIXED VERSION
-    def compute_quality_metrics(posterior, prior, x_obs, n_params, n_data_points, n_samples=1000):
+    def compute_quality_metrics(posterior, prior, x_obs, n_params, n_data_points, n_posterior_samples=1000):
         """
         Compute log evidence, AIC, and BIC for a posterior.
         
@@ -441,7 +443,7 @@ def train_decision_layer(
 
         # Sample from posterior
         with torch.no_grad():
-            samples = posterior.sample((n_samples,), x=x_obs_t)
+            samples = posterior.sample((n_posterior_samples,), x=x_obs_t)
             
             # Find MAP estimate (sample with highest log posterior)
             log_probs = posterior.log_prob(samples, x=x_obs_t)
@@ -465,7 +467,7 @@ def train_decision_layer(
             
             # Compute log evidence estimate via importance sampling
             # This is an approximation: E[p(x|θ)] where θ ~ p(θ|x)
-            log_evidence = torch.logsumexp(log_probs, dim=0).item() - np.log(n_samples)
+            log_evidence = torch.logsumexp(log_probs, dim=0).item() - np.log(n_posterior_samples)
 
         # AIC = 2k - 2 * log(L_max)
         aic = 2 * n_params - 2 * log_likelihood_map
@@ -498,8 +500,8 @@ def train_decision_layer(
             n_params_2 = 6  # 2 * (RM, amp, chi0)
             n_data_points = 2 * n_freq  # Q and U observations
 
-            log_ev_1, aic_1, bic_1 = compute_quality_metrics(posterior_1, prior_1, qu_obs, n_params_1, n_data_points)
-            log_ev_2, aic_2, bic_2 = compute_quality_metrics(posterior_2, prior_2, qu_obs, n_params_2, n_data_points)
+            log_ev_1, aic_1, bic_1 = compute_quality_metrics(posterior_1, prior_1, qu_obs, n_params_1, n_data_points, n_posterior_samples)
+            log_ev_2, aic_2, bic_2 = compute_quality_metrics(posterior_2, prior_2, qu_obs, n_params_2, n_data_points, n_posterior_samples)
 
             # Store
             X_all.append(x_input)
@@ -611,7 +613,7 @@ def train_decision_layer(
     }
 
 
-def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
+def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) -> Dict[int, Dict[str, Any]]:
     """
     Train models for N = 1 ..  max_components using the exact config structure
     the repository is using.  Returns dict mapping n_components -> saved data dict.
@@ -619,6 +621,14 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     Now with two-layer system:
     - Train worker models (1-comp and 2-comp)
     - Train decision layer classifier
+    
+    Parameters
+    ----------
+    config : Dict[str, Any]
+        Configuration dictionary loaded from YAML
+    decision_layer_only : bool
+        If True, skip training worker models and only train the decision layer.
+        Requires posterior_n1.pkl and posterior_n2.pkl to already exist.
     """
     if not isinstance(config, dict):
         raise ValueError("config must be a dict loaded from YAML.")
@@ -637,33 +647,48 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     print(f"\n{'='*60}")
     print("TRAINING TWO-LAYER SYSTEM")
     print(f"{'='*60}")
-    print("Phase 1: Training Worker Models (1-comp and 2-comp)")
-    print(f"SBI Architecture: {sbi_cfg['model'].upper()}, hidden={sbi_cfg['hidden_features']}, "
-          f"transforms={sbi_cfg['num_transforms']}, embedding_dim={sbi_cfg['embedding_dim']}")
     
-    for n in range(1, max_comp + 1):
-        # Scale simulations for complex models
-        n_sims = get_scaled_simulations(
-            n_components=n,
-            base_simulations=training_cfg["n_simulations"],
-            scaling=training_cfg["simulation_scaling"],
-        )
+    if decision_layer_only:
+        print("Mode: DECISION LAYER ONLY (skipping worker model training)")
+        print(f"Using existing posteriors from: {training_cfg['output_dir']}")
         
-        print(f"\n>>> Model N={n}: Using {n_sims:,} simulations (base: {training_cfg['n_simulations']:,})")
+        # Verify that posteriors exist
+        for n in range(1, max_comp + 1):
+            posterior_path = training_cfg["output_dir"] / f"posterior_n{n}.pkl"
+            if not posterior_path.exists():
+                raise FileNotFoundError(
+                    f"Posterior file not found: {posterior_path}\n"
+                    f"Cannot use decision_layer_only=True without pre-trained posteriors."
+                )
+            print(f"  ✓ Found posterior_n{n}.pkl")
+    else:
+        print("Phase 1: Training Worker Models (1-comp and 2-comp)")
+        print(f"SBI Architecture: {sbi_cfg['model'].upper()}, hidden={sbi_cfg['hidden_features']}, "
+              f"transforms={sbi_cfg['num_transforms']}, embedding_dim={sbi_cfg['embedding_dim']}")
         
-        data = train_model(
-            n_components=n,
-            freq_file=freq_file,
-            flat_priors=flat_priors,
-            base_noise_level=base_noise_level,
-            n_simulations=n_sims,
-            batch_size=training_cfg["batch_size"],
-            device=training_cfg["device"],
-            validation_fraction=training_cfg["validation_fraction"],
-            output_dir=training_cfg["output_dir"],
-            sbi_cfg=sbi_cfg,
-        )
-        results[n] = data
+        for n in range(1, max_comp + 1):
+            # Scale simulations for complex models
+            n_sims = get_scaled_simulations(
+                n_components=n,
+                base_simulations=training_cfg["n_simulations"],
+                scaling=training_cfg["simulation_scaling"],
+            )
+            
+            print(f"\n>>> Model N={n}: Using {n_sims:,} simulations (base: {training_cfg['n_simulations']:,})")
+            
+            data = train_model(
+                n_components=n,
+                freq_file=freq_file,
+                flat_priors=flat_priors,
+                base_noise_level=base_noise_level,
+                n_simulations=n_sims,
+                batch_size=training_cfg["batch_size"],
+                device=training_cfg["device"],
+                validation_fraction=training_cfg["validation_fraction"],
+                output_dir=training_cfg["output_dir"],
+                sbi_cfg=sbi_cfg,
+            )
+            results[n] = data
 
     print("\n" + "="*60)
     print("Phase 2: Training Decision Layer")
@@ -684,7 +709,8 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     print("\n" + "="*60)
     print("TRAINING COMPLETE")
     print(f"{'='*60}")
-    print(f"Worker models trained: N = {[n for n in results.keys() if isinstance(n, int)]}")
+    if not decision_layer_only:
+        print(f"Worker models trained: N = {[n for n in results.keys() if isinstance(n, int)]}")
     if "decision_layer" in results:
         dl_result = results['decision_layer']
         print(f"Quality Prediction Decision Layer:")
