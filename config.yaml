@@ -5,7 +5,7 @@ freq_file: "freq.txt"
 
 # Faraday depth range (rad/m^2)
 phi:
-  min: -1000. 0
+  min: -1000.0
   max: 1000.0
   n_samples: 200
 
@@ -31,7 +31,7 @@ noise:
 # Training settings
 training:
   n_simulations: 10000        # Base simulations (for N=1)
-  simulation_scaling: true    # Scale up for complex models (N=2,3,4,5)
+  simulation_scaling: true    # Scale up for complex models (N=2 gets 2x)
   batch_size: 50
   n_rounds: 1
   device: "cuda"  # or "cpu"
@@ -40,30 +40,30 @@ training:
   
 # Model selection
 model_selection:
-  max_components: 2  # Two-layer system: 1-comp and 2-comp only
-  use_log_evidence: true
-  use_decision_layer: true  # Enable decision layer for model selection
-  decision_layer_only: true # If true, skip worker model training (posteriors must exist)
+  max_components: 2           # Two-layer system: 1-comp and 2-comp only
+  use_classifier: true        # Use the new direct classifier
+  classifier_only: false      # If true, skip worker model training (simulations must exist)
+
 # Weight augmentation settings
+# These are applied during simulation for both posterior and classifier training
 weight_augmentation:
   enable: true
-  scattered_prob: 0.3      # Probability of scattered missing channels
-  gap_prob: 0.3            # Probability of contiguous gaps
-  large_block_prob: 0.1    # Probability of large RFI blocks
-  noise_variation: true    # Add variation to weights
+  scattered_prob: 0.3         # Probability of scattered missing channels
+  gap_prob: 0.3               # Probability of contiguous gaps  
+  large_block_prob: 0.1       # Probability of large RFI blocks
+  noise_variation: true       # Add variation to weights
 
-# Quality Prediction Decision Layer
-# NOTE: This is expensive during training because we fit both SBI models
-# to each simulated spectrum to compute true AIC/BIC/log_evidence
-decision_layer:
-  n_training_samples: 10000  # Reduced (each sample requires fitting 2 SBI models!)
-  n_posterior_samples: 1000 # Samples from posterior for computing log_evidence/AIC/BIC
-  n_epochs: 50              # More epochs for regression task
-  batch_size: 32            # Smaller batch size
-  learning_rate: 0.0005     # Lower learning rate for stability
-  validation_fraction: 0.2
-  hidden_dims: [256, 128, 64]  # Network architecture
-  selection_strategy: 'ensemble'  # Options: 'log_evidence', 'aic', 'bic', 'ensemble'
+# Model Selection Classifier
+# A direct classifier that learns to predict N from spectra
+# Uses the same simulations as posterior training (no extra cost!)
+classifier:
+  hidden_dims: [256, 128, 64] # Network architecture
+  dropout: 0.1                # Dropout for regularization
+  n_epochs: 50                # Training epochs
+  batch_size: 128             # Batch size (can be large, fast training)
+  learning_rate: 0.001        # Adam learning rate
+  validation_fraction: 0.2    # Fraction for validation
+  use_posterior_simulations: true  # Reuse simulations from posterior training
 
 # SBI Architecture (Neural Posterior Estimation)
 sbi:

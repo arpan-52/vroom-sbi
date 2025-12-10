@@ -198,12 +198,16 @@ def train_model(
     validation_fraction: float = 0.1,
     output_dir: Path = Path("models"),
     sbi_cfg: Dict[str, Any] = None,
+    save_simulations: bool = True,
 ) -> Dict[str, Any]:
     """
     Train a single model with n_components, using the provided flat_priors
     (keys: rm_min, rm_max, amp_min, amp_max). 
 
     Saves the posterior to output_dir/posterior_n{n_components}.pkl and returns metadata dict.
+    
+    If save_simulations=True, also saves the simulated spectra and weights
+    to output_dir/simulations_n{n_components}.pkl for classifier training.
     """
     # Default SBI config if not provided
     if sbi_cfg is None:
@@ -238,6 +242,8 @@ def train_model(
     from .augmentation import augment_weights_combined, augment_base_noise_level
 
     xs = []
+    all_weights = []  # Save weights for classifier training
+    
     for i in tqdm(range(0, n_simulations, batch_size), desc="Simulating"):
         batch_theta = theta[i:i + batch_size]
         batch_size_actual = len(batch_theta)
@@ -257,11 +263,26 @@ def train_model(
             x_sample = simulator(batch_theta[j:j+1], weights=augmented_weights[j])
             batch_xs.append(x_sample)
         xs.append(np.vstack(batch_xs))
+        all_weights.append(augmented_weights)
 
     # Restore original base noise level
     simulator.base_noise_level = base_noise_level
     
     x = np.vstack(xs)
+    all_weights = np.vstack(all_weights)
+    
+    # Save simulations for classifier training
+    if save_simulations:
+        sim_save_path = output_dir / f"simulations_n{n_components}.pkl"
+        with open(sim_save_path, 'wb') as f:
+            pickle.dump({
+                'spectra': x,  # (n_samples, 2 * n_freq) - Q and U
+                'weights': all_weights,  # (n_samples, n_freq)
+                'theta': theta,  # (n_samples, n_params) - parameters
+                'n_components': n_components,
+                'n_freq': simulator.n_freq,
+            }, f)
+        print(f"Saved simulations for classifier -> {sim_save_path}")
 
     # Convert to torch and move to device
     try:
@@ -620,15 +641,18 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
     
     Now with two-layer system:
     - Train worker models (1-comp and 2-comp)
-    - Train decision layer classifier
+    - Train classifier for model selection
     
     Parameters
     ----------
     config : Dict[str, Any]
         Configuration dictionary loaded from YAML
     decision_layer_only : bool
-        If True, skip training worker models and only train the decision layer.
-        Requires posterior_n1.pkl and posterior_n2.pkl to already exist.
+        If True, skip training worker models and only train the classifier.
+        Requires posterior_n1.pkl, posterior_n2.pkl, and simulation files to exist.
+    classifier_only : bool
+        If True, skip training worker models and only train the classifier.
+        Alias for decision_layer_only for backward compatibility.
     """
     if not isinstance(config, dict):
         raise ValueError("config must be a dict loaded from YAML.")
@@ -649,18 +673,19 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
     print(f"{'='*60}")
     
     if decision_layer_only:
-        print("Mode: DECISION LAYER ONLY (skipping worker model training)")
-        print(f"Using existing posteriors from: {training_cfg['output_dir']}")
+        print("Mode: CLASSIFIER ONLY (skipping worker model training)")
+        print(f"Using existing simulations from: {training_cfg['output_dir']}")
         
-        # Verify that posteriors exist
+        # Verify that simulations exist
         for n in range(1, max_comp + 1):
-            posterior_path = training_cfg["output_dir"] / f"posterior_n{n}.pkl"
-            if not posterior_path.exists():
+            sim_path = training_cfg["output_dir"] / f"simulations_n{n}.pkl"
+            if not sim_path.exists():
                 raise FileNotFoundError(
-                    f"Posterior file not found: {posterior_path}\n"
-                    f"Cannot use decision_layer_only=True without pre-trained posteriors."
+                    f"Simulations file not found: {sim_path}\n"
+                    f"Cannot use classifier_only mode without saved simulations.\n"
+                    f"Run full training first to generate simulations."
                 )
-            print(f"  ✓ Found posterior_n{n}.pkl")
+            print(f"  ✓ Found simulations_n{n}.pkl")
     else:
         print("Phase 1: Training Worker Models (1-comp and 2-comp)")
         print(f"SBI Architecture: {sbi_cfg['model'].upper()}, hidden={sbi_cfg['hidden_features']}, "
@@ -687,36 +712,125 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
                 validation_fraction=training_cfg["validation_fraction"],
                 output_dir=training_cfg["output_dir"],
                 sbi_cfg=sbi_cfg,
+                save_simulations=True,  # Save for classifier training
             )
             results[n] = data
 
     print("\n" + "="*60)
-    print("Phase 2: Training Decision Layer")
+    print("Phase 2: Training Model Selection Classifier")
     print("="*60)
     
-    # Train decision layer if enabled
+    # Train classifier if enabled
     model_selection = config.get("model_selection", {})
-    if model_selection.get("use_decision_layer", True):
-        decision_result = train_decision_layer(
-            freq_file=freq_file,
-            flat_priors=flat_priors,
-            base_noise_level=base_noise_level,
+    if model_selection.get("use_classifier", True):
+        classifier_result = train_classifier(
             config=config,
             output_dir=training_cfg["output_dir"],
+            max_components=max_comp,
         )
-        results["decision_layer"] = decision_result
+        results["classifier"] = classifier_result
     
     print("\n" + "="*60)
     print("TRAINING COMPLETE")
     print(f"{'='*60}")
     if not decision_layer_only:
         print(f"Worker models trained: N = {[n for n in results.keys() if isinstance(n, int)]}")
-    if "decision_layer" in results:
-        dl_result = results['decision_layer']
-        print(f"Quality Prediction Decision Layer:")
-        print(f"  Ensemble accuracy: {dl_result['final_val_accuracy_ensemble']:.2f}%")
-        print(f"  Log evidence accuracy: {dl_result['final_val_accuracy_log_ev']:.2f}%")
-        print(f"  AIC accuracy: {dl_result['final_val_accuracy_aic']:.2f}%")
-        print(f"  BIC accuracy: {dl_result['final_val_accuracy_bic']:.2f}%")
+    if "classifier" in results:
+        cl_result = results['classifier']
+        print(f"Model Selection Classifier:")
+        print(f"  Validation accuracy: {cl_result['final_val_accuracy']:.2f}%")
+        for n in range(1, max_comp + 1):
+            acc_key = f'accuracy_{n}comp'
+            if acc_key in cl_result:
+                print(f"  {n}-comp accuracy: {cl_result[acc_key]:.2f}%")
 
     return results
+
+
+def train_classifier(
+    config: Dict[str, Any],
+    output_dir: Path = Path("models"),
+    max_components: int = 2,
+) -> Dict[str, Any]:
+    """
+    Train the model selection classifier using saved simulations.
+    
+    This classifier learns to predict the number of RM components
+    directly from the observed spectrum, without computing AIC/BIC.
+    
+    Parameters
+    ----------
+    config : Dict[str, Any]
+        Full configuration dictionary
+    output_dir : Path
+        Directory containing saved simulations
+    max_components : int
+        Maximum number of components
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Training results and metadata
+    """
+    from .classifier import (
+        ClassifierConfig, 
+        ClassifierTrainer, 
+        prepare_classifier_data
+    )
+    
+    # Get classifier config
+    classifier_cfg = ClassifierConfig.from_config(config)
+    device = config.get("training", {}).get("device", "cpu")
+    
+    print(f"\nClassifier configuration:")
+    print(f"  Hidden dims: {classifier_cfg.hidden_dims}")
+    print(f"  Dropout: {classifier_cfg.dropout}")
+    print(f"  Epochs: {classifier_cfg.n_epochs}")
+    print(f"  Batch size: {classifier_cfg.batch_size}")
+    print(f"  Learning rate: {classifier_cfg.learning_rate}")
+    print(f"  Device: {device}")
+    
+    # Load simulations
+    print(f"\nLoading simulations from {output_dir}...")
+    train_loader, val_loader, n_freq = prepare_classifier_data(
+        simulations_dir=output_dir,
+        max_components=max_components,
+        validation_fraction=classifier_cfg.validation_fraction,
+        batch_size=classifier_cfg.batch_size,
+    )
+    
+    # Create trainer
+    trainer = ClassifierTrainer(
+        n_freq=n_freq,
+        n_classes=max_components,
+        config=classifier_cfg,
+        device=device,
+    )
+    
+    # Train
+    print(f"\nTraining classifier...")
+    history = trainer.train(train_loader, val_loader, verbose=True)
+    
+    # Evaluate
+    eval_results = trainer.evaluate(val_loader)
+    
+    # Save
+    save_path = output_dir / "classifier.pkl"
+    trainer.save(str(save_path))
+    print(f"\nSaved classifier -> {save_path}")
+    
+    # Build results dict
+    result = {
+        "model_path": str(save_path),
+        "n_freq": n_freq,
+        "n_classes": max_components,
+        "history": history,
+        "final_val_accuracy": eval_results['accuracy'],
+    }
+    
+    # Add per-class accuracies
+    for key, value in eval_results.items():
+        if key != 'accuracy':
+            result[key] = value
+    
+    return result
