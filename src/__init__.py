@@ -2,12 +2,17 @@
 VROOM-SBI: Simulation-Based Inference for RM Synthesis
 """
 
-__version__ = "0.1.0"
+from .simulator import RMSimulator, build_prior, sample_prior, sort_posterior_samples
+from .physics import load_frequencies, freq_to_lambda_sq
+from .train import train_model, train_all_models
 
-from . import physics
-from . import simulator
-from . import train
-from . import inference
-from . import plots
-
-__all__ = ['physics', 'simulator', 'train', 'inference', 'plots']
+__all__ = [
+    'RMSimulator',
+    'build_prior',
+    'sample_prior',
+    'sort_posterior_samples',
+    'load_frequencies',
+    'freq_to_lambda_sq',
+    'train_model',
+    'train_all_models',
+]

@@ -56,7 +56,7 @@ weight_augmentation:
 # NOTE: This is expensive during training because we fit both SBI models
 # to each simulated spectrum to compute true AIC/BIC/log_evidence
 decision_layer:
-  n_training_samples: 1000  # Reduced (each sample requires fitting 2 SBI models!)
+  n_training_samples: 10000  # Reduced (each sample requires fitting 2 SBI models!)
   n_epochs: 50              # More epochs for regression task
   batch_size: 32            # Smaller batch size
   learning_rate: 0.0005     # Lower learning rate for stability
