@@ -30,8 +30,9 @@ from dataclasses import dataclass
 
 @dataclass
 class ClassifierConfig:
-    """Configuration for the model selection classifier."""
-    hidden_dims: List[int]
+    """Configuration for the model selection classifier (1D CNN)."""
+    conv_channels: List[int]
+    kernel_sizes: List[int]
     dropout: float
     n_epochs: int
     batch_size: int
@@ -44,7 +45,8 @@ class ClassifierConfig:
         """Create from config dictionary."""
         cfg = config.get('classifier', {})
         return cls(
-            hidden_dims=cfg.get('hidden_dims', [256, 128, 64]),
+            conv_channels=cfg.get('conv_channels', [32, 64, 128]),
+            kernel_sizes=cfg.get('kernel_sizes', [7, 5, 3]),
             dropout=cfg.get('dropout', 0.1),
             n_epochs=cfg.get('n_epochs', 50),
             batch_size=cfg.get('batch_size', 128),
@@ -56,12 +58,13 @@ class ClassifierConfig:
 
 class SpectralClassifier(nn.Module):
     """
-    Neural network classifier for model selection.
+    1D CNN classifier for model selection.
     
-    Architecture:
-    - Input: [Q, U, weights] concatenated (3 * n_freq dimensions)
-    - Hidden layers with LayerNorm, ReLU, Dropout
-    - Output: log probabilities for each model class
+    Architecture designed for spectral data:
+    - Input: [Q, U, weights] as 3 channels × n_freq
+    - Convolutional layers to detect local patterns (beating, oscillations)
+    - Global pooling for translation invariance
+    - Fully connected output layer
     
     Parameters
     ----------
@@ -69,8 +72,10 @@ class SpectralClassifier(nn.Module):
         Number of frequency channels
     n_classes : int
         Number of model classes (e.g., 2 for 1-comp vs 2-comp)
-    hidden_dims : List[int]
-        Dimensions of hidden layers
+    conv_channels : List[int]
+        Number of channels in each conv layer
+    kernel_sizes : List[int]
+        Kernel size for each conv layer
     dropout : float
         Dropout probability
     """
@@ -79,36 +84,48 @@ class SpectralClassifier(nn.Module):
         self,
         n_freq: int,
         n_classes: int = 2,
-        hidden_dims: List[int] = [256, 128, 64],
+        conv_channels: List[int] = [32, 64, 128],
+        kernel_sizes: List[int] = [7, 5, 3],
         dropout: float = 0.1
     ):
         super().__init__()
         
         self.n_freq = n_freq
         self.n_classes = n_classes
-        self.hidden_dims = hidden_dims
+        self.conv_channels = conv_channels
+        self.kernel_sizes = kernel_sizes
         self.dropout_rate = dropout
         
-        # Input: Q (n_freq) + U (n_freq) + weights (n_freq) = 3 * n_freq
-        input_dim = 3 * n_freq
+        # Input: 3 channels (Q, U, weights)
+        in_channels = 3
         
-        # Build layers
-        layers = []
-        prev_dim = input_dim
-        
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(prev_dim, hidden_dim),
-                nn.LayerNorm(hidden_dim),
+        # Build convolutional layers
+        conv_layers = []
+        for i, (out_channels, kernel_size) in enumerate(zip(conv_channels, kernel_sizes)):
+            # Conv layer with padding to preserve length initially
+            padding = kernel_size // 2
+            conv_layers.extend([
+                nn.Conv1d(in_channels, out_channels, kernel_size, padding=padding),
+                nn.BatchNorm1d(out_channels),
                 nn.ReLU(),
+                nn.MaxPool1d(2),  # Halve the sequence length
                 nn.Dropout(dropout),
             ])
-            prev_dim = hidden_dim
+            in_channels = out_channels
         
-        # Output layer
-        layers.append(nn.Linear(prev_dim, n_classes))
+        self.conv_net = nn.Sequential(*conv_layers)
         
-        self.network = nn.Sequential(*layers)
+        # Global average pooling + Global max pooling (concatenated)
+        # This gives us 2 * final_channels features
+        self.final_channels = conv_channels[-1]
+        
+        # Fully connected layers after pooling
+        self.fc = nn.Sequential(
+            nn.Linear(self.final_channels * 2, 64),  # *2 for avg+max pooling
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, n_classes),
+        )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -125,7 +142,23 @@ class SpectralClassifier(nn.Module):
         torch.Tensor
             Log probabilities of shape (batch, n_classes)
         """
-        logits = self.network(x)
+        batch_size = x.shape[0]
+        
+        # Reshape from (batch, 3*n_freq) to (batch, 3, n_freq)
+        # Order: Q, U, weights as separate channels
+        x = x.view(batch_size, 3, self.n_freq)
+        
+        # Apply convolutions
+        x = self.conv_net(x)  # (batch, final_channels, reduced_length)
+        
+        # Global pooling: combine avg and max for richer features
+        avg_pool = x.mean(dim=2)  # (batch, final_channels)
+        max_pool = x.max(dim=2)[0]  # (batch, final_channels)
+        x = torch.cat([avg_pool, max_pool], dim=1)  # (batch, 2*final_channels)
+        
+        # Fully connected
+        logits = self.fc(x)
+        
         return F.log_softmax(logits, dim=-1)
     
     def predict(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -242,7 +275,8 @@ class ClassifierTrainer:
         # Default config if not provided
         if config is None:
             config = ClassifierConfig(
-                hidden_dims=[256, 128, 64],
+                conv_channels=[32, 64, 128],
+                kernel_sizes=[7, 5, 3],
                 dropout=0.1,
                 n_epochs=50,
                 batch_size=128,
@@ -252,11 +286,12 @@ class ClassifierTrainer:
             )
         self.config = config
         
-        # Build model
+        # Build model (1D CNN)
         self.model = SpectralClassifier(
             n_freq=n_freq,
             n_classes=n_classes,
-            hidden_dims=config.hidden_dims,
+            conv_channels=config.conv_channels,
+            kernel_sizes=config.kernel_sizes,
             dropout=config.dropout,
         ).to(device)
         
@@ -446,7 +481,8 @@ class ClassifierTrainer:
             'n_classes': self.n_classes,
             'config': self.config,
             'history': self.history,
-            'hidden_dims': self.model.hidden_dims,
+            'conv_channels': self.model.conv_channels,
+            'kernel_sizes': self.model.kernel_sizes,
             'dropout': self.model.dropout_rate,
         }
         with open(path, 'wb') as f:
@@ -462,11 +498,12 @@ class ClassifierTrainer:
         self.config = save_dict['config']
         self.history = save_dict['history']
         
-        # Rebuild model with correct architecture
+        # Rebuild model with correct architecture (1D CNN)
         self.model = SpectralClassifier(
             n_freq=self.n_freq,
             n_classes=self.n_classes,
-            hidden_dims=save_dict['hidden_dims'],
+            conv_channels=save_dict['conv_channels'],
+            kernel_sizes=save_dict['kernel_sizes'],
             dropout=save_dict['dropout'],
         ).to(self.device)
         
