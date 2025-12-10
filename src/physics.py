@@ -14,14 +14,34 @@ def load_frequencies(freq_file):
     ----------
     freq_file : str
         Path to file containing frequencies in Hz (one per line)
+        Can have optional weights column:
+        - Single column: frequencies only (weights default to 1.0)
+        - Two columns: frequencies and weights
         
     Returns
     -------
     frequencies : np.ndarray
         Array of frequencies in Hz
+    weights : np.ndarray
+        Array of weights (1.0 = best quality, 0.0 = missing/flagged)
     """
-    frequencies = np.loadtxt(freq_file)
-    return frequencies
+    # Try loading with two columns first
+    try:
+        data = np.loadtxt(freq_file)
+        if data.ndim == 1:
+            # Single column - frequencies only
+            frequencies = data
+            weights = np.ones_like(frequencies)
+        else:
+            # Two columns - frequencies and weights
+            frequencies = data[:, 0]
+            weights = data[:, 1]
+    except Exception:
+        # Fallback: try single column
+        frequencies = np.loadtxt(freq_file)
+        weights = np.ones_like(frequencies)
+    
+    return frequencies, weights
 
 
 def freq_to_lambda_sq(frequencies):

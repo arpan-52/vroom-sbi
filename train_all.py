@@ -62,7 +62,16 @@ def main():
 
     print("\nTraining finished.")
     if isinstance(posteriors, dict):
-        print(f"Saved models for N = {sorted(posteriors.keys())}")
+        # Filter only integer keys (model N values) for display
+        model_keys = [k for k in posteriors.keys() if isinstance(k, int)]
+        if model_keys:
+            print(f"Saved models for N = {sorted(model_keys)}")
+        if "decision_layer" in posteriors:
+            acc = posteriors['decision_layer'].get('final_val_accuracy_ensemble', 'N/A')
+            if isinstance(acc, (int, float)):
+                print(f"Decision layer trained with ensemble accuracy: {acc:.2f}%")
+            else:
+                print(f"Decision layer trained with ensemble accuracy: {acc}")
     else:
         print("train_all_models returned:", type(posteriors), posteriors)
 

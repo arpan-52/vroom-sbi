@@ -35,16 +35,19 @@ def get_flat_priors(config: Dict) -> Dict[str, float]:
     pri = config.get("priors", {})
     rm = pri.get("rm", {})
     amp = pri.get("amp", {})
-    noise = pri.get("noise", {})
-    
+
     return {
         "rm_min": float(rm.get("min", -500.0)),
         "rm_max": float(rm.get("max", 500.0)),
         "amp_min": max(float(amp.get("min", 0.0)), 1e-6),
         "amp_max": float(amp.get("max", 1.0)),
-        "noise_min": max(float(noise.get("min", 0.001)), 1e-9),
-        "noise_max": float(noise.get("max", 0.1)),
     }
+
+
+def get_base_noise_level(config: Dict) -> float:
+    """Extract base noise level from config."""
+    noise_cfg = config.get("noise", {})
+    return float(noise_cfg.get("base_level", 0.01))
 
 
 def load_posterior(model_path: str):
@@ -59,22 +62,29 @@ def generate_test_cases(
     n_tests: int,
     freq_file: str,
     flat_priors: Dict[str, float],
+    base_noise_level: float = 0.01,
     seed: int = 42
 ):
     """Generate test cases with known parameters."""
     np.random.seed(seed)
     torch.manual_seed(seed)
-    
-    simulator = RMSimulator(freq_file=freq_file, n_components=n_components)
-    
+
+    # Create simulator with fixed base_noise_level
+    simulator = RMSimulator(
+        freq_file=freq_file,
+        n_components=n_components,
+        base_noise_level=base_noise_level
+    )
+
     # Sample n_tests parameter sets from prior
+    # Note: theta has shape (n_tests, 3*n_components) - no noise parameter
     theta_all = sample_prior(n_tests, n_components, flat_priors)
-    
+
     x_list = []
     for i in range(n_tests):
         x = simulator(theta_all[i])
         x_list.append(x)
-    
+
     return theta_all, np.array(x_list)
 
 def plot_recovery(
@@ -92,7 +102,6 @@ def plot_recovery(
     param_names = []
     for i in range(n_components):
         param_names.extend([f"RM_{i+1}", f"amp_{i+1}", f"chi0_{i+1}"])
-    param_names.append("noise")
     
     n_params = len(param_names)
     n_cols = 2
@@ -150,11 +159,12 @@ def plot_residuals(
     x_obs: np.ndarray,
     n_components: int,
     freq_file: str,
+    base_noise_level: float,
     output_path: Path,
     test_idx: int = 0
 ):
     """Plot residuals between observed and model predictions."""
-    frequencies = load_frequencies(freq_file)
+    frequencies, weights = load_frequencies(freq_file)
     lambda_sq = freq_to_lambda_sq(frequencies)
     n_freq = len(frequencies)
     freq_ghz = frequencies / 1e9
@@ -190,9 +200,6 @@ def plot_residuals(
     rms_Q = np.sqrt(np.mean(residuals_Q**2))
     rms_U = np.sqrt(np.mean(residuals_U**2))
     
-    true_noise = theta_true[-1]
-    inferred_noise = theta_recovered[-1]
-    
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     
     # Q data + fit
@@ -221,18 +228,20 @@ def plot_residuals(
     ax = axes[1, 0]
     ax.plot(freq_ghz, residuals_Q, "bo-", markersize=6)
     ax.axhline(0, color="k", linestyle="--", linewidth=1)
-    ax.fill_between(freq_ghz, -true_noise, true_noise, alpha=0.3, color="red", label=f"True noise: {true_noise:.4f}")
+    ax.fill_between(freq_ghz, -base_noise_level, base_noise_level, alpha=0.3, color="red",
+                    label=f"Expected noise: {base_noise_level:.4f}")
     ax.set_xlabel("Frequency (GHz)")
     ax.set_ylabel("Residual Q")
     ax.set_title(f"Q Residuals (RMS: {rms_Q:.4f})")
     ax.legend()
     ax.grid(True, alpha=0.3)
-    
+
     # U residuals
     ax = axes[1, 1]
     ax.plot(freq_ghz, residuals_U, "bo-", markersize=6)
     ax.axhline(0, color="k", linestyle="--", linewidth=1)
-    ax.fill_between(freq_ghz, -true_noise, true_noise, alpha=0.3, color="red", label=f"True noise: {true_noise:.4f}")
+    ax.fill_between(freq_ghz, -base_noise_level, base_noise_level, alpha=0.3, color="red",
+                    label=f"Expected noise: {base_noise_level:.4f}")
     ax.set_xlabel("Frequency (GHz)")
     ax.set_ylabel("Residual U")
     ax.set_title(f"U Residuals (RMS: {rms_U:.4f})")
@@ -240,10 +249,9 @@ def plot_residuals(
     ax.grid(True, alpha=0.3)
     
     # Main title with parameter comparison
-    title = f"Test #{test_idx+1} | N={n_components}\n"
+    title = f"Test #{test_idx+1} | N={n_components} | Noise Level={base_noise_level:.4f}\n"
     title += f"RM: True={theta_true[0]:.1f}, Rec={theta_recovered[0]:.1f} | "
-    title += f"Amp: True={theta_true[1]:.3f}, Rec={theta_recovered[1]:.3f} | "
-    title += f"Noise: True={true_noise:.4f}, Rec={inferred_noise:.4f}"
+    title += f"Amp: True={theta_true[1]:.3f}, Rec={theta_recovered[1]:.3f}"
     fig.suptitle(title, fontsize=12)
     
     plt.tight_layout()
@@ -267,7 +275,6 @@ def plot_posterior_contours(
     labels = []
     for i in range(n_components):
         labels.extend([f"RM$_{{{i+1}}}$", f"A$_{{{i+1}}}$", f"$\\chi_{{0,{i+1}}}$"])
-    labels.append("$\\sigma$")
     
     n_params = len(labels)
     
@@ -353,7 +360,6 @@ def print_summary(
     param_names = []
     for i in range(n_components):
         param_names.extend([f"RM_{i+1}", f"amp_{i+1}", f"chi0_{i+1}"])
-    param_names.append("noise")
     
     print("\n" + "="*60)
     print("VALIDATION SUMMARY")
@@ -395,12 +401,14 @@ if __name__ == "__main__":
     # Load config and posterior
     config = load_config()
     flat_priors = get_flat_priors(config)
+    base_noise_level = get_base_noise_level(config)
     freq_file = config.get("freq_file", "freq.txt")
-    
+
     posterior, model_data = load_posterior(args.model_path)
     n_components = model_data.get("n_components", 1)
-    
+
     print(f"Loaded model for N={n_components} components")
+    print(f"Base noise level: {base_noise_level:.4f}")
     print(f"Running {args.n_tests} test cases...")
     
     # Set device
@@ -411,7 +419,7 @@ if __name__ == "__main__":
     
     # Generate test cases
     theta_true_all, x_obs_all = generate_test_cases(
-        n_components, args.n_tests, freq_file, flat_priors, args.seed
+        n_components, args.n_tests, freq_file, flat_priors, base_noise_level, args.seed
     )
     
     # Run inference on each test case
@@ -443,7 +451,7 @@ if __name__ == "__main__":
     for i in range(min(args.n_residual_plots, args.n_tests)):
         plot_residuals(
             theta_true_all[i], theta_recovered_all[i], x_obs_all[i],
-            n_components, freq_file,
+            n_components, freq_file, base_noise_level,
             output_dir / f"residuals_test{i+1}.png",
             test_idx=i
         )
