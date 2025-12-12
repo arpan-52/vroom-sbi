@@ -12,7 +12,7 @@ phi:
 # Prior ranges for parameters
 priors:
   rm:
-    min: -500.0
+    min: 0.0
     max: 500.0
   amp:
     min: 0.01
@@ -30,7 +30,7 @@ noise:
 
 # Training settings
 training:
-  n_simulations: 10000        # Base simulations (for N=1)
+  n_simulations: 20000        # Base simulations (for N=1)
   simulation_scaling: true    # Scale up for complex models (N=2 gets 2x)
   batch_size: 50
   n_rounds: 1
