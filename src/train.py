@@ -282,13 +282,14 @@ def train_model(
     
     # Save simulations for classifier training
     if save_simulations:
-        sim_save_path = output_dir / f"simulations_n{n_components}.pkl"
+        sim_save_path = output_dir / f"simulations_{model_type}_n{n_components}.pkl"
         with open(sim_save_path, 'wb') as f:
             pickle.dump({
                 'spectra': x,  # (n_samples, 2 * n_freq) - Q and U
                 'weights': all_weights,  # (n_samples, n_freq)
                 'theta': theta,  # (n_samples, n_params) - parameters
                 'n_components': n_components,
+                'model_type': model_type,  # NEW: Include model type
                 'n_freq': simulator.n_freq,
             }, f)
         print(f"Saved simulations for classifier -> {sim_save_path}")
@@ -672,71 +673,98 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
     base_noise_level = _get_base_noise_level(config)
     sbi_cfg = _extract_sbi_cfg(config)
 
-    results: Dict[int, Dict[str, Any]] = {}
+    results: Dict[str, Dict[str, Any]] = {}  # Changed to string keys for model types
 
     # Train worker models (1 to max_components, full scale!)
     max_comp = training_cfg["max_components"]
 
-    # Extract physical model type from config
+    # Extract physical model types from config
     physics_cfg = config.get("physics", {})
-    model_type = physics_cfg.get("model_type", "faraday_thin")
-    model_params = physics_cfg.get(model_type, {})
+
+    # Support both single model_type (string) and multiple model_types (list)
+    if "model_types" in physics_cfg:
+        model_types = physics_cfg["model_types"]
+        cross_model_training = True
+    elif "model_type" in physics_cfg:
+        model_types = [physics_cfg["model_type"]]
+        cross_model_training = False
+    else:
+        model_types = ["faraday_thin"]  # Default
+        cross_model_training = False
 
     print(f"\n{'='*60}")
-    print(f"TRAINING MULTI-COMPONENT SYSTEM (1-{max_comp} components)")
-    print(f"Physical model: {model_type}")
+    if cross_model_training:
+        print(f"CROSS-MODEL TRAINING: {len(model_types)} models × {max_comp} components = {len(model_types) * max_comp} total!")
+        print(f"Models: {', '.join(model_types)}")
+    else:
+        print(f"SINGLE-MODEL TRAINING: {model_types[0]} (1-{max_comp} components)")
     print(f"{'='*60}")
     
     if decision_layer_only:
         print("Mode: CLASSIFIER ONLY (skipping worker model training)")
         print(f"Using existing simulations from: {training_cfg['output_dir']}")
-        
-        # Verify that simulations exist
-        for n in range(1, max_comp + 1):
-            sim_path = training_cfg["output_dir"] / f"simulations_n{n}.pkl"
-            if not sim_path.exists():
-                raise FileNotFoundError(
-                    f"Simulations file not found: {sim_path}\n"
-                    f"Cannot use classifier_only mode without saved simulations.\n"
-                    f"Run full training first to generate simulations."
-                )
-            print(f"  ✓ Found simulations_n{n}.pkl")
+
+        # Verify that simulations exist for all model types
+        for model_type in model_types:
+            for n in range(1, max_comp + 1):
+                sim_path = training_cfg["output_dir"] / f"simulations_{model_type}_n{n}.pkl"
+                if not sim_path.exists():
+                    raise FileNotFoundError(
+                        f"Simulations file not found: {sim_path}\n"
+                        f"Cannot use classifier_only mode without saved simulations.\n"
+                        f"Run full training first to generate simulations."
+                    )
+                print(f"  ✓ Found simulations_{model_type}_n{n}.pkl")
     else:
-        print(f"Phase 1: Training Worker Models (1-{max_comp} components)")
+        print(f"\nPhase 1: Training Worker Models")
         print(f"SBI Architecture: {sbi_cfg['model'].upper()}, hidden={sbi_cfg['hidden_features']}, "
               f"transforms={sbi_cfg['num_transforms']}, embedding_dim={sbi_cfg['embedding_dim']}")
 
-        for n in range(1, max_comp + 1):
-            # Scale simulations for complex models
-            n_sims = get_scaled_simulations(
-                n_components=n,
-                base_simulations=training_cfg["n_simulations"],
-                scaling=training_cfg["simulation_scaling"],
-            )
+        # Loop over all model types
+        for model_type in model_types:
+            model_params = physics_cfg.get(model_type, {})
 
-            print(f"\n>>> Model N={n}: Using {n_sims:,} simulations (base: {training_cfg['n_simulations']:,})")
+            print(f"\n{'='*60}")
+            print(f"Training {model_type.upper()} models (1-{max_comp} components)")
+            print(f"{'='*60}")
 
-            data = train_model(
-                n_components=n,
-                freq_file=freq_file,
-                flat_priors=flat_priors,
-                base_noise_level=base_noise_level,
-                n_simulations=n_sims,
-                batch_size=training_cfg["batch_size"],
-                device=training_cfg["device"],
-                validation_fraction=training_cfg["validation_fraction"],
-                output_dir=training_cfg["output_dir"],
-                sbi_cfg=sbi_cfg,
-                save_simulations=True,  # Save for classifier training
-                model_type=model_type,
-                model_params=model_params,
-            )
-            results[n] = data
+            for n in range(1, max_comp + 1):
+                # Scale simulations for complex models
+                n_sims = get_scaled_simulations(
+                    n_components=n,
+                    base_simulations=training_cfg["n_simulations"],
+                    scaling=training_cfg["simulation_scaling"],
+                )
+
+                print(f"\n>>> {model_type} N={n}: Using {n_sims:,} simulations")
+
+                data = train_model(
+                    n_components=n,
+                    freq_file=freq_file,
+                    flat_priors=flat_priors,
+                    base_noise_level=base_noise_level,
+                    n_simulations=n_sims,
+                    batch_size=training_cfg["batch_size"],
+                    device=training_cfg["device"],
+                    validation_fraction=training_cfg["validation_fraction"],
+                    output_dir=training_cfg["output_dir"],
+                    sbi_cfg=sbi_cfg,
+                    save_simulations=True,  # Save for classifier training
+                    model_type=model_type,
+                    model_params=model_params,
+                )
+
+                # Store with composite key
+                results[f"{model_type}_n{n}"] = data
 
     print("\n" + "="*60)
     print("Phase 2: Training Model Selection Classifier")
+    if cross_model_training:
+        print(f"CROSS-MODEL CLASSIFIER: {len(model_types)} models × {max_comp} components = {len(model_types) * max_comp} classes")
+    else:
+        print(f"SINGLE-MODEL CLASSIFIER: {max_comp} classes (component count only)")
     print("="*60)
-    
+
     # Train classifier if enabled
     model_selection = config.get("model_selection", {})
     if model_selection.get("use_classifier", True):
@@ -744,6 +772,8 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
             config=config,
             output_dir=training_cfg["output_dir"],
             max_components=max_comp,
+            model_types=model_types,
+            cross_model_training=cross_model_training,
         )
         results["classifier"] = classifier_result
     
@@ -768,13 +798,15 @@ def train_classifier(
     config: Dict[str, Any],
     output_dir: Path = Path("models"),
     max_components: int = 2,
+    model_types: List[str] = None,
+    cross_model_training: bool = False,
 ) -> Dict[str, Any]:
     """
     Train the model selection classifier using saved simulations.
-    
-    This classifier learns to predict the number of RM components
-    directly from the observed spectrum, without computing AIC/BIC.
-    
+
+    This classifier learns to predict BOTH the physical model type AND
+    the number of components directly from the observed spectrum.
+
     Parameters
     ----------
     config : Dict[str, Any]
@@ -783,44 +815,67 @@ def train_classifier(
         Directory containing saved simulations
     max_components : int
         Maximum number of components
-    
+    model_types : List[str], optional
+        List of model types to train on (for cross-model training)
+    cross_model_training : bool
+        If True, trains cross-model classifier (model_type × n_components classes)
+
     Returns
     -------
     Dict[str, Any]
         Training results and metadata
     """
     from .classifier import (
-        ClassifierConfig, 
-        ClassifierTrainer, 
+        ClassifierConfig,
+        ClassifierTrainer,
         prepare_classifier_data
     )
+
+    if model_types is None:
+        model_types = ["faraday_thin"]
     
     # Get classifier config
     classifier_cfg = ClassifierConfig.from_config(config)
     device = config.get("training", {}).get("device", "cpu")
-    
-    print(f"\nClassifier configuration (1D CNN):")
-    print(f"  Conv channels: {classifier_cfg.conv_channels}")
-    print(f"  Kernel sizes: {classifier_cfg.kernel_sizes}")
-    print(f"  Dropout: {classifier_cfg.dropout}")
-    print(f"  Epochs: {classifier_cfg.n_epochs}")
-    print(f"  Batch size: {classifier_cfg.batch_size}")
-    print(f"  Learning rate: {classifier_cfg.learning_rate}")
-    print(f"  Device: {device}")
-    
+
+    # Calculate number of classes
+    if cross_model_training:
+        n_classes = len(model_types) * max_components
+        print(f"\nCROSS-MODEL Classifier configuration:")
+        print(f"  Model types: {model_types}")
+        print(f"  Components per model: 1-{max_components}")
+        print(f"  Total classes: {n_classes} ({len(model_types)} models × {max_components} components)")
+    else:
+        n_classes = max_components
+        print(f"\nSINGLE-MODEL Classifier configuration:")
+        print(f"  Model type: {model_types[0]}")
+        print(f"  Classes: {n_classes} (component count only)")
+
+    print(f"\n  Architecture (1D CNN):")
+    print(f"    Conv channels: {classifier_cfg.conv_channels}")
+    print(f"    Kernel sizes: {classifier_cfg.kernel_sizes}")
+    print(f"    Dropout: {classifier_cfg.dropout}")
+    print(f"  Training:")
+    print(f"    Epochs: {classifier_cfg.n_epochs}")
+    print(f"    Batch size: {classifier_cfg.batch_size}")
+    print(f"    Learning rate: {classifier_cfg.learning_rate}")
+    print(f"    Device: {device}")
+
     # Load simulations
     print(f"\nLoading simulations from {output_dir}...")
-    train_loader, val_loader, n_freq = prepare_classifier_data(
+    train_loader, val_loader, n_freq, class_to_label = prepare_classifier_data(
         simulations_dir=output_dir,
         max_components=max_components,
+        model_types=model_types,
+        cross_model_training=cross_model_training,
         validation_fraction=classifier_cfg.validation_fraction,
         batch_size=classifier_cfg.batch_size,
     )
-    
+
     # Create trainer
     trainer = ClassifierTrainer(
         n_freq=n_freq,
-        n_classes=max_components,
+        n_classes=n_classes,
         config=classifier_cfg,
         device=device,
     )
@@ -841,14 +896,18 @@ def train_classifier(
     result = {
         "model_path": str(save_path),
         "n_freq": n_freq,
-        "n_classes": max_components,
+        "n_classes": n_classes,
+        "max_components": max_components,
+        "model_types": model_types,
+        "cross_model_training": cross_model_training,
+        "class_to_label": class_to_label,  # Mapping from class index to (model_type, n_comp)
         "history": history,
         "final_val_accuracy": eval_results['accuracy'],
     }
-    
+
     # Add per-class accuracies
     for key, value in eval_results.items():
         if key != 'accuracy':
             result[key] = value
-    
+
     return result

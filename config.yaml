@@ -44,23 +44,29 @@ model_selection:
   use_classifier: true        # Use the new direct classifier
   classifier_only: false      # If true, skip worker model training (simulations must exist)
 
-# Physical model type
-# Supports multiple Faraday rotation models
+# Physical model types
+# CROSS-MODEL TRAINING: Train all model types together!
+# Classifier will learn to distinguish between ALL combinations
 physics:
-  model_type: "faraday_thin"  # Options: faraday_thin, faraday_thick, burn_slab, sokoloff
+  # Train ALL these model types (4 models × 5 components = 20 classes!)
+  model_types:
+    - "faraday_thin"
+    - "burn_slab"
+    - "external_dispersion"
+    - "internal_dispersion"
 
-  # Faraday thick parameters (for internal Faraday rotation)
-  faraday_thick:
-    enable_depolarization: true
+  # For single-model training, use model_type (string) instead of model_types (list)
+  # model_type: "faraday_thin"  # Uncomment to train only one model
 
-  # Burn slab parameters (external Faraday screen with depolarization)
+  # Model-specific parameters
   burn_slab:
     depolarization_sigma: 0.1  # Depolarization parameter
 
-  # Sokoloff model parameters (galactic magnetic field)
-  sokoloff:
-    enable_spatial_variation: true
-    turbulence_scale: 100.0    # Turbulence scale in rad/m²
+  external_dispersion:
+    max_sigma_phi: 200.0  # Maximum RM dispersion
+
+  internal_dispersion:
+    max_sigma_phi: 200.0  # Maximum RM dispersion
 
 # Weight augmentation settings
 # These are applied during simulation for both posterior and classifier training
