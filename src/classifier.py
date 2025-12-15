@@ -514,56 +514,109 @@ class ClassifierTrainer:
 def prepare_classifier_data(
     simulations_dir: Path,
     max_components: int = 2,
+    model_types: List[str] = None,
+    cross_model_training: bool = False,
     validation_fraction: float = 0.2,
     batch_size: int = 128,
-) -> Tuple[DataLoader, DataLoader, int]:
+) -> Tuple[DataLoader, DataLoader, int, Dict[int, Tuple[str, int]]]:
     """
     Load saved simulations and prepare DataLoaders for classifier training.
-    
+
+    For cross-model training, loads simulations from ALL model types and creates
+    labels that encode both model_type and n_components.
+
     Parameters
     ----------
     simulations_dir : Path
-        Directory containing saved simulations (simulations_n1.pkl, etc.)
+        Directory containing saved simulations
     max_components : int
         Maximum number of components to include
+    model_types : List[str], optional
+        List of model types (for cross-model training)
+    cross_model_training : bool
+        If True, loads data from all model types
     validation_fraction : float
         Fraction of data to use for validation
     batch_size : int
         Batch size for DataLoaders
-    
+
     Returns
     -------
-    Tuple[DataLoader, DataLoader, int]
-        (train_loader, val_loader, n_freq)
+    Tuple[DataLoader, DataLoader, int, Dict[int, Tuple[str, int]]]
+        (train_loader, val_loader, n_freq, class_to_label)
+        class_to_label maps class index -> (model_type, n_components)
     """
+    if model_types is None:
+        model_types = ["faraday_thin"]
+
     all_spectra = []
     all_weights = []
     all_labels = []
     n_freq = None
-    
-    for n_comp in range(1, max_components + 1):
-        sim_path = simulations_dir / f"simulations_n{n_comp}.pkl"
-        
-        if not sim_path.exists():
-            raise FileNotFoundError(f"Simulations not found: {sim_path}")
-        
-        with open(sim_path, 'rb') as f:
-            sim_data = pickle.load(f)
-        
-        spectra = sim_data['spectra']  # (n_samples, 2 * n_freq)
-        weights = sim_data['weights']  # (n_samples, n_freq)
-        
-        if n_freq is None:
-            n_freq = weights.shape[1]
-        
-        n_samples = len(spectra)
-        labels = np.full(n_samples, n_comp - 1, dtype=np.int64)  # 0-indexed
-        
-        all_spectra.append(spectra)
-        all_weights.append(weights)
-        all_labels.append(labels)
-        
-        print(f"  Loaded {n_samples} samples for {n_comp}-component model")
+
+    # Build class-to-label mapping
+    # For cross-model: class 0 = (thin, 1), class 1 = (thin, 2), ..., class 5 = (burn, 1), ...
+    # For single-model: class 0 = 1-comp, class 1 = 2-comp, ...
+    class_to_label = {}
+    class_idx = 0
+
+    if cross_model_training:
+        # Load simulations from ALL model types
+        for model_type in model_types:
+            for n_comp in range(1, max_components + 1):
+                sim_path = simulations_dir / f"simulations_{model_type}_n{n_comp}.pkl"
+
+                if not sim_path.exists():
+                    raise FileNotFoundError(f"Simulations not found: {sim_path}")
+
+                with open(sim_path, 'rb') as f:
+                    sim_data = pickle.load(f)
+
+                spectra = sim_data['spectra']  # (n_samples, 2 * n_freq)
+                weights = sim_data['weights']  # (n_samples, n_freq)
+
+                if n_freq is None:
+                    n_freq = weights.shape[1]
+
+                n_samples = len(spectra)
+
+                # Create labels for this (model_type, n_comp) combination
+                labels = np.full(n_samples, class_idx, dtype=np.int64)
+                class_to_label[class_idx] = (model_type, n_comp)
+
+                all_spectra.append(spectra)
+                all_weights.append(weights)
+                all_labels.append(labels)
+
+                print(f"  Loaded {n_samples} samples for {model_type} {n_comp}-comp (class {class_idx})")
+                class_idx += 1
+    else:
+        # Single-model training (original behavior)
+        model_type = model_types[0]
+        for n_comp in range(1, max_components + 1):
+            sim_path = simulations_dir / f"simulations_{model_type}_n{n_comp}.pkl"
+
+            if not sim_path.exists():
+                raise FileNotFoundError(f"Simulations not found: {sim_path}")
+
+            with open(sim_path, 'rb') as f:
+                sim_data = pickle.load(f)
+
+            spectra = sim_data['spectra']  # (n_samples, 2 * n_freq)
+            weights = sim_data['weights']  # (n_samples, n_freq)
+
+            if n_freq is None:
+                n_freq = weights.shape[1]
+
+            n_samples = len(spectra)
+            labels = np.full(n_samples, n_comp - 1, dtype=np.int64)  # 0-indexed
+            class_to_label[n_comp - 1] = (model_type, n_comp)
+
+            all_spectra.append(spectra)
+            all_weights.append(weights)
+            all_labels.append(labels)
+
+            print(f"  Loaded {n_samples} samples for {n_comp}-component model")
     
     # Combine
     all_spectra = np.vstack(all_spectra)
@@ -590,7 +643,7 @@ def prepare_classifier_data(
     
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    
+
     print(f"  Train: {len(train_dataset)}, Val: {len(val_dataset)}")
-    
-    return train_loader, val_loader, n_freq
+
+    return train_loader, val_loader, n_freq, class_to_label
