@@ -199,6 +199,8 @@ def train_model(
     output_dir: Path = Path("models"),
     sbi_cfg: Dict[str, Any] = None,
     save_simulations: bool = True,
+    model_type: str = "faraday_thin",
+    model_params: dict = None,
 ) -> Dict[str, Any]:
     """
     Train a single model with n_components, using the provided flat_priors
@@ -220,22 +222,29 @@ def train_model(
         }
     
     print(f"\n{'='*60}")
-    print(f"Training model N={n_components} on device={device}")
+    print(f"Training model N={n_components} ({model_type}) on device={device}")
     print(f"{'='*60}")
 
-    simulator = RMSimulator(freq_file, n_components, base_noise_level=base_noise_level)
+    simulator = RMSimulator(
+        freq_file,
+        n_components,
+        base_noise_level=base_noise_level,
+        model_type=model_type,
+        model_params=model_params
+    )
 
     # Build prior on requested device
     try:
-        prior = build_prior(n_components, flat_priors, device=device)
+        prior = build_prior(n_components, flat_priors, device=device, model_type=model_type)
     except TypeError:
-        prior = build_prior(n_components, flat_priors)
+        prior = build_prior(n_components, flat_priors, model_type=model_type)
 
-    print(f"Simulator params: n_params={simulator.n_params}, n_freq={simulator.n_freq}")
+    print(f"Model type: {model_type}")
+    print(f"Simulator params: n_params={simulator.n_params}, n_freq={simulator.n_freq}, params_per_comp={simulator.params_per_comp}")
     print(f"Simulations: {n_simulations:,}, batch_size: {batch_size}, validation_fraction: {validation_fraction}")
 
     # Generate simulations (numpy)
-    theta = sample_prior(n_simulations, n_components, flat_priors)
+    theta = sample_prior(n_simulations, n_components, flat_priors, model_type=model_type)
 
     # Simulate in batches to avoid excessive memory usage
     # Apply weight and noise augmentation if enabled
@@ -665,11 +674,17 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
 
     results: Dict[int, Dict[str, Any]] = {}
 
-    # Train worker models (limit to 1 and 2 components for two-layer system)
-    max_comp = min(training_cfg["max_components"], 2)
-    
+    # Train worker models (1 to max_components, full scale!)
+    max_comp = training_cfg["max_components"]
+
+    # Extract physical model type from config
+    physics_cfg = config.get("physics", {})
+    model_type = physics_cfg.get("model_type", "faraday_thin")
+    model_params = physics_cfg.get(model_type, {})
+
     print(f"\n{'='*60}")
-    print("TRAINING TWO-LAYER SYSTEM")
+    print(f"TRAINING MULTI-COMPONENT SYSTEM (1-{max_comp} components)")
+    print(f"Physical model: {model_type}")
     print(f"{'='*60}")
     
     if decision_layer_only:
@@ -687,10 +702,10 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
                 )
             print(f"  ✓ Found simulations_n{n}.pkl")
     else:
-        print("Phase 1: Training Worker Models (1-comp and 2-comp)")
+        print(f"Phase 1: Training Worker Models (1-{max_comp} components)")
         print(f"SBI Architecture: {sbi_cfg['model'].upper()}, hidden={sbi_cfg['hidden_features']}, "
               f"transforms={sbi_cfg['num_transforms']}, embedding_dim={sbi_cfg['embedding_dim']}")
-        
+
         for n in range(1, max_comp + 1):
             # Scale simulations for complex models
             n_sims = get_scaled_simulations(
@@ -698,9 +713,9 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
                 base_simulations=training_cfg["n_simulations"],
                 scaling=training_cfg["simulation_scaling"],
             )
-            
+
             print(f"\n>>> Model N={n}: Using {n_sims:,} simulations (base: {training_cfg['n_simulations']:,})")
-            
+
             data = train_model(
                 n_components=n,
                 freq_file=freq_file,
@@ -713,6 +728,8 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
                 output_dir=training_cfg["output_dir"],
                 sbi_cfg=sbi_cfg,
                 save_simulations=True,  # Save for classifier training
+                model_type=model_type,
+                model_params=model_params,
             )
             results[n] = data
 
