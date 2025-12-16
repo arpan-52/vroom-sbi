@@ -128,6 +128,7 @@ def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     
     # NEW: scaling factor for complex models
     simulation_scaling = training.get("simulation_scaling", True)
+    simulation_scaling_mode = training.get("simulation_scaling_mode", "linear")
 
     output_dir = Path(training.get("save_dir", "models"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -141,6 +142,7 @@ def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "validation_fraction": validation_fraction,
         "output_dir": output_dir,
         "simulation_scaling": simulation_scaling,
+        "simulation_scaling_mode": simulation_scaling_mode,
     }
 
 
@@ -162,12 +164,13 @@ def _extract_sbi_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bool = True) -> int:
+def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bool = True, scaling_mode: str = "linear") -> int:
     """
     Scale the number of simulations based on model complexity.
-    
+
     Higher-dimensional models need more training data for good posterior coverage.
-    
+    Addresses the curse of dimensionality with aggressive scaling options.
+
     Parameters
     ----------
     n_components : int
@@ -176,20 +179,39 @@ def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bo
         Base number of simulations (for N=1)
     scaling : bool
         Whether to apply scaling (if False, returns base_simulations)
-    
+    scaling_mode : str
+        Scaling strategy:
+        - "linear": Custom factors (1, 2, 4, 6, 8) - old default
+        - "quadratic": N^2 scaling (1, 4, 9, 16, 25) - recommended for high-D
+        - "subquadratic": N^1.5 scaling (1, 2.8, 5.2, 8, 11.2) - balanced
+
     Returns
     -------
     int
         Scaled number of simulations
+
+    Examples
+    --------
+    With base_simulations=20000:
+    - linear:       20k, 40k, 80k, 120k, 160k
+    - quadratic:    20k, 80k, 180k, 320k, 500k (N^2)
+    - subquadratic: 20k, 57k, 104k, 160k, 224k (N^1.5)
     """
     if not scaling:
         return base_simulations
-    
-    # Scaling factors: N=1 -> 1x, N=2 -> 2x, N=3 -> 4x, N=4 -> 6x, N=5 -> 8x
-    scaling_factors = {1: 1, 2: 2, 3: 4, 4: 6, 5: 8}
-    factor = scaling_factors. get(n_components, n_components * 2)
-    
-    return base_simulations * factor
+
+    if scaling_mode == "quadratic":
+        # N^2 scaling - aggressive for curse of dimensionality
+        factor = n_components ** 2
+    elif scaling_mode == "subquadratic":
+        # N^1.5 scaling - balanced approach
+        factor = n_components ** 1.5
+    else:  # "linear" or default
+        # Custom linear-ish factors (legacy)
+        scaling_factors = {1: 1, 2: 2, 3: 4, 4: 6, 5: 8}
+        factor = scaling_factors.get(n_components, n_components * 2)
+
+    return int(base_simulations * factor)
 
 
 def train_model(
@@ -756,6 +778,7 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
                     n_components=n,
                     base_simulations=training_cfg["n_simulations"],
                     scaling=training_cfg["simulation_scaling"],
+                    scaling_mode=training_cfg["simulation_scaling_mode"],
                 )
 
                 print(f"\n>>> {model_type} N={n}: Using {n_sims:,} simulations")
