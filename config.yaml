@@ -94,9 +94,26 @@ classifier:
   use_posterior_simulations: true  # Reuse simulations from posterior training
 
 # SBI Architecture (Neural Posterior Estimation)
+# ADAPTIVE SCALING: Architecture scales with parameter dimensionality
 sbi:
   model: 'nsf'               # Neural Spline Flow (better than MAF)
-  hidden_features: 128       # Size of hidden layers in flow
-  num_transforms: 10         # Number of flow transforms (more = better expressivity)
   num_bins: 16               # Spline resolution
   embedding_dim: 64          # Output dimension of spectral embedding
+
+  # Architecture per component count (scales for higher dimensions!)
+  architecture_scaling:
+    1:  # 3-4 params
+      hidden_features: 128
+      num_transforms: 10
+    2:  # 6-8 params
+      hidden_features: 128
+      num_transforms: 10
+    3:  # 9-12 params
+      hidden_features: 192
+      num_transforms: 12
+    4:  # 12-16 params
+      hidden_features: 256
+      num_transforms: 15
+    5:  # 15-20 params
+      hidden_features: 384
+      num_transforms: 20

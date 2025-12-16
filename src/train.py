@@ -147,13 +147,18 @@ def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
 def _extract_sbi_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Extract SBI architecture settings from config."""
     sbi_cfg = cfg.get("sbi", {}) or {}
-    
+
     return {
         "model": sbi_cfg.get("model", "nsf"),
-        "hidden_features": int(sbi_cfg.get("hidden_features", 128)),
-        "num_transforms": int(sbi_cfg.get("num_transforms", 10)),
         "num_bins": int(sbi_cfg.get("num_bins", 16)),
         "embedding_dim": int(sbi_cfg.get("embedding_dim", 64)),
+        "architecture_scaling": sbi_cfg.get("architecture_scaling", {
+            1: {"hidden_features": 128, "num_transforms": 10},
+            2: {"hidden_features": 128, "num_transforms": 10},
+            3: {"hidden_features": 192, "num_transforms": 12},
+            4: {"hidden_features": 256, "num_transforms": 15},
+            5: {"hidden_features": 384, "num_transforms": 20},
+        }),
     }
 
 
@@ -310,18 +315,32 @@ def train_model(
     embedding_dim = sbi_cfg["embedding_dim"]
     embedding_net = SpectralEmbedding(input_dim=input_dim, output_dim=embedding_dim).to(device)
 
-    # Build neural posterior with settings from config
+    # Get architecture for this component count (adaptive scaling)
+    arch_scaling = sbi_cfg["architecture_scaling"]
+    # If exact match exists, use it; otherwise use closest larger one
+    if n_components in arch_scaling:
+        arch_config = arch_scaling[n_components]
+    else:
+        # Find the next larger component count that has a config
+        available_counts = sorted([k for k in arch_scaling.keys() if k >= n_components])
+        if available_counts:
+            arch_config = arch_scaling[available_counts[0]]
+        else:
+            # Fallback to largest defined architecture
+            arch_config = arch_scaling[max(arch_scaling.keys())]
+
+    # Build neural posterior with adaptive architecture
     density_estimator_builder = posterior_nn(
         model=sbi_cfg["model"],
-        hidden_features=sbi_cfg["hidden_features"],
-        num_transforms=sbi_cfg["num_transforms"],
+        hidden_features=arch_config["hidden_features"],
+        num_transforms=arch_config["num_transforms"],
         num_bins=sbi_cfg["num_bins"],
         embedding_net=embedding_net
     )
 
     print(f"Using {sbi_cfg['model'].upper()} with custom spectral embedding:")
     print(f"  Input dim: {input_dim}, Embedding dim: {embedding_dim}")
-    print(f"  Hidden features: {sbi_cfg['hidden_features']}, Num transforms: {sbi_cfg['num_transforms']}")
+    print(f"  Architecture for N={n_components}: Hidden={arch_config['hidden_features']}, Transforms={arch_config['num_transforms']}")
 
     inference = SNPE(prior=prior, density_estimator=density_estimator_builder, device=device)
 
