@@ -736,8 +736,11 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
                 print(f"  ✓ Found simulations_{model_type}_n{n}.pkl")
     else:
         print(f"\nPhase 1: Training Worker Models")
-        print(f"SBI Architecture: {sbi_cfg['model'].upper()}, hidden={sbi_cfg['hidden_features']}, "
-              f"transforms={sbi_cfg['num_transforms']}, embedding_dim={sbi_cfg['embedding_dim']}")
+        print(f"SBI Architecture: {sbi_cfg['model'].upper()} with adaptive scaling, "
+              f"embedding_dim={sbi_cfg['embedding_dim']}")
+        print(f"  Architecture scaling:")
+        for n_comp, arch_cfg in sorted(sbi_cfg['architecture_scaling'].items()):
+            print(f"    N={n_comp}: hidden={arch_cfg['hidden_features']}, transforms={arch_cfg['num_transforms']}")
 
         # Loop over all model types
         for model_type in model_types:
