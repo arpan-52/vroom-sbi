@@ -31,7 +31,8 @@ noise:
 # Training settings
 training:
   n_simulations: 20000        # Base simulations (for N=1)
-  simulation_scaling: true    # Scale up for complex models (N=2 gets 2x)
+  simulation_scaling: true    # Scale up for complex models
+  simulation_scaling_mode: "quadratic"  # Options: "linear", "quadratic" (N^2), "subquadratic" (N^1.5)
   batch_size: 50
   n_rounds: 1
   device: "cuda"  # or "cpu"
@@ -49,14 +50,14 @@ model_selection:
 # Classifier will learn to distinguish between ALL combinations
 physics:
   # Train ALL these model types (4 models × 5 components = 20 classes!)
-  model_types:
-    - "faraday_thin"
-    - "burn_slab"
-    - "external_dispersion"
-    - "internal_dispersion"
+  # model_types:
+  #   - "faraday_thin"
+  #   - "burn_slab"
+  #   - "external_dispersion"
+  #   - "internal_dispersion"
 
   # For single-model training, use model_type (string) instead of model_types (list)
-  # model_type: "faraday_thin"  # Uncomment to train only one model
+  model_type: "faraday_thin"  # Training only faraday_thin for N^2 scaling test
 
   # Model-specific parameters
   burn_slab:
