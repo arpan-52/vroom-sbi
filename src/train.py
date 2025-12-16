@@ -339,7 +339,7 @@ def train_model(
 
     # Save posterior and metadata
     output_dir.mkdir(parents=True, exist_ok=True)
-    save_path = output_dir / f"posterior_n{n_components}.pkl"
+    save_path = output_dir / f"posterior_{model_type}_n{n_components}.pkl"
     with open(save_path, "wb") as f:
         pickle.dump({
             "posterior": posterior,
