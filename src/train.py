@@ -20,6 +20,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for server
+import matplotlib.pyplot as plt
 
 from sbi.inference import SNPE
 
@@ -129,6 +132,7 @@ def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # NEW: scaling factor for complex models
     simulation_scaling = training.get("simulation_scaling", True)
     simulation_scaling_mode = training.get("simulation_scaling_mode", "linear")
+    scaling_power = float(training.get("scaling_power", 2.0))
 
     output_dir = Path(training.get("save_dir", "models"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -143,6 +147,7 @@ def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "output_dir": output_dir,
         "simulation_scaling": simulation_scaling,
         "simulation_scaling_mode": simulation_scaling_mode,
+        "scaling_power": scaling_power,
     }
 
 
@@ -164,7 +169,7 @@ def _extract_sbi_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bool = True, scaling_mode: str = "linear") -> int:
+def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bool = True, scaling_mode: str = "linear", scaling_power: float = 2.0) -> int:
     """
     Scale the number of simulations based on model complexity.
 
@@ -184,6 +189,10 @@ def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bo
         - "linear": Custom factors (1, 2, 4, 6, 8) - old default
         - "quadratic": N^2 scaling (1, 4, 9, 16, 25) - recommended for high-D
         - "subquadratic": N^1.5 scaling (1, 2.8, 5.2, 8, 11.2) - balanced
+        - "power": N^scaling_power - fully tunable exponent!
+    scaling_power : float
+        Exponent for "power" mode (e.g., 2.0 = N^2, 2.5 = N^2.5, 3.0 = N^3)
+        Higher values for very large SBI architectures
 
     Returns
     -------
@@ -196,11 +205,16 @@ def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bo
     - linear:       20k, 40k, 80k, 120k, 160k
     - quadratic:    20k, 80k, 180k, 320k, 500k (N^2)
     - subquadratic: 20k, 57k, 104k, 160k, 224k (N^1.5)
+    - power (2.5):  20k, 113k, 324k, 640k, 1.12M (N^2.5)
+    - power (3.0):  20k, 160k, 540k, 1.28M, 2.5M (N^3)
     """
     if not scaling:
         return base_simulations
 
-    if scaling_mode == "quadratic":
+    if scaling_mode == "power":
+        # Fully tunable power scaling - adjust exponent as needed!
+        factor = n_components ** scaling_power
+    elif scaling_mode == "quadratic":
         # N^2 scaling - aggressive for curse of dimensionality
         factor = n_components ** 2
     elif scaling_mode == "subquadratic":
@@ -685,6 +699,101 @@ def train_decision_layer(
     }
 
 
+def _plot_training_summary(results: Dict[str, Any], output_dir: Path, model_types: List[str], max_components: int):
+    """
+    Generate and save training summary plots for all trained SBI posteriors.
+
+    Creates a visual summary showing validation performance across all models.
+    """
+    # Extract validation performance data
+    # Note: SBI doesn't return detailed training history by default,
+    # but we can extract final validation metrics from saved data
+
+    model_names = []
+    val_losses = []
+    n_samples = []
+
+    for model_type in model_types:
+        for n in range(1, max_components + 1):
+            key = f"{model_type}_n{n}"
+            if key in results:
+                model_names.append(f"{model_type}\nN={n}")
+                # Load the saved posterior to get metadata
+                posterior_path = output_dir / f"posterior_{model_type}_n{n}.pkl"
+                try:
+                    with open(posterior_path, 'rb') as f:
+                        data = pickle.load(f)
+                        # Extract metrics if available
+                        val_loss = data.get('val_loss', np.nan)
+                        n_sims = data.get('n_simulations', 0)
+                        val_losses.append(val_loss)
+                        n_samples.append(n_sims)
+                except Exception as e:
+                    print(f"  Warning: Could not load metrics for {key}: {e}")
+                    val_losses.append(np.nan)
+                    n_samples.append(0)
+
+    # Create summary plot
+    if len(model_names) > 0:
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+
+        x_pos = np.arange(len(model_names))
+        colors = plt.cm.tab10(np.linspace(0, 1, len(model_types)))
+
+        # Plot 1: Number of training samples
+        bar_colors = []
+        for name in model_names:
+            for i, mtype in enumerate(model_types):
+                if mtype in name:
+                    bar_colors.append(colors[i])
+                    break
+
+        ax1.bar(x_pos, [s/1000 for s in n_samples], color=bar_colors, alpha=0.7, edgecolor='black')
+        ax1.set_ylabel('Training Samples (thousands)', fontsize=12, fontweight='bold')
+        ax1.set_title('SBI Training Summary: Sample Counts per Model', fontsize=14, fontweight='bold')
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels(model_names, rotation=45, ha='right', fontsize=9)
+        ax1.grid(axis='y', alpha=0.3)
+
+        # Add legend for model types
+        from matplotlib.patches import Patch
+        legend_elements = [Patch(facecolor=colors[i], alpha=0.7, label=mtype)
+                          for i, mtype in enumerate(model_types)]
+        ax1.legend(handles=legend_elements, loc='upper left', fontsize=10)
+
+        # Plot 2: Validation loss (if available)
+        if not all(np.isnan(val_losses)):
+            ax2.bar(x_pos, val_losses, color=bar_colors, alpha=0.7, edgecolor='black')
+            ax2.set_ylabel('Validation Loss', fontsize=12, fontweight='bold')
+            ax2.set_title('SBI Training Summary: Final Validation Performance', fontsize=14, fontweight='bold')
+            ax2.set_xticks(x_pos)
+            ax2.set_xticklabels(model_names, rotation=45, ha='right', fontsize=9)
+            ax2.grid(axis='y', alpha=0.3)
+        else:
+            ax2.text(0.5, 0.5, 'Validation metrics not available\n(SBI library does not return training history by default)',
+                    ha='center', va='center', fontsize=12, transform=ax2.transAxes)
+            ax2.set_xticks([])
+            ax2.set_yticks([])
+
+        plt.tight_layout()
+        plot_path = output_dir / "training_summary.png"
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"  ✓ Saved training summary plot -> {plot_path}")
+
+        # Also create a text summary
+        summary_path = output_dir / "training_summary.txt"
+        with open(summary_path, 'w') as f:
+            f.write("="*70 + "\n")
+            f.write("SBI POSTERIOR TRAINING SUMMARY\n")
+            f.write("="*70 + "\n\n")
+            for i, name in enumerate(model_names):
+                f.write(f"{name.replace(chr(10), ' ')}: {n_samples[i]:,} samples\n")
+            f.write(f"\nTotal simulations: {sum(n_samples):,}\n")
+            f.write("="*70 + "\n")
+        print(f"  ✓ Saved training summary text -> {summary_path}")
+
+
 def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) -> Dict[int, Dict[str, Any]]:
     """
     Train models for N = 1 ..  max_components using the exact config structure
@@ -773,12 +882,13 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
             print(f"{'='*60}")
 
             for n in range(1, max_comp + 1):
-                # Scale simulations for complex models
+                # Scale simulations for complex models with tunable power index
                 n_sims = get_scaled_simulations(
                     n_components=n,
                     base_simulations=training_cfg["n_simulations"],
                     scaling=training_cfg["simulation_scaling"],
                     scaling_mode=training_cfg["simulation_scaling_mode"],
+                    scaling_power=training_cfg["scaling_power"],
                 )
 
                 print(f"\n>>> {model_type} N={n}: Using {n_sims:,} simulations")
@@ -835,6 +945,13 @@ def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) 
             acc_key = f'accuracy_{n}comp'
             if acc_key in cl_result:
                 print(f"  {n}-comp accuracy: {cl_result[acc_key]:.2f}%")
+
+    # Generate training summary plots
+    if not decision_layer_only and len(results) > 0:
+        print("\n" + "="*60)
+        print("Generating Training Summary Plots...")
+        print("="*60)
+        _plot_training_summary(results, training_cfg["output_dir"], model_types, max_comp)
 
     return results
 
