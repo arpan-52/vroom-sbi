@@ -50,14 +50,14 @@ model_selection:
 # Classifier will learn to distinguish between ALL combinations
 physics:
   # Train ALL these model types (4 models × 5 components = 20 classes!)
-  # model_types:
-  #   - "faraday_thin"
-  #   - "burn_slab"
-  #   - "external_dispersion"
-  #   - "internal_dispersion"
+  model_types:
+    - "faraday_thin"
+    - "burn_slab"
+    - "external_dispersion"
+    - "internal_dispersion"
 
   # For single-model training, use model_type (string) instead of model_types (list)
-  model_type: "faraday_thin"  # Training only faraday_thin for N^2 scaling test
+  # model_type: "faraday_thin"  # Uncomment to train only one model
 
   # Model-specific parameters
   burn_slab:
@@ -112,9 +112,9 @@ sbi:
     3:  # 9-12 params
       hidden_features: 192
       num_transforms: 12
-    4:  # 12-16 params
-      hidden_features: 256
-      num_transforms: 15
-    5:  # 15-20 params
+    4:  # 12-16 params - BOOSTED for better posteriors
       hidden_features: 384
       num_transforms: 20
+    5:  # 15-20 params - AGGRESSIVE scaling for curse of dimensionality
+      hidden_features: 512
+      num_transforms: 30
