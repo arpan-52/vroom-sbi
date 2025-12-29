@@ -220,7 +220,7 @@ class RMSimulator:
         return x.squeeze()
 
 
-def build_prior(n_components: int, config: dict, device: str = "cpu", model_type: str = "faraday_thin"):
+def build_prior(n_components: int, config: dict, device: str = "cpu", model_type: str = "faraday_thin", model_params: dict = None):
     """
     Build SBI BoxUniform prior for N components.
 
@@ -235,6 +235,9 @@ def build_prior(n_components: int, config: dict, device: str = "cpu", model_type
     The sorting happens in sample_prior, not here.
     """
     from sbi.utils import BoxUniform
+
+    if model_params is None:
+        model_params = {}
 
     low = []
     high = []
@@ -252,19 +255,35 @@ def build_prior(n_components: int, config: dict, device: str = "cpu", model_type
                 config["amp_max"],
                 np.pi,
             ])
-    else:
-        # 4 params per component for burn_slab, external_dispersion, internal_dispersion
-        # [phi/phi_c, sigma_phi/delta_phi, amp, chi0]
+    elif model_type == "burn_slab":
+        # 4 params per component: [phi_c, delta_phi, amp, chi0]
+        max_delta_phi = model_params.get("max_delta_phi", 200.0)  # Read from config!
         for _ in range(n_components):
             low.extend([
-                config["rm_min"],           # phi or phi_c
-                0.0,                         # sigma_phi or delta_phi (non-negative)
+                config["rm_min"],           # phi_c (central RM)
+                0.0,                         # delta_phi (slab thickness, non-negative)
                 config["amp_min"],
                 0.0,                         # chi0
             ])
             high.extend([
                 config["rm_max"],
-                200.0,                       # Maximum dispersion/slab thickness
+                max_delta_phi,               # Actually use config parameter!
+                config["amp_max"],
+                np.pi,
+            ])
+    else:  # external_dispersion or internal_dispersion
+        # 4 params per component: [phi, sigma_phi, amp, chi0]
+        max_sigma_phi = model_params.get("max_sigma_phi", 200.0)  # Read from config!
+        for _ in range(n_components):
+            low.extend([
+                config["rm_min"],           # phi (mean RM)
+                0.0,                         # sigma_phi (RM dispersion, non-negative)
+                config["amp_min"],
+                0.0,                         # chi0
+            ])
+            high.extend([
+                config["rm_max"],
+                max_sigma_phi,               # Actually use config parameter!
                 config["amp_max"],
                 np.pi,
             ])
@@ -275,7 +294,7 @@ def build_prior(n_components: int, config: dict, device: str = "cpu", model_type
     return BoxUniform(low=low_t, high=high_t)
 
 
-def sample_prior(n_samples: int, n_components: int, config: dict, model_type: str = "faraday_thin") -> np.ndarray:
+def sample_prior(n_samples: int, n_components: int, config: dict, model_type: str = "faraday_thin", model_params: dict = None) -> np.ndarray:
     """
     Sample from prior with RM ordering constraint for n_components >= 2.
 
@@ -293,6 +312,8 @@ def sample_prior(n_samples: int, n_components: int, config: dict, model_type: st
         Prior configuration with rm_min, rm_max, amp_min, amp_max
     model_type : str
         Physical model type
+    model_params : dict, optional
+        Model-specific parameters (e.g., max_sigma_phi, max_delta_phi)
 
     Returns
     -------
@@ -302,6 +323,8 @@ def sample_prior(n_samples: int, n_components: int, config: dict, model_type: st
         - others: shape (n_samples, 4*n_components) - [phi, sigma/delta, amp, chi0, ...]
         Guaranteed: first param (RM/phi) sorted descending for n_components >= 2
     """
+    if model_params is None:
+        model_params = {}
     if model_type == "faraday_thin":
         params_per_comp = 3
         theta = np.zeros((n_samples, params_per_comp * n_components))
@@ -328,14 +351,20 @@ def sample_prior(n_samples: int, n_components: int, config: dict, model_type: st
         params_per_comp = 4
         theta = np.zeros((n_samples, params_per_comp * n_components))
 
+        # Get the appropriate max value based on model type
+        if model_type == "burn_slab":
+            max_second_param = model_params.get("max_delta_phi", 200.0)  # Slab thickness
+        else:  # external_dispersion or internal_dispersion
+            max_second_param = model_params.get("max_sigma_phi", 200.0)  # RM dispersion
+
         for i in range(n_components):
             # phi/phi_c: uniform
             theta[:, params_per_comp * i] = np.random.uniform(
                 config["rm_min"], config["rm_max"], n_samples
             )
-            # sigma_phi or delta_phi: uniform [0, 200]
+            # sigma_phi or delta_phi: uniform [0, max]
             theta[:, params_per_comp * i + 1] = np.random.uniform(
-                0.0, 200.0, n_samples
+                0.0, max_second_param, n_samples  # Use config parameter!
             )
             # Amplitude: uniform
             theta[:, params_per_comp * i + 2] = np.random.uniform(

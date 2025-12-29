@@ -61,15 +61,15 @@ physics:
   # For single-model training, use model_type (string) instead of model_types (list)
   # model_type: "faraday_thin"  # Uncomment to train only one model
 
-  # Model-specific parameters
+  # Model-specific prior ranges (actually used!)
   burn_slab:
-    depolarization_sigma: 0.1  # Depolarization parameter
+    max_delta_phi: 200.0      # Maximum slab thickness for sinc depolarization
 
   external_dispersion:
-    max_sigma_phi: 200.0  # Maximum RM dispersion
+    max_sigma_phi: 200.0      # Maximum RM dispersion (turbulent foreground)
 
   internal_dispersion:
-    max_sigma_phi: 200.0  # Maximum RM dispersion
+    max_sigma_phi: 200.0      # Maximum RM dispersion (internal turbulence)
 
 # Weight augmentation settings
 # These are applied during simulation for both posterior and classifier training
@@ -97,26 +97,28 @@ classifier:
   use_posterior_simulations: true  # Reuse simulations from posterior training
 
 # SBI Architecture (Neural Posterior Estimation)
-# ADAPTIVE SCALING: Architecture scales with parameter dimensionality
+# FIXED ARCHITECTURE: Same network size for ALL N to isolate effect of simulation scaling!
 sbi:
   model: 'nsf'               # Neural Spline Flow (better than MAF)
   num_bins: 16               # Spline resolution
   embedding_dim: 64          # Output dimension of spectral embedding
 
-  # Architecture per component count (scales for higher dimensions!)
+  # FIXED architecture - same for ALL component counts (1-5)
+  # This isolates the effect of simulation scaling!
+  # If N=5 still struggles, increase simulations, not architecture.
   architecture_scaling:
-    1:  # 3-4 params
-      hidden_features: 128
-      num_transforms: 10
-    2:  # 6-8 params
-      hidden_features: 128
-      num_transforms: 10
-    3:  # 9-12 params
-      hidden_features: 192
-      num_transforms: 12
-    4:  # 12-16 params - BOOSTED for better posteriors
-      hidden_features: 384
-      num_transforms: 20
-    5:  # 15-20 params - AGGRESSIVE scaling for curse of dimensionality
+    1:  # Use same architecture as N=5
+      hidden_features: 512
+      num_transforms: 30
+    2:  # Use same architecture as N=5
+      hidden_features: 512
+      num_transforms: 30
+    3:  # Use same architecture as N=5
+      hidden_features: 512
+      num_transforms: 30
+    4:  # Use same architecture as N=5
+      hidden_features: 512
+      num_transforms: 30
+    5:  # Maximum capacity
       hidden_features: 512
       num_transforms: 30
