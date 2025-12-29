@@ -274,18 +274,18 @@ def train_model(
         model_params=model_params
     )
 
-    # Build prior on requested device
+    # Build prior on requested device (now with model_params!)
     try:
-        prior = build_prior(n_components, flat_priors, device=device, model_type=model_type)
+        prior = build_prior(n_components, flat_priors, device=device, model_type=model_type, model_params=model_params)
     except TypeError:
-        prior = build_prior(n_components, flat_priors, model_type=model_type)
+        prior = build_prior(n_components, flat_priors, model_type=model_type, model_params=model_params)
 
     print(f"Model type: {model_type}")
     print(f"Simulator params: n_params={simulator.n_params}, n_freq={simulator.n_freq}, params_per_comp={simulator.params_per_comp}")
     print(f"Simulations: {n_simulations:,}, batch_size: {batch_size}, validation_fraction: {validation_fraction}")
 
-    # Generate simulations (numpy)
-    theta = sample_prior(n_simulations, n_components, flat_priors, model_type=model_type)
+    # Generate simulations (numpy) - now using model_params!
+    theta = sample_prior(n_simulations, n_components, flat_priors, model_type=model_type, model_params=model_params)
 
     # Simulate in batches to avoid excessive memory usage
     # Apply weight and noise augmentation if enabled
