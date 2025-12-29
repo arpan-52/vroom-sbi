@@ -390,7 +390,27 @@ def train_model(
         validation_fraction=validation_fraction,
     )
 
+    # Extract training history from SBI summary (if available)
+    training_history = {}
+    try:
+        # SBI stores training logs in _summary attribute
+        if hasattr(inference, '_summary'):
+            summary = inference._summary
+            # Extract whatever metrics are available
+            if 'train_log_probs' in summary:
+                training_history['train_loss'] = summary['train_log_probs']
+            if 'validation_log_probs' in summary:
+                training_history['val_loss'] = summary['validation_log_probs']
+            if 'epochs' in summary:
+                training_history['epochs'] = summary['epochs']
+    except Exception as e:
+        print(f"  Note: Could not extract training history: {e}")
+
     posterior = inference.build_posterior(density_estimator)
+
+    # Generate and save training plot for this model
+    if len(training_history) > 0:
+        _plot_individual_training(training_history, model_type, n_components, output_dir)
 
     # Save posterior and metadata
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -403,6 +423,7 @@ def train_model(
             "n_freq": simulator.n_freq,
             "lambda_sq": simulator.lambda_sq,
             "flat_priors": flat_priors,
+            "training_history": training_history,  # Save training curves!
             "config_used": {
                 "freq_file": freq_file,
                 "n_simulations": n_simulations,
@@ -699,6 +720,63 @@ def train_decision_layer(
     }
 
 
+def _plot_individual_training(history: Dict[str, Any], model_type: str, n_components: int, output_dir: Path):
+    """
+    Plot and save training curves for an individual SBI posterior.
+
+    Parameters
+    ----------
+    history : dict
+        Training history containing train_loss, val_loss, epochs
+    model_type : str
+        Physical model type (e.g., 'faraday_thin')
+    n_components : int
+        Number of components
+    output_dir : Path
+        Directory to save plots
+    """
+    try:
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+        if 'train_loss' in history and len(history['train_loss']) > 0:
+            train_loss = history['train_loss']
+            epochs = history.get('epochs', list(range(len(train_loss))))
+
+            ax.plot(epochs, train_loss, 'b-', linewidth=2, label='Training Loss', alpha=0.8)
+
+            if 'val_loss' in history and len(history['val_loss']) > 0:
+                val_loss = history['val_loss']
+                ax.plot(epochs, val_loss, 'r-', linewidth=2, label='Validation Loss', alpha=0.8)
+
+            ax.set_xlabel('Epoch', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Negative Log Probability', fontsize=12, fontweight='bold')
+            ax.set_title(f'SBI Training: {model_type} (N={n_components})', fontsize=14, fontweight='bold')
+            ax.legend(fontsize=11, loc='best')
+            ax.grid(True, alpha=0.3)
+
+            # Add final loss values as text
+            final_train = train_loss[-1] if len(train_loss) > 0 else np.nan
+            final_text = f'Final Train Loss: {final_train:.2f}'
+            if 'val_loss' in history and len(history['val_loss']) > 0:
+                final_val = history['val_loss'][-1]
+                final_text += f'\nFinal Val Loss: {final_val:.2f}'
+
+            ax.text(0.98, 0.98, final_text, transform=ax.transAxes,
+                   fontsize=10, verticalalignment='top', horizontalalignment='right',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+            plt.tight_layout()
+            plot_path = output_dir / f"training_{model_type}_n{n_components}.png"
+            plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"  ✓ Saved training plot -> {plot_path}")
+        else:
+            print(f"  Note: No training history available for {model_type} N={n_components}")
+
+    except Exception as e:
+        print(f"  Warning: Could not generate training plot for {model_type} N={n_components}: {e}")
+
+
 def _plot_training_summary(results: Dict[str, Any], output_dir: Path, model_types: List[str], max_components: int):
     """
     Generate and save training summary plots for all trained SBI posteriors.
@@ -723,9 +801,13 @@ def _plot_training_summary(results: Dict[str, Any], output_dir: Path, model_type
                 try:
                     with open(posterior_path, 'rb') as f:
                         data = pickle.load(f)
-                        # Extract metrics if available
-                        val_loss = data.get('val_loss', np.nan)
-                        n_sims = data.get('n_simulations', 0)
+                        # Extract metrics from training history
+                        history = data.get('training_history', {})
+                        if 'val_loss' in history and len(history['val_loss']) > 0:
+                            val_loss = history['val_loss'][-1]  # Final validation loss
+                        else:
+                            val_loss = np.nan
+                        n_sims = data.get('config_used', {}).get('n_simulations', 0)
                         val_losses.append(val_loss)
                         n_samples.append(n_sims)
                 except Exception as e:
