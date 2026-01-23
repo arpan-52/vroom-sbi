@@ -5,14 +5,14 @@ freq_file: "freq.txt"
 
 # Faraday depth range (rad/m^2)
 phi:
-  min: -1000. 0
+  min: -1000.0
   max: 1000.0
   n_samples: 200
 
 # Prior ranges for parameters
 priors:
   rm:
-    min: -500.0
+    min: 0.0
     max: 500.0
   amp:
     min: 0.01
@@ -30,8 +30,11 @@ noise:
 
 # Training settings
 training:
-  n_simulations: 10000        # Base simulations (for N=1)
-  simulation_scaling: true    # Scale up for complex models (N=2,3,4,5)
+  n_simulations: 20000        # Base simulations (for N=1)
+  simulation_scaling: true    # Scale up for complex models
+  simulation_scaling_mode: "power"  # Options: "linear", "quadratic" (N^2), "subquadratic" (N^1.5), "power" (N^scaling_power)
+  scaling_power: 2.0          # Exponent for power scaling (2.0 = N^2, 2.5 = N^2.5, 3.0 = N^3)
+                              # Higher power for bigger SBI architectures!
   batch_size: 50
   n_rounds: 1
   device: "cuda"  # or "cpu"
@@ -40,34 +43,82 @@ training:
   
 # Model selection
 model_selection:
-  max_components: 2  # Two-layer system: 1-comp and 2-comp only
-  use_log_evidence: true
-  use_decision_layer: true  # Enable decision layer for model selection
+  max_components: 5           # Support 1-5 components (full scale!)
+  use_classifier: false       # DISABLED: Focus on SBI posteriors only for now
+  classifier_only: false      # If true, skip worker model training (simulations must exist)
+
+# Physical model types
+# CROSS-MODEL TRAINING: Train all model types together!
+# Classifier will learn to distinguish between ALL combinations
+physics:
+  # Train ALL these model types (4 models × 5 components = 20 classes!)
+  model_types:
+    - "faraday_thin"
+    - "burn_slab"
+    - "external_dispersion"
+    - "internal_dispersion"
+
+  # For single-model training, use model_type (string) instead of model_types (list)
+  # model_type: "faraday_thin"  # Uncomment to train only one model
+
+  # Model-specific prior ranges (actually used!)
+  burn_slab:
+    max_delta_phi: 200.0      # Maximum slab thickness for sinc depolarization
+
+  external_dispersion:
+    max_sigma_phi: 200.0      # Maximum RM dispersion (turbulent foreground)
+
+  internal_dispersion:
+    max_sigma_phi: 200.0      # Maximum RM dispersion (internal turbulence)
 
 # Weight augmentation settings
+# These are applied during simulation for both posterior and classifier training
 weight_augmentation:
   enable: true
-  scattered_prob: 0.3      # Probability of scattered missing channels
-  gap_prob: 0.3            # Probability of contiguous gaps
-  large_block_prob: 0.1    # Probability of large RFI blocks
-  noise_variation: true    # Add variation to weights
+  scattered_prob: 0.3         # Probability of scattered missing channels
+  gap_prob: 0.3               # Probability of contiguous gaps  
+  large_block_prob: 0.1       # Probability of large RFI blocks
+  noise_variation: true       # Add variation to weights
 
-# Quality Prediction Decision Layer
-# NOTE: This is expensive during training because we fit both SBI models
-# to each simulated spectrum to compute true AIC/BIC/log_evidence
-decision_layer:
-  n_training_samples: 10000  # Reduced (each sample requires fitting 2 SBI models!)
-  n_epochs: 50              # More epochs for regression task
-  batch_size: 32            # Smaller batch size
-  learning_rate: 0.0005     # Lower learning rate for stability
-  validation_fraction: 0.2
-  hidden_dims: [256, 128, 64]  # Network architecture
-  selection_strategy: 'ensemble'  # Options: 'log_evidence', 'aic', 'bic', 'ensemble'
+# Model Selection Classifier (1D CNN)
+# A convolutional classifier that learns to predict N from spectra
+# Uses the same simulations as posterior training (no extra cost!)
+classifier:
+  # CNN Architecture
+  conv_channels: [32, 64, 128]  # Channels in each conv layer
+  kernel_sizes: [7, 5, 3]       # Kernel size for each conv layer
+  dropout: 0.1                  # Dropout for regularization
+  
+  # Training
+  n_epochs: 50                  # Training epochs
+  batch_size: 128               # Batch size (can be large, fast training)
+  learning_rate: 0.001          # Adam learning rate
+  validation_fraction: 0.2      # Fraction for validation
+  use_posterior_simulations: true  # Reuse simulations from posterior training
 
 # SBI Architecture (Neural Posterior Estimation)
+# FIXED ARCHITECTURE: Same network size for ALL N to isolate effect of simulation scaling!
 sbi:
   model: 'nsf'               # Neural Spline Flow (better than MAF)
-  hidden_features: 128       # Size of hidden layers in flow
-  num_transforms: 10         # Number of flow transforms (more = better expressivity)
   num_bins: 16               # Spline resolution
   embedding_dim: 64          # Output dimension of spectral embedding
+
+  # FIXED architecture - same for ALL component counts (1-5)
+  # This isolates the effect of simulation scaling!
+  # If N=5 still struggles, increase simulations, not architecture.
+  architecture_scaling:
+    1:  # Use same architecture as N=5
+      hidden_features: 512
+      num_transforms: 30
+    2:  # Use same architecture as N=5
+      hidden_features: 512
+      num_transforms: 30
+    3:  # Use same architecture as N=5
+      hidden_features: 512
+      num_transforms: 30
+    4:  # Use same architecture as N=5
+      hidden_features: 512
+      num_transforms: 30
+    5:  # Maximum capacity
+      hidden_features: 512
+      num_transforms: 30
