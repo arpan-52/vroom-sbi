@@ -14,12 +14,15 @@ Public API:
 """
 from pathlib import Path
 import pickle
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for server
+import matplotlib.pyplot as plt
 
 from sbi.inference import SNPE
 
@@ -128,6 +131,8 @@ def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     
     # NEW: scaling factor for complex models
     simulation_scaling = training.get("simulation_scaling", True)
+    simulation_scaling_mode = training.get("simulation_scaling_mode", "linear")
+    scaling_power = float(training.get("scaling_power", 2.0))
 
     output_dir = Path(training.get("save_dir", "models"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -141,28 +146,36 @@ def _extract_training_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "validation_fraction": validation_fraction,
         "output_dir": output_dir,
         "simulation_scaling": simulation_scaling,
+        "simulation_scaling_mode": simulation_scaling_mode,
+        "scaling_power": scaling_power,
     }
 
 
 def _extract_sbi_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Extract SBI architecture settings from config."""
     sbi_cfg = cfg.get("sbi", {}) or {}
-    
+
     return {
         "model": sbi_cfg.get("model", "nsf"),
-        "hidden_features": int(sbi_cfg.get("hidden_features", 128)),
-        "num_transforms": int(sbi_cfg.get("num_transforms", 10)),
         "num_bins": int(sbi_cfg.get("num_bins", 16)),
         "embedding_dim": int(sbi_cfg.get("embedding_dim", 64)),
+        "architecture_scaling": sbi_cfg.get("architecture_scaling", {
+            1: {"hidden_features": 128, "num_transforms": 10},
+            2: {"hidden_features": 128, "num_transforms": 10},
+            3: {"hidden_features": 192, "num_transforms": 12},
+            4: {"hidden_features": 256, "num_transforms": 15},
+            5: {"hidden_features": 384, "num_transforms": 20},
+        }),
     }
 
 
-def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bool = True) -> int:
+def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bool = True, scaling_mode: str = "linear", scaling_power: float = 2.0) -> int:
     """
     Scale the number of simulations based on model complexity.
-    
+
     Higher-dimensional models need more training data for good posterior coverage.
-    
+    Addresses the curse of dimensionality with aggressive scaling options.
+
     Parameters
     ----------
     n_components : int
@@ -171,20 +184,48 @@ def get_scaled_simulations(n_components: int, base_simulations: int, scaling: bo
         Base number of simulations (for N=1)
     scaling : bool
         Whether to apply scaling (if False, returns base_simulations)
-    
+    scaling_mode : str
+        Scaling strategy:
+        - "linear": Custom factors (1, 2, 4, 6, 8) - old default
+        - "quadratic": N^2 scaling (1, 4, 9, 16, 25) - recommended for high-D
+        - "subquadratic": N^1.5 scaling (1, 2.8, 5.2, 8, 11.2) - balanced
+        - "power": N^scaling_power - fully tunable exponent!
+    scaling_power : float
+        Exponent for "power" mode (e.g., 2.0 = N^2, 2.5 = N^2.5, 3.0 = N^3)
+        Higher values for very large SBI architectures
+
     Returns
     -------
     int
         Scaled number of simulations
+
+    Examples
+    --------
+    With base_simulations=20000:
+    - linear:       20k, 40k, 80k, 120k, 160k
+    - quadratic:    20k, 80k, 180k, 320k, 500k (N^2)
+    - subquadratic: 20k, 57k, 104k, 160k, 224k (N^1.5)
+    - power (2.5):  20k, 113k, 324k, 640k, 1.12M (N^2.5)
+    - power (3.0):  20k, 160k, 540k, 1.28M, 2.5M (N^3)
     """
     if not scaling:
         return base_simulations
-    
-    # Scaling factors: N=1 -> 1x, N=2 -> 2x, N=3 -> 4x, N=4 -> 6x, N=5 -> 8x
-    scaling_factors = {1: 1, 2: 2, 3: 4, 4: 6, 5: 8}
-    factor = scaling_factors. get(n_components, n_components * 2)
-    
-    return base_simulations * factor
+
+    if scaling_mode == "power":
+        # Fully tunable power scaling - adjust exponent as needed!
+        factor = n_components ** scaling_power
+    elif scaling_mode == "quadratic":
+        # N^2 scaling - aggressive for curse of dimensionality
+        factor = n_components ** 2
+    elif scaling_mode == "subquadratic":
+        # N^1.5 scaling - balanced approach
+        factor = n_components ** 1.5
+    else:  # "linear" or default
+        # Custom linear-ish factors (legacy)
+        scaling_factors = {1: 1, 2: 2, 3: 4, 4: 6, 5: 8}
+        factor = scaling_factors.get(n_components, n_components * 2)
+
+    return int(base_simulations * factor)
 
 
 def train_model(
@@ -198,12 +239,18 @@ def train_model(
     validation_fraction: float = 0.1,
     output_dir: Path = Path("models"),
     sbi_cfg: Dict[str, Any] = None,
+    save_simulations: bool = True,
+    model_type: str = "faraday_thin",
+    model_params: dict = None,
 ) -> Dict[str, Any]:
     """
     Train a single model with n_components, using the provided flat_priors
     (keys: rm_min, rm_max, amp_min, amp_max). 
 
     Saves the posterior to output_dir/posterior_n{n_components}.pkl and returns metadata dict.
+    
+    If save_simulations=True, also saves the simulated spectra and weights
+    to output_dir/simulations_n{n_components}.pkl for classifier training.
     """
     # Default SBI config if not provided
     if sbi_cfg is None:
@@ -216,28 +263,37 @@ def train_model(
         }
     
     print(f"\n{'='*60}")
-    print(f"Training model N={n_components} on device={device}")
+    print(f"Training model N={n_components} ({model_type}) on device={device}")
     print(f"{'='*60}")
 
-    simulator = RMSimulator(freq_file, n_components, base_noise_level=base_noise_level)
+    simulator = RMSimulator(
+        freq_file,
+        n_components,
+        base_noise_level=base_noise_level,
+        model_type=model_type,
+        model_params=model_params
+    )
 
-    # Build prior on requested device
+    # Build prior on requested device (now with model_params!)
     try:
-        prior = build_prior(n_components, flat_priors, device=device)
+        prior = build_prior(n_components, flat_priors, device=device, model_type=model_type, model_params=model_params)
     except TypeError:
-        prior = build_prior(n_components, flat_priors)
+        prior = build_prior(n_components, flat_priors, model_type=model_type, model_params=model_params)
 
-    print(f"Simulator params: n_params={simulator.n_params}, n_freq={simulator.n_freq}")
+    print(f"Model type: {model_type}")
+    print(f"Simulator params: n_params={simulator.n_params}, n_freq={simulator.n_freq}, params_per_comp={simulator.params_per_comp}")
     print(f"Simulations: {n_simulations:,}, batch_size: {batch_size}, validation_fraction: {validation_fraction}")
 
-    # Generate simulations (numpy)
-    theta = sample_prior(n_simulations, n_components, flat_priors)
+    # Generate simulations (numpy) - now using model_params!
+    theta = sample_prior(n_simulations, n_components, flat_priors, model_type=model_type, model_params=model_params)
 
     # Simulate in batches to avoid excessive memory usage
     # Apply weight and noise augmentation if enabled
     from .augmentation import augment_weights_combined, augment_base_noise_level
 
     xs = []
+    all_weights = []  # Save weights for classifier training
+    
     for i in tqdm(range(0, n_simulations, batch_size), desc="Simulating"):
         batch_theta = theta[i:i + batch_size]
         batch_size_actual = len(batch_theta)
@@ -257,11 +313,27 @@ def train_model(
             x_sample = simulator(batch_theta[j:j+1], weights=augmented_weights[j])
             batch_xs.append(x_sample)
         xs.append(np.vstack(batch_xs))
+        all_weights.append(augmented_weights)
 
     # Restore original base noise level
     simulator.base_noise_level = base_noise_level
     
     x = np.vstack(xs)
+    all_weights = np.vstack(all_weights)
+    
+    # Save simulations for classifier training
+    if save_simulations:
+        sim_save_path = output_dir / f"simulations_{model_type}_n{n_components}.pkl"
+        with open(sim_save_path, 'wb') as f:
+            pickle.dump({
+                'spectra': x,  # (n_samples, 2 * n_freq) - Q and U
+                'weights': all_weights,  # (n_samples, n_freq)
+                'theta': theta,  # (n_samples, n_params) - parameters
+                'n_components': n_components,
+                'model_type': model_type,  # NEW: Include model type
+                'n_freq': simulator.n_freq,
+            }, f)
+        print(f"Saved simulations for classifier -> {sim_save_path}")
 
     # Convert to torch and move to device
     try:
@@ -279,18 +351,32 @@ def train_model(
     embedding_dim = sbi_cfg["embedding_dim"]
     embedding_net = SpectralEmbedding(input_dim=input_dim, output_dim=embedding_dim).to(device)
 
-    # Build neural posterior with settings from config
+    # Get architecture for this component count (adaptive scaling)
+    arch_scaling = sbi_cfg["architecture_scaling"]
+    # If exact match exists, use it; otherwise use closest larger one
+    if n_components in arch_scaling:
+        arch_config = arch_scaling[n_components]
+    else:
+        # Find the next larger component count that has a config
+        available_counts = sorted([k for k in arch_scaling.keys() if k >= n_components])
+        if available_counts:
+            arch_config = arch_scaling[available_counts[0]]
+        else:
+            # Fallback to largest defined architecture
+            arch_config = arch_scaling[max(arch_scaling.keys())]
+
+    # Build neural posterior with adaptive architecture
     density_estimator_builder = posterior_nn(
         model=sbi_cfg["model"],
-        hidden_features=sbi_cfg["hidden_features"],
-        num_transforms=sbi_cfg["num_transforms"],
+        hidden_features=arch_config["hidden_features"],
+        num_transforms=arch_config["num_transforms"],
         num_bins=sbi_cfg["num_bins"],
         embedding_net=embedding_net
     )
 
     print(f"Using {sbi_cfg['model'].upper()} with custom spectral embedding:")
     print(f"  Input dim: {input_dim}, Embedding dim: {embedding_dim}")
-    print(f"  Hidden features: {sbi_cfg['hidden_features']}, Num transforms: {sbi_cfg['num_transforms']}")
+    print(f"  Architecture for N={n_components}: Hidden={arch_config['hidden_features']}, Transforms={arch_config['num_transforms']}")
 
     inference = SNPE(prior=prior, density_estimator=density_estimator_builder, device=device)
 
@@ -304,11 +390,31 @@ def train_model(
         validation_fraction=validation_fraction,
     )
 
+    # Extract training history from SBI summary (if available)
+    training_history = {}
+    try:
+        # SBI stores training logs in _summary attribute
+        if hasattr(inference, '_summary'):
+            summary = inference._summary
+            # Extract whatever metrics are available
+            if 'train_log_probs' in summary:
+                training_history['train_loss'] = summary['train_log_probs']
+            if 'validation_log_probs' in summary:
+                training_history['val_loss'] = summary['validation_log_probs']
+            if 'epochs' in summary:
+                training_history['epochs'] = summary['epochs']
+    except Exception as e:
+        print(f"  Note: Could not extract training history: {e}")
+
     posterior = inference.build_posterior(density_estimator)
+
+    # Generate and save training plot for this model
+    if len(training_history) > 0:
+        _plot_individual_training(training_history, model_type, n_components, output_dir)
 
     # Save posterior and metadata
     output_dir.mkdir(parents=True, exist_ok=True)
-    save_path = output_dir / f"posterior_n{n_components}.pkl"
+    save_path = output_dir / f"posterior_{model_type}_n{n_components}.pkl"
     with open(save_path, "wb") as f:
         pickle.dump({
             "posterior": posterior,
@@ -317,6 +423,7 @@ def train_model(
             "n_freq": simulator.n_freq,
             "lambda_sq": simulator.lambda_sq,
             "flat_priors": flat_priors,
+            "training_history": training_history,  # Save training curves!
             "config_used": {
                 "freq_file": freq_file,
                 "n_simulations": n_simulations,
@@ -390,6 +497,7 @@ def train_decision_layer(
     val_fraction = decision_cfg.get("validation_fraction", 0.2)
     device = config.get("training", {}).get("device", "cpu")
     hidden_dims = decision_cfg.get("hidden_dims", [256, 128, 64])
+    n_posterior_samples = decision_cfg.get("n_posterior_samples", 1000)  # NEW: configurable
 
     # Load PRE-TRAINED posteriors
     print("\nLoading pre-trained worker models...")
@@ -410,6 +518,7 @@ def train_decision_layer(
 
     print(f"\nGenerating {n_samples} training samples per model...")
     print(f"Using PRE-TRAINED posteriors to compute quality metrics")
+    print(f"Posterior samples for metric computation: {n_posterior_samples}")
 
     # Data containers
     X_all = []  # Spectra + weights
@@ -423,7 +532,7 @@ def train_decision_layer(
     prior_2 = data_2.get("prior", None)
 
     # Helper function to compute AIC/BIC - FIXED VERSION
-    def compute_quality_metrics(posterior, prior, x_obs, n_params, n_data_points, n_samples=1000):
+    def compute_quality_metrics(posterior, prior, x_obs, n_params, n_data_points, n_posterior_samples=1000):
         """
         Compute log evidence, AIC, and BIC for a posterior.
         
@@ -441,7 +550,7 @@ def train_decision_layer(
 
         # Sample from posterior
         with torch.no_grad():
-            samples = posterior.sample((n_samples,), x=x_obs_t)
+            samples = posterior.sample((n_posterior_samples,), x=x_obs_t)
             
             # Find MAP estimate (sample with highest log posterior)
             log_probs = posterior.log_prob(samples, x=x_obs_t)
@@ -465,7 +574,7 @@ def train_decision_layer(
             
             # Compute log evidence estimate via importance sampling
             # This is an approximation: E[p(x|θ)] where θ ~ p(θ|x)
-            log_evidence = torch.logsumexp(log_probs, dim=0).item() - np.log(n_samples)
+            log_evidence = torch.logsumexp(log_probs, dim=0).item() - np.log(n_posterior_samples)
 
         # AIC = 2k - 2 * log(L_max)
         aic = 2 * n_params - 2 * log_likelihood_map
@@ -498,8 +607,8 @@ def train_decision_layer(
             n_params_2 = 6  # 2 * (RM, amp, chi0)
             n_data_points = 2 * n_freq  # Q and U observations
 
-            log_ev_1, aic_1, bic_1 = compute_quality_metrics(posterior_1, prior_1, qu_obs, n_params_1, n_data_points)
-            log_ev_2, aic_2, bic_2 = compute_quality_metrics(posterior_2, prior_2, qu_obs, n_params_2, n_data_points)
+            log_ev_1, aic_1, bic_1 = compute_quality_metrics(posterior_1, prior_1, qu_obs, n_params_1, n_data_points, n_posterior_samples)
+            log_ev_2, aic_2, bic_2 = compute_quality_metrics(posterior_2, prior_2, qu_obs, n_params_2, n_data_points, n_posterior_samples)
 
             # Store
             X_all.append(x_input)
@@ -611,14 +720,181 @@ def train_decision_layer(
     }
 
 
-def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
+def _plot_individual_training(history: Dict[str, Any], model_type: str, n_components: int, output_dir: Path):
+    """
+    Plot and save training curves for an individual SBI posterior.
+
+    Parameters
+    ----------
+    history : dict
+        Training history containing train_loss, val_loss, epochs
+    model_type : str
+        Physical model type (e.g., 'faraday_thin')
+    n_components : int
+        Number of components
+    output_dir : Path
+        Directory to save plots
+    """
+    try:
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+
+        if 'train_loss' in history and len(history['train_loss']) > 0:
+            train_loss = history['train_loss']
+            epochs = history.get('epochs', list(range(len(train_loss))))
+
+            ax.plot(epochs, train_loss, 'b-', linewidth=2, label='Training Loss', alpha=0.8)
+
+            if 'val_loss' in history and len(history['val_loss']) > 0:
+                val_loss = history['val_loss']
+                ax.plot(epochs, val_loss, 'r-', linewidth=2, label='Validation Loss', alpha=0.8)
+
+            ax.set_xlabel('Epoch', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Negative Log Probability', fontsize=12, fontweight='bold')
+            ax.set_title(f'SBI Training: {model_type} (N={n_components})', fontsize=14, fontweight='bold')
+            ax.legend(fontsize=11, loc='best')
+            ax.grid(True, alpha=0.3)
+
+            # Add final loss values as text
+            final_train = train_loss[-1] if len(train_loss) > 0 else np.nan
+            final_text = f'Final Train Loss: {final_train:.2f}'
+            if 'val_loss' in history and len(history['val_loss']) > 0:
+                final_val = history['val_loss'][-1]
+                final_text += f'\nFinal Val Loss: {final_val:.2f}'
+
+            ax.text(0.98, 0.98, final_text, transform=ax.transAxes,
+                   fontsize=10, verticalalignment='top', horizontalalignment='right',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+            plt.tight_layout()
+            plot_path = output_dir / f"training_{model_type}_n{n_components}.png"
+            plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"  ✓ Saved training plot -> {plot_path}")
+        else:
+            print(f"  Note: No training history available for {model_type} N={n_components}")
+
+    except Exception as e:
+        print(f"  Warning: Could not generate training plot for {model_type} N={n_components}: {e}")
+
+
+def _plot_training_summary(results: Dict[str, Any], output_dir: Path, model_types: List[str], max_components: int):
+    """
+    Generate and save training summary plots for all trained SBI posteriors.
+
+    Creates a visual summary showing validation performance across all models.
+    """
+    # Extract validation performance data
+    # Note: SBI doesn't return detailed training history by default,
+    # but we can extract final validation metrics from saved data
+
+    model_names = []
+    val_losses = []
+    n_samples = []
+
+    for model_type in model_types:
+        for n in range(1, max_components + 1):
+            key = f"{model_type}_n{n}"
+            if key in results:
+                model_names.append(f"{model_type}\nN={n}")
+                # Load the saved posterior to get metadata
+                posterior_path = output_dir / f"posterior_{model_type}_n{n}.pkl"
+                try:
+                    with open(posterior_path, 'rb') as f:
+                        data = pickle.load(f)
+                        # Extract metrics from training history
+                        history = data.get('training_history', {})
+                        if 'val_loss' in history and len(history['val_loss']) > 0:
+                            val_loss = history['val_loss'][-1]  # Final validation loss
+                        else:
+                            val_loss = np.nan
+                        n_sims = data.get('config_used', {}).get('n_simulations', 0)
+                        val_losses.append(val_loss)
+                        n_samples.append(n_sims)
+                except Exception as e:
+                    print(f"  Warning: Could not load metrics for {key}: {e}")
+                    val_losses.append(np.nan)
+                    n_samples.append(0)
+
+    # Create summary plot
+    if len(model_names) > 0:
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+
+        x_pos = np.arange(len(model_names))
+        colors = plt.cm.tab10(np.linspace(0, 1, len(model_types)))
+
+        # Plot 1: Number of training samples
+        bar_colors = []
+        for name in model_names:
+            for i, mtype in enumerate(model_types):
+                if mtype in name:
+                    bar_colors.append(colors[i])
+                    break
+
+        ax1.bar(x_pos, [s/1000 for s in n_samples], color=bar_colors, alpha=0.7, edgecolor='black')
+        ax1.set_ylabel('Training Samples (thousands)', fontsize=12, fontweight='bold')
+        ax1.set_title('SBI Training Summary: Sample Counts per Model', fontsize=14, fontweight='bold')
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels(model_names, rotation=45, ha='right', fontsize=9)
+        ax1.grid(axis='y', alpha=0.3)
+
+        # Add legend for model types
+        from matplotlib.patches import Patch
+        legend_elements = [Patch(facecolor=colors[i], alpha=0.7, label=mtype)
+                          for i, mtype in enumerate(model_types)]
+        ax1.legend(handles=legend_elements, loc='upper left', fontsize=10)
+
+        # Plot 2: Validation loss (if available)
+        if not all(np.isnan(val_losses)):
+            ax2.bar(x_pos, val_losses, color=bar_colors, alpha=0.7, edgecolor='black')
+            ax2.set_ylabel('Validation Loss', fontsize=12, fontweight='bold')
+            ax2.set_title('SBI Training Summary: Final Validation Performance', fontsize=14, fontweight='bold')
+            ax2.set_xticks(x_pos)
+            ax2.set_xticklabels(model_names, rotation=45, ha='right', fontsize=9)
+            ax2.grid(axis='y', alpha=0.3)
+        else:
+            ax2.text(0.5, 0.5, 'Validation metrics not available\n(SBI library does not return training history by default)',
+                    ha='center', va='center', fontsize=12, transform=ax2.transAxes)
+            ax2.set_xticks([])
+            ax2.set_yticks([])
+
+        plt.tight_layout()
+        plot_path = output_dir / "training_summary.png"
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"  ✓ Saved training summary plot -> {plot_path}")
+
+        # Also create a text summary
+        summary_path = output_dir / "training_summary.txt"
+        with open(summary_path, 'w') as f:
+            f.write("="*70 + "\n")
+            f.write("SBI POSTERIOR TRAINING SUMMARY\n")
+            f.write("="*70 + "\n\n")
+            for i, name in enumerate(model_names):
+                f.write(f"{name.replace(chr(10), ' ')}: {n_samples[i]:,} samples\n")
+            f.write(f"\nTotal simulations: {sum(n_samples):,}\n")
+            f.write("="*70 + "\n")
+        print(f"  ✓ Saved training summary text -> {summary_path}")
+
+
+def train_all_models(config: Dict[str, Any], decision_layer_only: bool = False) -> Dict[int, Dict[str, Any]]:
     """
     Train models for N = 1 ..  max_components using the exact config structure
     the repository is using.  Returns dict mapping n_components -> saved data dict.
     
     Now with two-layer system:
     - Train worker models (1-comp and 2-comp)
-    - Train decision layer classifier
+    - Train classifier for model selection
+    
+    Parameters
+    ----------
+    config : Dict[str, Any]
+        Configuration dictionary loaded from YAML
+    decision_layer_only : bool
+        If True, skip training worker models and only train the classifier.
+        Requires posterior_n1.pkl, posterior_n2.pkl, and simulation files to exist.
+    classifier_only : bool
+        If True, skip training worker models and only train the classifier.
+        Alias for decision_layer_only for backward compatibility.
     """
     if not isinstance(config, dict):
         raise ValueError("config must be a dict loaded from YAML.")
@@ -629,68 +905,253 @@ def train_all_models(config: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     base_noise_level = _get_base_noise_level(config)
     sbi_cfg = _extract_sbi_cfg(config)
 
-    results: Dict[int, Dict[str, Any]] = {}
+    results: Dict[str, Dict[str, Any]] = {}  # Changed to string keys for model types
 
-    # Train worker models (limit to 1 and 2 components for two-layer system)
-    max_comp = min(training_cfg["max_components"], 2)
-    
+    # Train worker models (1 to max_components, full scale!)
+    max_comp = training_cfg["max_components"]
+
+    # Extract physical model types from config
+    physics_cfg = config.get("physics", {})
+
+    # Support both single model_type (string) and multiple model_types (list)
+    if "model_types" in physics_cfg:
+        model_types = physics_cfg["model_types"]
+        cross_model_training = True
+    elif "model_type" in physics_cfg:
+        model_types = [physics_cfg["model_type"]]
+        cross_model_training = False
+    else:
+        model_types = ["faraday_thin"]  # Default
+        cross_model_training = False
+
     print(f"\n{'='*60}")
-    print("TRAINING TWO-LAYER SYSTEM")
+    if cross_model_training:
+        print(f"CROSS-MODEL TRAINING: {len(model_types)} models × {max_comp} components = {len(model_types) * max_comp} total!")
+        print(f"Models: {', '.join(model_types)}")
+    else:
+        print(f"SINGLE-MODEL TRAINING: {model_types[0]} (1-{max_comp} components)")
     print(f"{'='*60}")
-    print("Phase 1: Training Worker Models (1-comp and 2-comp)")
-    print(f"SBI Architecture: {sbi_cfg['model'].upper()}, hidden={sbi_cfg['hidden_features']}, "
-          f"transforms={sbi_cfg['num_transforms']}, embedding_dim={sbi_cfg['embedding_dim']}")
     
-    for n in range(1, max_comp + 1):
-        # Scale simulations for complex models
-        n_sims = get_scaled_simulations(
-            n_components=n,
-            base_simulations=training_cfg["n_simulations"],
-            scaling=training_cfg["simulation_scaling"],
-        )
-        
-        print(f"\n>>> Model N={n}: Using {n_sims:,} simulations (base: {training_cfg['n_simulations']:,})")
-        
-        data = train_model(
-            n_components=n,
-            freq_file=freq_file,
-            flat_priors=flat_priors,
-            base_noise_level=base_noise_level,
-            n_simulations=n_sims,
-            batch_size=training_cfg["batch_size"],
-            device=training_cfg["device"],
-            validation_fraction=training_cfg["validation_fraction"],
-            output_dir=training_cfg["output_dir"],
-            sbi_cfg=sbi_cfg,
-        )
-        results[n] = data
+    if decision_layer_only:
+        print("Mode: CLASSIFIER ONLY (skipping worker model training)")
+        print(f"Using existing simulations from: {training_cfg['output_dir']}")
+
+        # Verify that simulations exist for all model types
+        for model_type in model_types:
+            for n in range(1, max_comp + 1):
+                sim_path = training_cfg["output_dir"] / f"simulations_{model_type}_n{n}.pkl"
+                if not sim_path.exists():
+                    raise FileNotFoundError(
+                        f"Simulations file not found: {sim_path}\n"
+                        f"Cannot use classifier_only mode without saved simulations.\n"
+                        f"Run full training first to generate simulations."
+                    )
+                print(f"  ✓ Found simulations_{model_type}_n{n}.pkl")
+    else:
+        print(f"\nPhase 1: Training Worker Models")
+        print(f"SBI Architecture: {sbi_cfg['model'].upper()} with adaptive scaling, "
+              f"embedding_dim={sbi_cfg['embedding_dim']}")
+        print(f"  Architecture scaling:")
+        for n_comp, arch_cfg in sorted(sbi_cfg['architecture_scaling'].items()):
+            print(f"    N={n_comp}: hidden={arch_cfg['hidden_features']}, transforms={arch_cfg['num_transforms']}")
+
+        # Loop over all model types
+        for model_type in model_types:
+            model_params = physics_cfg.get(model_type, {})
+
+            print(f"\n{'='*60}")
+            print(f"Training {model_type.upper()} models (1-{max_comp} components)")
+            print(f"{'='*60}")
+
+            for n in range(1, max_comp + 1):
+                # Scale simulations for complex models with tunable power index
+                n_sims = get_scaled_simulations(
+                    n_components=n,
+                    base_simulations=training_cfg["n_simulations"],
+                    scaling=training_cfg["simulation_scaling"],
+                    scaling_mode=training_cfg["simulation_scaling_mode"],
+                    scaling_power=training_cfg["scaling_power"],
+                )
+
+                print(f"\n>>> {model_type} N={n}: Using {n_sims:,} simulations")
+
+                data = train_model(
+                    n_components=n,
+                    freq_file=freq_file,
+                    flat_priors=flat_priors,
+                    base_noise_level=base_noise_level,
+                    n_simulations=n_sims,
+                    batch_size=training_cfg["batch_size"],
+                    device=training_cfg["device"],
+                    validation_fraction=training_cfg["validation_fraction"],
+                    output_dir=training_cfg["output_dir"],
+                    sbi_cfg=sbi_cfg,
+                    save_simulations=True,  # Save for classifier training
+                    model_type=model_type,
+                    model_params=model_params,
+                )
+
+                # Store with composite key
+                results[f"{model_type}_n{n}"] = data
 
     print("\n" + "="*60)
-    print("Phase 2: Training Decision Layer")
+    print("Phase 2: Training Model Selection Classifier")
+    if cross_model_training:
+        print(f"CROSS-MODEL CLASSIFIER: {len(model_types)} models × {max_comp} components = {len(model_types) * max_comp} classes")
+    else:
+        print(f"SINGLE-MODEL CLASSIFIER: {max_comp} classes (component count only)")
     print("="*60)
-    
-    # Train decision layer if enabled
+
+    # Train classifier if enabled
     model_selection = config.get("model_selection", {})
-    if model_selection.get("use_decision_layer", True):
-        decision_result = train_decision_layer(
-            freq_file=freq_file,
-            flat_priors=flat_priors,
-            base_noise_level=base_noise_level,
+    if model_selection.get("use_classifier", True):
+        classifier_result = train_classifier(
             config=config,
             output_dir=training_cfg["output_dir"],
+            max_components=max_comp,
+            model_types=model_types,
+            cross_model_training=cross_model_training,
         )
-        results["decision_layer"] = decision_result
+        results["classifier"] = classifier_result
     
     print("\n" + "="*60)
     print("TRAINING COMPLETE")
     print(f"{'='*60}")
-    print(f"Worker models trained: N = {[n for n in results.keys() if isinstance(n, int)]}")
-    if "decision_layer" in results:
-        dl_result = results['decision_layer']
-        print(f"Quality Prediction Decision Layer:")
-        print(f"  Ensemble accuracy: {dl_result['final_val_accuracy_ensemble']:.2f}%")
-        print(f"  Log evidence accuracy: {dl_result['final_val_accuracy_log_ev']:.2f}%")
-        print(f"  AIC accuracy: {dl_result['final_val_accuracy_aic']:.2f}%")
-        print(f"  BIC accuracy: {dl_result['final_val_accuracy_bic']:.2f}%")
+    if not decision_layer_only:
+        print(f"Worker models trained: N = {[n for n in results.keys() if isinstance(n, int)]}")
+    if "classifier" in results:
+        cl_result = results['classifier']
+        print(f"Model Selection Classifier:")
+        print(f"  Validation accuracy: {cl_result['final_val_accuracy']:.2f}%")
+        for n in range(1, max_comp + 1):
+            acc_key = f'accuracy_{n}comp'
+            if acc_key in cl_result:
+                print(f"  {n}-comp accuracy: {cl_result[acc_key]:.2f}%")
+
+    # Generate training summary plots
+    if not decision_layer_only and len(results) > 0:
+        print("\n" + "="*60)
+        print("Generating Training Summary Plots...")
+        print("="*60)
+        _plot_training_summary(results, training_cfg["output_dir"], model_types, max_comp)
 
     return results
+
+
+def train_classifier(
+    config: Dict[str, Any],
+    output_dir: Path = Path("models"),
+    max_components: int = 2,
+    model_types: List[str] = None,
+    cross_model_training: bool = False,
+) -> Dict[str, Any]:
+    """
+    Train the model selection classifier using saved simulations.
+
+    This classifier learns to predict BOTH the physical model type AND
+    the number of components directly from the observed spectrum.
+
+    Parameters
+    ----------
+    config : Dict[str, Any]
+        Full configuration dictionary
+    output_dir : Path
+        Directory containing saved simulations
+    max_components : int
+        Maximum number of components
+    model_types : List[str], optional
+        List of model types to train on (for cross-model training)
+    cross_model_training : bool
+        If True, trains cross-model classifier (model_type × n_components classes)
+
+    Returns
+    -------
+    Dict[str, Any]
+        Training results and metadata
+    """
+    from .classifier import (
+        ClassifierConfig,
+        ClassifierTrainer,
+        prepare_classifier_data
+    )
+
+    if model_types is None:
+        model_types = ["faraday_thin"]
+    
+    # Get classifier config
+    classifier_cfg = ClassifierConfig.from_config(config)
+    device = config.get("training", {}).get("device", "cpu")
+
+    # Calculate number of classes
+    if cross_model_training:
+        n_classes = len(model_types) * max_components
+        print(f"\nCROSS-MODEL Classifier configuration:")
+        print(f"  Model types: {model_types}")
+        print(f"  Components per model: 1-{max_components}")
+        print(f"  Total classes: {n_classes} ({len(model_types)} models × {max_components} components)")
+    else:
+        n_classes = max_components
+        print(f"\nSINGLE-MODEL Classifier configuration:")
+        print(f"  Model type: {model_types[0]}")
+        print(f"  Classes: {n_classes} (component count only)")
+
+    print(f"\n  Architecture (1D CNN):")
+    print(f"    Conv channels: {classifier_cfg.conv_channels}")
+    print(f"    Kernel sizes: {classifier_cfg.kernel_sizes}")
+    print(f"    Dropout: {classifier_cfg.dropout}")
+    print(f"  Training:")
+    print(f"    Epochs: {classifier_cfg.n_epochs}")
+    print(f"    Batch size: {classifier_cfg.batch_size}")
+    print(f"    Learning rate: {classifier_cfg.learning_rate}")
+    print(f"    Device: {device}")
+
+    # Load simulations
+    print(f"\nLoading simulations from {output_dir}...")
+    train_loader, val_loader, n_freq, class_to_label = prepare_classifier_data(
+        simulations_dir=output_dir,
+        max_components=max_components,
+        model_types=model_types,
+        cross_model_training=cross_model_training,
+        validation_fraction=classifier_cfg.validation_fraction,
+        batch_size=classifier_cfg.batch_size,
+    )
+
+    # Create trainer
+    trainer = ClassifierTrainer(
+        n_freq=n_freq,
+        n_classes=n_classes,
+        config=classifier_cfg,
+        device=device,
+    )
+    
+    # Train
+    print(f"\nTraining classifier...")
+    history = trainer.train(train_loader, val_loader, verbose=True)
+    
+    # Evaluate
+    eval_results = trainer.evaluate(val_loader)
+    
+    # Save
+    save_path = output_dir / "classifier.pkl"
+    trainer.save(str(save_path))
+    print(f"\nSaved classifier -> {save_path}")
+    
+    # Build results dict
+    result = {
+        "model_path": str(save_path),
+        "n_freq": n_freq,
+        "n_classes": n_classes,
+        "max_components": max_components,
+        "model_types": model_types,
+        "cross_model_training": cross_model_training,
+        "class_to_label": class_to_label,  # Mapping from class index to (model_type, n_comp)
+        "history": history,
+        "final_val_accuracy": eval_results['accuracy'],
+    }
+
+    # Add per-class accuracies
+    for key, value in eval_results.items():
+        if key != 'accuracy':
+            result[key] = value
+
+    return result
