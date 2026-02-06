@@ -74,6 +74,41 @@ def load_posterior(model_path: Path) -> Tuple[Any, Dict]:
     return data["posterior"], data
 
 
+def generate_test_cases(
+    n_components: int,
+    n_tests: int,
+    freq_file: str,
+    flat_priors: Dict[str, float],
+    model_type: str,
+    model_params: Dict[str, float],
+    base_noise_level: float = 0.01,
+    seed: int = 42
+):
+    """Generate test cases with known parameters."""
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    # Create simulator with fixed base_noise_level
+    simulator = RMSimulator(
+        freq_file=freq_file,
+        n_components=n_components,
+        base_noise_level=base_noise_level,
+        model_type=model_type,
+        model_params=model_params
+    )
+
+    # Sample n_tests parameter sets from prior
+    theta_all = sample_prior(n_tests, n_components, flat_priors,
+                            model_type=model_type, model_params=model_params)
+
+    x_list = []
+    for i in range(n_tests):
+        x = simulator(theta_all[i])
+        x_list.append(x)
+
+    return theta_all, np.array(x_list), simulator
+
+
 def validate_one_model(
     model_type: str,
     n_components: int,
@@ -113,43 +148,14 @@ def validate_one_model(
         print(f"  Skipping this model.")
         return None
 
-    # Detect which device the posterior is on (don't move it!)
-    # Just use the same device for input data
-    try:
-        if hasattr(posterior, 'net') and hasattr(posterior.net, 'parameters'):
-            first_param = next(posterior.net.parameters())
-            device = str(first_param.device)
-            print(f"  Posterior is on device: {device}")
-    except Exception:
-        print(f"  Using specified device: {device}")
-
-    # Create simulator with same settings
-    simulator = RMSimulator(
-        freq_file=freq_file,
-        n_components=n_components,
-        base_noise_level=base_noise_level,
-        model_type=model_type,
-        model_params=model_params
+    # Generate test cases
+    theta_true_all, x_obs_all, simulator = generate_test_cases(
+        n_components, n_tests, freq_file, flat_priors,
+        model_type, model_params, base_noise_level, seed
     )
 
     # Get params_per_comp
     params_per_comp = simulator.params_per_comp
-
-    # Generate test cases
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-    theta_all = sample_prior(
-        n_tests, n_components, flat_priors,
-        model_type=model_type, model_params=model_params
-    )
-
-    # Simulate observations
-    x_list = []
-    for i in range(n_tests):
-        x = simulator(theta_all[i])
-        x_list.append(x)
-    x_all = np.array(x_list)
 
     # Run inference on each test case
     theta_recovered_all = []
@@ -157,26 +163,19 @@ def validate_one_model(
 
     print(f"Running inference on {n_tests} test cases...")
     for i in tqdm(range(n_tests)):
-        x_obs = torch.tensor(x_all[i], dtype=torch.float32, device=device)
+        x_obs = torch.tensor(x_obs_all[i], dtype=torch.float32).to(device)
 
-        with torch.no_grad():
-            samples = posterior.sample((n_samples,), x=x_obs)
+        samples = posterior.sample((n_samples,), x=x_obs).cpu().numpy()
 
-        samples_np = samples.cpu().numpy()
-
-        # Compute mean and std
-        theta_mean = samples_np.mean(axis=0)
-        theta_std = samples_np.std(axis=0)
-
-        theta_recovered_all.append(theta_mean)
-        theta_std_all.append(theta_std)
+        theta_recovered_all.append(np.mean(samples, axis=0))
+        theta_std_all.append(np.std(samples, axis=0))
 
     theta_recovered_all = np.array(theta_recovered_all)
     theta_std_all = np.array(theta_std_all)
 
     # Compute errors
-    errors = theta_recovered_all - theta_all
-    relative_errors = np.abs(errors) / (np.abs(theta_all) + 1e-10)
+    errors = theta_recovered_all - theta_true_all
+    relative_errors = np.abs(errors) / (np.abs(theta_true_all) + 1e-10)
 
     # Summary statistics
     mae = np.abs(errors).mean(axis=0)
@@ -204,7 +203,7 @@ def validate_one_model(
 
     # Plot 1: Recovery plot (true vs recovered)
     plot_recovery(
-        theta_all, theta_recovered_all, theta_std_all,
+        theta_true_all, theta_recovered_all, theta_std_all,
         param_names, model_type, n_components,
         model_output_dir / "recovery.png"
     )
@@ -297,12 +296,18 @@ def main():
                        help="Number of test cases per model")
     parser.add_argument("--n-samples", type=int, default=5000,
                        help="Posterior samples per test case")
-    parser.add_argument("--device", type=str, default="cpu",
+    parser.add_argument("--device", type=str, default="cuda",
                        help="Device (cpu/cuda)")
     parser.add_argument("--seed", type=int, default=42,
                        help="Random seed")
 
     args = parser.parse_args()
+
+    # Set device
+    device = args.device
+    if device == "cuda" and not torch.cuda.is_available():
+        device = "cpu"
+        print("CUDA not available, using CPU")
 
     # Load config
     config = load_config(args.config)
@@ -336,6 +341,7 @@ def main():
     print(f"Total posteriors to validate: {len(model_types) * max_components}")
     print(f"Test cases per model: {args.n_tests}")
     print(f"Posterior samples per test: {args.n_samples}")
+    print(f"Device: {device}")
     print("="*70)
 
     # Validate all models
@@ -355,7 +361,7 @@ def main():
                 base_noise_level=base_noise_level,
                 n_tests=args.n_tests,
                 n_samples=args.n_samples,
-                device=args.device,
+                device=device,
                 output_dir=output_dir,
                 seed=args.seed + n  # Different seed for each N
             )
