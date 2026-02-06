@@ -115,6 +115,7 @@ def plot_residuals(
     theta_recovered: np.ndarray,
     x_obs: np.ndarray,
     simulator: RMSimulator,
+    freq_file: str,
     base_noise_level: float,
     model_type: str,
     n_components: int,
@@ -122,7 +123,7 @@ def plot_residuals(
     test_idx: int = 0
 ):
     """Plot Q/U residuals between observed and model predictions (model-aware)."""
-    frequencies, weights = load_frequencies(simulator.freq_file)
+    frequencies, weights = load_frequencies(freq_file)
     n_freq = len(frequencies)
     freq_ghz = frequencies / 1e9
 
@@ -365,7 +366,7 @@ def validate_one_model(
     for i in range(n_res):
         plot_residuals(
             theta_true_all[i], theta_recovered_all[i], x_obs_all[i],
-            simulator, base_noise_level, model_type, n_components,
+            simulator, freq_file, base_noise_level, model_type, n_components,
             model_output_dir / f"residuals_test{i+1}.png",
             test_idx=i
         )
