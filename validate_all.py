@@ -31,7 +31,8 @@ from tqdm import tqdm
 import yaml
 
 from src.simulator import RMSimulator, sample_prior
-from src.physics import load_frequencies
+from src.physics import load_frequencies, freq_to_lambda_sq
+import corner
 
 
 def load_config(config_path: str = "config.yaml") -> Dict:
@@ -109,6 +110,152 @@ def generate_test_cases(
     return theta_all, np.array(x_list), simulator
 
 
+def plot_residuals(
+    theta_true: np.ndarray,
+    theta_recovered: np.ndarray,
+    x_obs: np.ndarray,
+    simulator: RMSimulator,
+    base_noise_level: float,
+    model_type: str,
+    n_components: int,
+    output_path: Path,
+    test_idx: int = 0
+):
+    """Plot Q/U residuals between observed and model predictions (model-aware)."""
+    frequencies, weights = load_frequencies(simulator.freq_file)
+    n_freq = len(frequencies)
+    freq_ghz = frequencies / 1e9
+
+    Q_obs = x_obs[:n_freq]
+    U_obs = x_obs[n_freq:]
+
+    # Use simulator to reconstruct from posterior mean (model-aware!)
+    x_recovered = simulator(theta_recovered)
+    Q_model = x_recovered[:n_freq]
+    U_model = x_recovered[n_freq:]
+
+    # Use simulator to reconstruct from true parameters
+    x_true = simulator(theta_true)
+    Q_true = x_true[:n_freq]
+    U_true = x_true[n_freq:]
+
+    # Residuals
+    residuals_Q = Q_obs - Q_model
+    residuals_U = U_obs - U_model
+    rms_Q = np.sqrt(np.mean(residuals_Q**2))
+    rms_U = np.sqrt(np.mean(residuals_U**2))
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    # Q data + fit
+    ax = axes[0, 0]
+    ax.plot(freq_ghz, Q_obs, "ko", markersize=6, label="Observed")
+    ax.plot(freq_ghz, Q_model, "b-", linewidth=2, label="Recovered model")
+    ax.plot(freq_ghz, Q_true, "r--", linewidth=2, alpha=0.7, label="True model")
+    ax.set_xlabel("Frequency (GHz)")
+    ax.set_ylabel("Stokes Q")
+    ax.set_title("Stokes Q")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # U data + fit
+    ax = axes[0, 1]
+    ax.plot(freq_ghz, U_obs, "ko", markersize=6, label="Observed")
+    ax.plot(freq_ghz, U_model, "b-", linewidth=2, label="Recovered model")
+    ax.plot(freq_ghz, U_true, "r--", linewidth=2, alpha=0.7, label="True model")
+    ax.set_xlabel("Frequency (GHz)")
+    ax.set_ylabel("Stokes U")
+    ax.set_title("Stokes U")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Q residuals
+    ax = axes[1, 0]
+    ax.plot(freq_ghz, residuals_Q, "bo-", markersize=6)
+    ax.axhline(0, color="k", linestyle="--", linewidth=1)
+    ax.fill_between(freq_ghz, -base_noise_level, base_noise_level, alpha=0.3, color="red",
+                    label=f"Expected noise: {base_noise_level:.4f}")
+    ax.set_xlabel("Frequency (GHz)")
+    ax.set_ylabel("Residual Q")
+    ax.set_title(f"Q Residuals (RMS: {rms_Q:.4f})")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # U residuals
+    ax = axes[1, 1]
+    ax.plot(freq_ghz, residuals_U, "bo-", markersize=6)
+    ax.axhline(0, color="k", linestyle="--", linewidth=1)
+    ax.fill_between(freq_ghz, -base_noise_level, base_noise_level, alpha=0.3, color="red",
+                    label=f"Expected noise: {base_noise_level:.4f}")
+    ax.set_xlabel("Frequency (GHz)")
+    ax.set_ylabel("Residual U")
+    ax.set_title(f"U Residuals (RMS: {rms_U:.4f})")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Main title with parameter comparison
+    title = f"Test #{test_idx+1} | {model_type}, N={n_components} | Noise={base_noise_level:.4f}\n"
+    # Show first parameter comparison
+    title += f"Param[0]: True={theta_true[0]:.2f}, Rec={theta_recovered[0]:.2f}"
+    fig.suptitle(title, fontsize=12)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_posterior_contours(
+    samples: np.ndarray,
+    theta_true: np.ndarray,
+    param_names: List[str],
+    model_type: str,
+    n_components: int,
+    output_path: Path,
+    test_idx: int = 0
+):
+    """Plot posterior contours with true values marked."""
+    n_params = len(param_names)
+
+    # Set up the style
+    plt.style.use('default')
+
+    # Color scheme
+    color = "#FF1493"  # Deep pink
+    truth_color = "#00FFFF"  # Cyan
+
+    # Create corner plot
+    fig = corner.corner(
+        samples,
+        labels=param_names,
+        truths=theta_true,
+        truth_color=truth_color,
+        quantiles=[0.16, 0.5, 0.84],
+        show_titles=True,
+        title_fmt=".3f",
+        title_kwargs={"fontsize": 11},
+        label_kwargs={"fontsize": 12},
+        levels=[0.393, 0.865, 0.989],  # 1, 2, 3 sigma
+        smooth=1.2,
+        smooth1d=1.0,
+        plot_contours=True,
+        fill_contours=True,
+        plot_datapoints=False,
+        plot_density=False,
+        color=color,
+    )
+
+    # Add title
+    fig.suptitle(
+        f"Posterior Distribution — {model_type}, N={n_components}, Test {test_idx + 1}",
+        fontsize=14,
+        fontweight='medium',
+        y=1.01
+    )
+
+    plt.savefig(output_path, dpi=200, bbox_inches="tight", facecolor='white')
+    plt.close(fig)
+
+
 def validate_one_model(
     model_type: str,
     n_components: int,
@@ -119,6 +266,8 @@ def validate_one_model(
     base_noise_level: float,
     n_tests: int,
     n_samples: int,
+    n_residual_plots: int,
+    n_contour_plots: int,
     device: str,
     output_dir: Path,
     seed: int = 42
@@ -160,6 +309,7 @@ def validate_one_model(
     # Run inference on each test case
     theta_recovered_all = []
     theta_std_all = []
+    all_samples = []  # Store samples for contour plots
 
     print(f"Running inference on {n_tests} test cases...")
     for i in tqdm(range(n_tests)):
@@ -169,6 +319,7 @@ def validate_one_model(
 
         theta_recovered_all.append(np.mean(samples, axis=0))
         theta_std_all.append(np.std(samples, axis=0))
+        all_samples.append(samples)
 
     theta_recovered_all = np.array(theta_recovered_all)
     theta_std_all = np.array(theta_std_all)
@@ -208,7 +359,29 @@ def validate_one_model(
         model_output_dir / "recovery.png"
     )
 
-    print(f"  ✓ Saved plots to {model_output_dir}")
+    # Plot 2: Residual plots (Q/U model fit + residuals)
+    n_res = min(n_residual_plots, n_tests)
+    print(f"  Generating {n_res} residual plots...")
+    for i in range(n_res):
+        plot_residuals(
+            theta_true_all[i], theta_recovered_all[i], x_obs_all[i],
+            simulator, base_noise_level, model_type, n_components,
+            model_output_dir / f"residuals_test{i+1}.png",
+            test_idx=i
+        )
+
+    # Plot 3: Posterior contour plots
+    n_cont = min(n_contour_plots, n_tests)
+    print(f"  Generating {n_cont} contour plots...")
+    for i in range(n_cont):
+        plot_posterior_contours(
+            all_samples[i], theta_true_all[i], param_names,
+            model_type, n_components,
+            model_output_dir / f"contours_test{i+1}.png",
+            test_idx=i
+        )
+
+    print(f"  ✓ Saved all plots to {model_output_dir}")
 
     return {
         "model_type": model_type,
@@ -296,6 +469,10 @@ def main():
                        help="Number of test cases per model")
     parser.add_argument("--n-samples", type=int, default=5000,
                        help="Posterior samples per test case")
+    parser.add_argument("--n-residual-plots", type=int, default=5,
+                       help="Number of residual plots per model")
+    parser.add_argument("--n-contour-plots", type=int, default=5,
+                       help="Number of contour plots per model")
     parser.add_argument("--device", type=str, default="cuda",
                        help="Device (cpu/cuda)")
     parser.add_argument("--seed", type=int, default=42,
@@ -361,6 +538,8 @@ def main():
                 base_noise_level=base_noise_level,
                 n_tests=args.n_tests,
                 n_samples=args.n_samples,
+                n_residual_plots=args.n_residual_plots,
+                n_contour_plots=args.n_contour_plots,
                 device=device,
                 output_dir=output_dir,
                 seed=args.seed + n  # Different seed for each N
