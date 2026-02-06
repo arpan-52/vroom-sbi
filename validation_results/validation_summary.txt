@@ -1,0 +1,293 @@
+======================================================================
+VROOM-SBI POSTERIOR VALIDATION SUMMARY
+======================================================================
+
+
+faraday_thin, N=1:
+--------------------------------------------------
+  RM_1        : MAE = 1.2704, RMSE = 2.1828, σ_post = 16.6876
+  amp_1       : MAE = 0.0184, RMSE = 0.0228, σ_post = 0.0282
+  chi0_1      : MAE = 0.0956, RMSE = 0.2993, σ_post = 0.1426
+
+faraday_thin, N=2:
+--------------------------------------------------
+  RM_1        : MAE = 6.3213, RMSE = 14.4054, σ_post = 21.4825
+  amp_1       : MAE = 0.0216, RMSE = 0.0338, σ_post = 0.0800
+  chi0_1      : MAE = 0.1180, RMSE = 0.1686, σ_post = 0.2935
+  RM_2        : MAE = 16.3435, RMSE = 43.8057, σ_post = 37.7915
+  amp_2       : MAE = 0.0439, RMSE = 0.0628, σ_post = 0.0882
+  chi0_2      : MAE = 0.3433, RMSE = 0.6849, σ_post = 0.3951
+
+faraday_thin, N=3:
+--------------------------------------------------
+  RM_1        : MAE = 6.6110, RMSE = 9.8407, σ_post = 20.5485
+  amp_1       : MAE = 0.0528, RMSE = 0.0746, σ_post = 0.1189
+  chi0_1      : MAE = 0.4398, RMSE = 0.6972, σ_post = 0.5460
+  RM_2        : MAE = 19.5969, RMSE = 40.1057, σ_post = 42.2578
+  amp_2       : MAE = 0.1052, RMSE = 0.1526, σ_post = 0.1405
+  chi0_2      : MAE = 0.5265, RMSE = 0.6838, σ_post = 0.5311
+  RM_3        : MAE = 8.6354, RMSE = 16.5667, σ_post = 26.8276
+  amp_3       : MAE = 0.0757, RMSE = 0.1267, σ_post = 0.1018
+  chi0_3      : MAE = 0.1918, RMSE = 0.2448, σ_post = 0.4431
+
+faraday_thin, N=4:
+--------------------------------------------------
+  RM_1        : MAE = 7.6990, RMSE = 11.7700, σ_post = 25.8327
+  amp_1       : MAE = 0.0914, RMSE = 0.1293, σ_post = 0.1293
+  chi0_1      : MAE = 0.5399, RMSE = 0.8666, σ_post = 0.6336
+  RM_2        : MAE = 43.6901, RMSE = 69.6449, σ_post = 70.8012
+  amp_2       : MAE = 0.1414, RMSE = 0.1983, σ_post = 0.1837
+  chi0_2      : MAE = 0.5792, RMSE = 0.7747, σ_post = 0.7335
+  RM_3        : MAE = 37.0671, RMSE = 67.0555, σ_post = 54.9678
+  amp_3       : MAE = 0.1152, RMSE = 0.1665, σ_post = 0.1578
+  chi0_3      : MAE = 0.4156, RMSE = 0.5799, σ_post = 0.7374
+  RM_4        : MAE = 12.1789, RMSE = 36.3011, σ_post = 20.7815
+  amp_4       : MAE = 0.1207, RMSE = 0.1847, σ_post = 0.1089
+  chi0_4      : MAE = 0.4755, RMSE = 0.8905, σ_post = 0.4393
+
+faraday_thin, N=5:
+--------------------------------------------------
+  RM_1        : MAE = 8.7408, RMSE = 18.1845, σ_post = 26.2172
+  amp_1       : MAE = 0.0798, RMSE = 0.1100, σ_post = 0.1510
+  chi0_1      : MAE = 0.4496, RMSE = 0.7215, σ_post = 0.6678
+  RM_2        : MAE = 30.0036, RMSE = 46.5372, σ_post = 57.3966
+  amp_2       : MAE = 0.1310, RMSE = 0.1807, σ_post = 0.2254
+  chi0_2      : MAE = 0.5730, RMSE = 0.7815, σ_post = 0.8193
+  RM_3        : MAE = 51.1052, RMSE = 73.1772, σ_post = 81.7220
+  amp_3       : MAE = 0.1097, RMSE = 0.1422, σ_post = 0.2260
+  chi0_3      : MAE = 0.6032, RMSE = 0.7977, σ_post = 0.8073
+  RM_4        : MAE = 61.9988, RMSE = 108.0725, σ_post = 75.8991
+  amp_4       : MAE = 0.1962, RMSE = 0.2361, σ_post = 0.2184
+  chi0_4      : MAE = 0.5594, RMSE = 0.7444, σ_post = 0.6686
+  RM_5        : MAE = 5.2707, RMSE = 11.2228, σ_post = 13.8974
+  amp_5       : MAE = 0.1601, RMSE = 0.2087, σ_post = 0.1384
+  chi0_5      : MAE = 0.4208, RMSE = 0.7016, σ_post = 0.4674
+
+burn_slab, N=1:
+--------------------------------------------------
+  phi_c_1     : MAE = 5.4230, RMSE = 6.7373, σ_post = 15.8306
+  delta_phi_1 : MAE = 2.2842, RMSE = 3.1816, σ_post = 6.8511
+  amp_1       : MAE = 0.0361, RMSE = 0.0545, σ_post = 0.0778
+  chi0_1      : MAE = 0.3446, RMSE = 0.4900, σ_post = 0.7373
+
+burn_slab, N=2:
+--------------------------------------------------
+  phi_c_1     : MAE = 20.8641, RMSE = 43.3404, σ_post = 33.7008
+  delta_phi_1 : MAE = 19.2690, RMSE = 32.2778, σ_post = 24.7836
+  amp_1       : MAE = 0.1248, RMSE = 0.1896, σ_post = 0.1384
+  chi0_1      : MAE = 0.8718, RMSE = 0.9803, σ_post = 0.8881
+  phi_c_2     : MAE = 10.7185, RMSE = 30.3361, σ_post = 20.4101
+  delta_phi_2 : MAE = 9.3872, RMSE = 17.2888, σ_post = 13.8995
+  amp_2       : MAE = 0.0908, RMSE = 0.1233, σ_post = 0.0993
+  chi0_2      : MAE = 0.5299, RMSE = 0.6724, σ_post = 0.8803
+
+burn_slab, N=3:
+--------------------------------------------------
+  phi_c_1     : MAE = 11.0638, RMSE = 23.0582, σ_post = 23.9154
+  delta_phi_1 : MAE = 11.3886, RMSE = 17.6904, σ_post = 23.6035
+  amp_1       : MAE = 0.1037, RMSE = 0.1390, σ_post = 0.1391
+  chi0_1      : MAE = 0.7100, RMSE = 0.8673, σ_post = 0.9041
+  phi_c_2     : MAE = 37.9484, RMSE = 57.9667, σ_post = 71.1286
+  delta_phi_2 : MAE = 40.8755, RMSE = 52.3669, σ_post = 39.0766
+  amp_2       : MAE = 0.2151, RMSE = 0.2697, σ_post = 0.2097
+  chi0_2      : MAE = 0.7941, RMSE = 0.8866, σ_post = 0.8942
+  phi_c_3     : MAE = 33.6704, RMSE = 94.9561, σ_post = 48.3160
+  delta_phi_3 : MAE = 19.9988, RMSE = 32.6864, σ_post = 32.5895
+  amp_3       : MAE = 0.1481, RMSE = 0.1975, σ_post = 0.1801
+  chi0_3      : MAE = 0.7748, RMSE = 0.8688, σ_post = 0.9159
+
+burn_slab, N=4:
+--------------------------------------------------
+  phi_c_1     : MAE = 39.9785, RMSE = 70.0066, σ_post = 57.1851
+  delta_phi_1 : MAE = 31.3530, RMSE = 47.1927, σ_post = 39.2490
+  amp_1       : MAE = 0.1810, RMSE = 0.2469, σ_post = 0.1798
+  chi0_1      : MAE = 0.7960, RMSE = 0.9364, σ_post = 0.9239
+  phi_c_2     : MAE = 84.1905, RMSE = 136.6788, σ_post = 91.8407
+  delta_phi_2 : MAE = 44.3941, RMSE = 52.7635, σ_post = 48.3673
+  amp_2       : MAE = 0.2001, RMSE = 0.2450, σ_post = 0.2283
+  chi0_2      : MAE = 0.6687, RMSE = 0.7974, σ_post = 0.9124
+  phi_c_3     : MAE = 47.5185, RMSE = 68.8380, σ_post = 86.6959
+  delta_phi_3 : MAE = 20.2104, RMSE = 25.8776, σ_post = 46.0059
+  amp_3       : MAE = 0.2018, RMSE = 0.2403, σ_post = 0.2338
+  chi0_3      : MAE = 0.7809, RMSE = 0.8978, σ_post = 0.8987
+  phi_c_4     : MAE = 36.1683, RMSE = 65.7049, σ_post = 53.7069
+  delta_phi_4 : MAE = 28.4848, RMSE = 36.9302, σ_post = 38.2335
+  amp_4       : MAE = 0.1292, RMSE = 0.1743, σ_post = 0.1938
+  chi0_4      : MAE = 0.9483, RMSE = 1.0539, σ_post = 0.8792
+
+burn_slab, N=5:
+--------------------------------------------------
+  phi_c_1     : MAE = 15.9201, RMSE = 29.8454, σ_post = 28.9365
+  delta_phi_1 : MAE = 20.3280, RMSE = 33.0481, σ_post = 30.4299
+  amp_1       : MAE = 0.1569, RMSE = 0.2038, σ_post = 0.1768
+  chi0_1      : MAE = 0.6169, RMSE = 0.7620, σ_post = 0.9058
+  phi_c_2     : MAE = 81.5641, RMSE = 124.0924, σ_post = 101.2369
+  delta_phi_2 : MAE = 36.0086, RMSE = 44.7407, σ_post = 44.7378
+  amp_2       : MAE = 0.1977, RMSE = 0.2293, σ_post = 0.2505
+  chi0_2      : MAE = 0.9360, RMSE = 1.0582, σ_post = 0.8995
+  phi_c_3     : MAE = 56.9044, RMSE = 66.4615, σ_post = 105.3900
+  delta_phi_3 : MAE = 39.0955, RMSE = 46.8171, σ_post = 51.4071
+  amp_3       : MAE = 0.1740, RMSE = 0.2117, σ_post = 0.2591
+  chi0_3      : MAE = 0.6968, RMSE = 0.8161, σ_post = 0.9009
+  phi_c_4     : MAE = 64.1518, RMSE = 86.5603, σ_post = 86.4751
+  delta_phi_4 : MAE = 39.5866, RMSE = 48.0259, σ_post = 48.1045
+  amp_4       : MAE = 0.2029, RMSE = 0.2427, σ_post = 0.2450
+  chi0_4      : MAE = 0.8408, RMSE = 0.9427, σ_post = 0.9044
+  phi_c_5     : MAE = 20.1329, RMSE = 34.2103, σ_post = 37.1306
+  delta_phi_5 : MAE = 23.9509, RMSE = 34.1856, σ_post = 32.1212
+  amp_5       : MAE = 0.1261, RMSE = 0.1506, σ_post = 0.1945
+  chi0_5      : MAE = 0.8012, RMSE = 0.9207, σ_post = 0.9117
+
+external_dispersion, N=1:
+--------------------------------------------------
+  phi_1       : MAE = 205.8489, RMSE = 274.1301, σ_post = 231.9688
+  sigma_phi_1 : MAE = 32.5080, RMSE = 41.5899, σ_post = 33.2883
+  amp_1       : MAE = 0.1810, RMSE = 0.2120, σ_post = 0.2716
+  chi0_1      : MAE = 0.7940, RMSE = 0.8708, σ_post = 0.9088
+
+external_dispersion, N=2:
+--------------------------------------------------
+  phi_1       : MAE = 165.9940, RMSE = 217.7414, σ_post = 194.9025
+  sigma_phi_1 : MAE = 30.7938, RMSE = 38.7939, σ_post = 42.6947
+  amp_1       : MAE = 0.2679, RMSE = 0.3002, σ_post = 0.2576
+  chi0_1      : MAE = 0.7992, RMSE = 0.9400, σ_post = 0.8148
+  phi_2       : MAE = 133.7311, RMSE = 167.0414, σ_post = 178.3063
+  sigma_phi_2 : MAE = 35.4139, RMSE = 41.2072, σ_post = 41.0721
+  amp_2       : MAE = 0.1824, RMSE = 0.2365, σ_post = 0.2495
+  chi0_2      : MAE = 0.4604, RMSE = 0.5980, σ_post = 0.7936
+
+external_dispersion, N=3:
+--------------------------------------------------
+  phi_1       : MAE = 157.7189, RMSE = 185.8246, σ_post = 155.5148
+  sigma_phi_1 : MAE = 40.3590, RMSE = 47.1254, σ_post = 49.7115
+  amp_1       : MAE = 0.2064, RMSE = 0.2556, σ_post = 0.2656
+  chi0_1      : MAE = 0.6610, RMSE = 0.8441, σ_post = 0.8227
+  phi_2       : MAE = 170.8235, RMSE = 196.5155, σ_post = 183.9745
+  sigma_phi_2 : MAE = 52.4551, RMSE = 58.6059, σ_post = 56.6786
+  amp_2       : MAE = 0.2588, RMSE = 0.2813, σ_post = 0.2782
+  chi0_2      : MAE = 0.7274, RMSE = 0.8534, σ_post = 0.8534
+  phi_3       : MAE = 143.0930, RMSE = 163.4161, σ_post = 168.6612
+  sigma_phi_3 : MAE = 45.7380, RMSE = 50.8441, σ_post = 52.7168
+  amp_3       : MAE = 0.2342, RMSE = 0.2589, σ_post = 0.2821
+  chi0_3      : MAE = 0.6992, RMSE = 0.8249, σ_post = 0.8452
+
+external_dispersion, N=4:
+--------------------------------------------------
+  phi_1       : MAE = 86.7993, RMSE = 107.5555, σ_post = 151.5917
+  sigma_phi_1 : MAE = 42.3242, RMSE = 52.4967, σ_post = 49.2684
+  amp_1       : MAE = 0.2681, RMSE = 0.3054, σ_post = 0.2775
+  chi0_1      : MAE = 0.7450, RMSE = 0.8824, σ_post = 0.8865
+  phi_2       : MAE = 132.6055, RMSE = 172.8912, σ_post = 169.3815
+  sigma_phi_2 : MAE = 41.1774, RMSE = 46.2550, σ_post = 53.2235
+  amp_2       : MAE = 0.2538, RMSE = 0.2855, σ_post = 0.2765
+  chi0_2      : MAE = 0.6338, RMSE = 0.7740, σ_post = 0.8843
+  phi_3       : MAE = 134.9767, RMSE = 180.8152, σ_post = 164.6126
+  sigma_phi_3 : MAE = 45.3036, RMSE = 50.3823, σ_post = 55.9352
+  amp_3       : MAE = 0.2908, RMSE = 0.3307, σ_post = 0.2735
+  chi0_3      : MAE = 0.7832, RMSE = 0.9403, σ_post = 0.8833
+  phi_4       : MAE = 104.7791, RMSE = 129.0510, σ_post = 131.4220
+  sigma_phi_4 : MAE = 50.6355, RMSE = 56.9054, σ_post = 50.2668
+  amp_4       : MAE = 0.2643, RMSE = 0.3226, σ_post = 0.2680
+  chi0_4      : MAE = 0.9167, RMSE = 1.0348, σ_post = 0.8230
+
+external_dispersion, N=5:
+--------------------------------------------------
+  phi_1       : MAE = 97.4427, RMSE = 116.0270, σ_post = 122.7538
+  sigma_phi_1 : MAE = 32.7481, RMSE = 40.9911, σ_post = 46.7108
+  amp_1       : MAE = 0.1957, RMSE = 0.2433, σ_post = 0.2670
+  chi0_1      : MAE = 0.5480, RMSE = 0.7345, σ_post = 0.8459
+  phi_2       : MAE = 129.8655, RMSE = 163.6468, σ_post = 164.7879
+  sigma_phi_2 : MAE = 41.2487, RMSE = 47.8049, σ_post = 52.6611
+  amp_2       : MAE = 0.2521, RMSE = 0.2975, σ_post = 0.2805
+  chi0_2      : MAE = 0.8977, RMSE = 1.0151, σ_post = 0.9043
+  phi_3       : MAE = 136.4647, RMSE = 160.0821, σ_post = 169.7397
+  sigma_phi_3 : MAE = 51.8397, RMSE = 56.1665, σ_post = 54.4660
+  amp_3       : MAE = 0.2056, RMSE = 0.2424, σ_post = 0.2789
+  chi0_3      : MAE = 0.6918, RMSE = 0.7847, σ_post = 0.8961
+  phi_4       : MAE = 144.8119, RMSE = 178.4880, σ_post = 153.7462
+  sigma_phi_4 : MAE = 55.7616, RMSE = 64.0852, σ_post = 53.1481
+  amp_4       : MAE = 0.2845, RMSE = 0.3222, σ_post = 0.2782
+  chi0_4      : MAE = 0.7900, RMSE = 0.9228, σ_post = 0.8915
+  phi_5       : MAE = 83.7343, RMSE = 105.1821, σ_post = 118.2122
+  sigma_phi_5 : MAE = 42.7166, RMSE = 51.4917, σ_post = 48.5720
+  amp_5       : MAE = 0.1997, RMSE = 0.2497, σ_post = 0.2713
+  chi0_5      : MAE = 0.7134, RMSE = 0.8555, σ_post = 0.8724
+
+internal_dispersion, N=1:
+--------------------------------------------------
+  phi_1       : MAE = 199.0592, RMSE = 248.9986, σ_post = 252.4512
+  sigma_phi_1 : MAE = 30.0934, RMSE = 36.8105, σ_post = 34.3738
+  amp_1       : MAE = 0.1456, RMSE = 0.1834, σ_post = 0.1919
+  chi0_1      : MAE = 0.3520, RMSE = 0.4693, σ_post = 0.5792
+
+internal_dispersion, N=2:
+--------------------------------------------------
+  phi_1       : MAE = 192.2861, RMSE = 244.0631, σ_post = 198.9221
+  sigma_phi_1 : MAE = 37.9441, RMSE = 44.3937, σ_post = 48.0638
+  amp_1       : MAE = 0.2565, RMSE = 0.2947, σ_post = 0.2576
+  chi0_1      : MAE = 0.7431, RMSE = 0.8995, σ_post = 0.7427
+  phi_2       : MAE = 162.8761, RMSE = 190.6488, σ_post = 184.5215
+  sigma_phi_2 : MAE = 44.2916, RMSE = 49.9916, σ_post = 45.6133
+  amp_2       : MAE = 0.2567, RMSE = 0.2889, σ_post = 0.2600
+  chi0_2      : MAE = 0.4256, RMSE = 0.5952, σ_post = 0.7702
+
+internal_dispersion, N=3:
+--------------------------------------------------
+  phi_1       : MAE = 172.0424, RMSE = 198.2652, σ_post = 164.2113
+  sigma_phi_1 : MAE = 40.9403, RMSE = 49.5965, σ_post = 51.3202
+  amp_1       : MAE = 0.1858, RMSE = 0.2434, σ_post = 0.2611
+  chi0_1      : MAE = 0.5907, RMSE = 0.7881, σ_post = 0.8037
+  phi_2       : MAE = 149.4337, RMSE = 183.0488, σ_post = 189.8915
+  sigma_phi_2 : MAE = 49.1089, RMSE = 59.8357, σ_post = 50.8440
+  amp_2       : MAE = 0.2537, RMSE = 0.2734, σ_post = 0.2631
+  chi0_2      : MAE = 0.7687, RMSE = 0.8680, σ_post = 0.8533
+  phi_3       : MAE = 126.8704, RMSE = 145.3007, σ_post = 170.4984
+  sigma_phi_3 : MAE = 48.1026, RMSE = 56.8767, σ_post = 50.5937
+  amp_3       : MAE = 0.2270, RMSE = 0.2529, σ_post = 0.2695
+  chi0_3      : MAE = 0.6236, RMSE = 0.7343, σ_post = 0.7963
+
+internal_dispersion, N=4:
+--------------------------------------------------
+  phi_1       : MAE = 96.4853, RMSE = 119.5019, σ_post = 163.6469
+  sigma_phi_1 : MAE = 51.5661, RMSE = 62.3683, σ_post = 52.4305
+  amp_1       : MAE = 0.2689, RMSE = 0.3016, σ_post = 0.2800
+  chi0_1      : MAE = 0.7910, RMSE = 0.9632, σ_post = 0.9087
+  phi_2       : MAE = 142.0339, RMSE = 179.7764, σ_post = 181.0661
+  sigma_phi_2 : MAE = 44.2035, RMSE = 52.1995, σ_post = 51.5031
+  amp_2       : MAE = 0.2802, RMSE = 0.3204, σ_post = 0.2775
+  chi0_2      : MAE = 0.5576, RMSE = 0.7359, σ_post = 0.8655
+  phi_3       : MAE = 134.7184, RMSE = 179.5158, σ_post = 165.6272
+  sigma_phi_3 : MAE = 39.4980, RMSE = 47.6075, σ_post = 52.2756
+  amp_3       : MAE = 0.2685, RMSE = 0.3092, σ_post = 0.2725
+  chi0_3      : MAE = 0.7377, RMSE = 0.8440, σ_post = 0.8536
+  phi_4       : MAE = 103.4721, RMSE = 122.5473, σ_post = 141.2745
+  sigma_phi_4 : MAE = 51.4961, RMSE = 57.8996, σ_post = 50.4528
+  amp_4       : MAE = 0.2697, RMSE = 0.3115, σ_post = 0.2674
+  chi0_4      : MAE = 0.9131, RMSE = 1.0488, σ_post = 0.8727
+
+internal_dispersion, N=5:
+--------------------------------------------------
+  phi_1       : MAE = 107.4309, RMSE = 124.9435, σ_post = 138.5049
+  sigma_phi_1 : MAE = 44.7088, RMSE = 53.1292, σ_post = 52.1446
+  amp_1       : MAE = 0.2246, RMSE = 0.2725, σ_post = 0.2732
+  chi0_1      : MAE = 0.5479, RMSE = 0.7142, σ_post = 0.8559
+  phi_2       : MAE = 123.2821, RMSE = 150.5798, σ_post = 168.3373
+  sigma_phi_2 : MAE = 43.5891, RMSE = 48.5579, σ_post = 53.5905
+  amp_2       : MAE = 0.2504, RMSE = 0.2865, σ_post = 0.2804
+  chi0_2      : MAE = 0.8414, RMSE = 0.9687, σ_post = 0.8741
+  phi_3       : MAE = 135.5848, RMSE = 158.5514, σ_post = 172.9572
+  sigma_phi_3 : MAE = 49.9853, RMSE = 55.8138, σ_post = 52.9939
+  amp_3       : MAE = 0.1924, RMSE = 0.2284, σ_post = 0.2814
+  chi0_3      : MAE = 0.6916, RMSE = 0.8232, σ_post = 0.8550
+  phi_4       : MAE = 153.7504, RMSE = 182.6681, σ_post = 162.2964
+  sigma_phi_4 : MAE = 56.4514, RMSE = 62.8441, σ_post = 53.7556
+  amp_4       : MAE = 0.2803, RMSE = 0.3241, σ_post = 0.2793
+  chi0_4      : MAE = 0.8150, RMSE = 1.0010, σ_post = 0.8396
+  phi_5       : MAE = 97.5166, RMSE = 113.4141, σ_post = 126.8114
+  sigma_phi_5 : MAE = 45.3502, RMSE = 55.0176, σ_post = 52.2660
+  amp_5       : MAE = 0.2222, RMSE = 0.2616, σ_post = 0.2760
+  chi0_5      : MAE = 0.7528, RMSE = 0.8528, σ_post = 0.8647
+
+======================================================================
+Total models validated: 20
+======================================================================
