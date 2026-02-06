@@ -113,27 +113,15 @@ def validate_one_model(
         print(f"  Skipping this model.")
         return None
 
-    # Move the posterior to the specified device
-    # This ensures ALL components (parameters + buffers like normalization stats) are on same device
+    # Detect which device the posterior is on (don't move it!)
+    # Just use the same device for input data
     try:
-        if hasattr(posterior, 'net'):
-            posterior.net = posterior.net.to(device)
-            print(f"  Moved posterior to device: {device}")
-
-        # Also move any embedding networks if they exist
-        if hasattr(posterior, '_embedding_net') and posterior._embedding_net is not None:
-            posterior._embedding_net = posterior._embedding_net.to(device)
-    except Exception as e:
-        print(f"  Warning: Could not move posterior to {device}: {e}")
-        print(f"  Attempting to detect posterior's current device...")
-        # Fallback: detect device and use that
-        try:
-            if hasattr(posterior, 'net') and hasattr(posterior.net, 'parameters'):
-                first_param = next(posterior.net.parameters())
-                device = str(first_param.device)
-                print(f"  Using posterior's device: {device}")
-        except Exception:
-            pass
+        if hasattr(posterior, 'net') and hasattr(posterior.net, 'parameters'):
+            first_param = next(posterior.net.parameters())
+            device = str(first_param.device)
+            print(f"  Posterior is on device: {device}")
+    except Exception:
+        print(f"  Using specified device: {device}")
 
     # Create simulator with same settings
     simulator = RMSimulator(
