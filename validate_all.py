@@ -113,6 +113,20 @@ def validate_one_model(
         print(f"  Skipping this model.")
         return None
 
+    # Detect the device the posterior is on and use that device
+    # This avoids device mismatch errors
+    actual_device = device
+    try:
+        if hasattr(posterior, 'net') and hasattr(posterior.net, 'parameters'):
+            # Get the device from the first parameter
+            first_param = next(posterior.net.parameters())
+            actual_device = str(first_param.device)
+            if actual_device != device:
+                print(f"  Note: Posterior is on {actual_device}, using that instead of {device}")
+                device = actual_device
+    except Exception:
+        pass  # Use specified device
+
     # Create simulator with same settings
     simulator = RMSimulator(
         freq_file=freq_file,
