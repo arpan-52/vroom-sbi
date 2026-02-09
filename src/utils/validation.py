@@ -283,7 +283,15 @@ def _validate_one_model(
 
 
 def _load_posterior(model_path: Path, device: str = "cpu") -> Tuple[Any, Dict]:
-    """Load posterior from file (supports both .pt and .pkl)."""
+    """
+    Load posterior from file and move to device.
+    
+    CRITICAL: For SBI posteriors with rejection sampling, we need to move:
+    1. The posterior's neural network  
+    2. The prior's bounds (used for rejection sampling support check)
+    
+    Returns (posterior, data_dict, actual_device)
+    """
     import pickle
     
     # Load to CPU first
@@ -294,32 +302,60 @@ def _load_posterior(model_path: Path, device: str = "cpu") -> Tuple[Any, Dict]:
             data = pickle.load(f)
     
     posterior = data["posterior"]
+    actual_device = device
     
-    # Move posterior to device if needed
-    # SBI posteriors have different device handling
+    # Move everything to device if needed
     if device != "cpu":
         try:
-            # For SBI DirectPosterior, we need to move the underlying neural net
+            # 1. Move the posterior's neural network
             if hasattr(posterior, 'posterior_estimator'):
                 posterior.posterior_estimator = posterior.posterior_estimator.to(device)
-            elif hasattr(posterior, '_neural_net'):
+            if hasattr(posterior, '_neural_net'):
                 posterior._neural_net = posterior._neural_net.to(device)
-            elif hasattr(posterior, 'net'):
+            if hasattr(posterior, 'net'):
                 posterior.net = posterior.net.to(device)
-            elif hasattr(posterior, 'to'):
-                posterior = posterior.to(device)
             
-            # Also set the device attribute if it exists
+            # 2. CRITICAL: Move the prior bounds (needed for rejection sampling)
+            # The prior is used to check if samples are within support
+            def move_prior_to_device(prior, dev):
+                """Move prior bounds to device."""
+                if prior is None:
+                    return
+                # Handle BoxUniform wrapped in Independent
+                if hasattr(prior, 'base_dist'):
+                    bd = prior.base_dist
+                    if hasattr(bd, 'low') and hasattr(bd, 'high'):
+                        bd.low = bd.low.to(dev)
+                        bd.high = bd.high.to(dev)
+                # Handle direct BoxUniform
+                elif hasattr(prior, 'low') and hasattr(prior, 'high'):
+                    prior.low = prior.low.to(dev)
+                    prior.high = prior.high.to(dev)
+            
+            # Check different attribute names for prior
+            if hasattr(posterior, '_prior'):
+                move_prior_to_device(posterior._prior, device)
+            if hasattr(posterior, 'prior'):
+                move_prior_to_device(posterior.prior, device)
+            
+            # 3. Set device attribute if it exists
             if hasattr(posterior, '_device'):
                 posterior._device = device
+            
+            # 4. Try the generic .to() method (may help with some components)
+            if hasattr(posterior, 'to'):
+                try:
+                    posterior = posterior.to(device)
+                except Exception:
+                    pass  # Some posteriors don't fully support .to()
                 
-            print(f"  Moved posterior to {device}")
+            print(f"  Moved posterior and prior to {device}")
         except Exception as e:
-            print(f"  Warning: Could not move posterior to {device}: {e}")
-            print(f"  Running inference on CPU instead")
-            device = "cpu"
+            print(f"  Warning: Could not fully move to {device}: {e}")
+            print(f"  Falling back to CPU")
+            actual_device = "cpu"
     
-    return posterior, data, device
+    return posterior, data, actual_device
 
 
 def _plot_recovery(
