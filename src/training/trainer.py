@@ -122,8 +122,7 @@ class SBITrainer:
         logger.info(f"Device: {self.device}")
         logger.info(f"{'='*60}")
         
-        # Get model-specific parameters
-        model_params = self.config.physics.get_model_params(model_type)
+        # Get all prior bounds from centralized config
         flat_priors = self.config.priors.to_flat_dict()
         base_noise_level = self.config.noise.base_level
         
@@ -133,16 +132,14 @@ class SBITrainer:
             n_components=n_components,
             base_noise_level=base_noise_level,
             model_type=model_type,
-            model_params=model_params,
         )
         
-        # Build prior
+        # Build prior (all bounds come from flat_priors)
         prior = build_prior(
             n_components,
             flat_priors,
             device=self.device,
             model_type=model_type,
-            model_params=model_params,
         )
         
         logger.info(f"Simulator: n_params={simulator.n_params}, n_freq={simulator.n_freq}")
@@ -150,7 +147,7 @@ class SBITrainer:
         # Generate simulations
         theta, x, all_weights = self._generate_simulations(
             simulator, n_simulations, n_components, 
-            flat_priors, model_type, model_params
+            flat_priors, model_type
         )
         
         # Save simulations for classifier
@@ -274,14 +271,13 @@ class SBITrainer:
         n_components: int,
         flat_priors: Dict[str, float],
         model_type: str,
-        model_params: Dict[str, float],
     ) -> tuple:
         """Generate simulations with augmentation."""
         
-        # Sample parameters
+        # Sample parameters (flat_priors contains ALL bounds)
         theta = sample_prior(
             n_simulations, n_components, flat_priors,
-            model_type=model_type, model_params=model_params
+            model_type=model_type
         )
         
         batch_size = self.config.training.batch_size

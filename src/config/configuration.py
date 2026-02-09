@@ -3,21 +3,53 @@ Configuration dataclasses for VROOM-SBI.
 
 Provides structured, type-safe configuration management.
 All configuration is loaded from YAML and validated.
+
+ALL PRIORS ARE DEFINED IN ONE PLACE (PriorConfig).
 """
 
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import yaml
+import numpy as np
 
 
 @dataclass
 class PriorConfig:
-    """Prior ranges for physical parameters."""
+    """
+    Prior ranges for ALL physical parameters.
+    
+    This is the SINGLE SOURCE OF TRUTH for all parameter bounds.
+    
+    Parameters by model type:
+    - faraday_thin: [RM, amp, chi0] per component
+    - burn_slab: [phi_c, delta_phi, amp, chi0] per component  
+    - external_dispersion: [phi, sigma_phi, amp, chi0] per component
+    - internal_dispersion: [phi, sigma_phi, amp, chi0] per component
+    """
+    # Faraday depth / Rotation Measure (rad/m²)
+    # Used for: RM (faraday_thin), phi/phi_c (all other models)
     rm_min: float = -500.0
     rm_max: float = 500.0
+    
+    # Fractional polarization amplitude (dimensionless, 0-1)
     amp_min: float = 0.01
     amp_max: float = 1.0
+    
+    # Intrinsic polarization angle (radians)
+    # Physical constraint: [0, π]
+    chi0_min: float = 0.0
+    chi0_max: float = np.pi
+    
+    # RM dispersion for external/internal dispersion models (rad/m²)
+    # Used for: sigma_phi in external_dispersion, internal_dispersion
+    sigma_phi_min: float = 0.0
+    sigma_phi_max: float = 200.0
+    
+    # Slab half-width for burn_slab model (rad/m²)
+    # Used for: delta_phi in burn_slab (full width = 2*delta_phi)
+    delta_phi_min: float = 0.0
+    delta_phi_max: float = 200.0
     
     def to_flat_dict(self) -> Dict[str, float]:
         """Convert to flat dictionary for simulator functions."""
@@ -26,7 +58,42 @@ class PriorConfig:
             "rm_max": self.rm_max,
             "amp_min": max(self.amp_min, 1e-6),  # Safety guard
             "amp_max": self.amp_max,
+            "chi0_min": self.chi0_min,
+            "chi0_max": self.chi0_max,
+            "sigma_phi_min": self.sigma_phi_min,
+            "sigma_phi_max": self.sigma_phi_max,
+            "delta_phi_min": self.delta_phi_min,
+            "delta_phi_max": self.delta_phi_max,
         }
+    
+    def get_bounds_for_model(self, model_type: str, n_components: int) -> tuple:
+        """
+        Get (low, high) bounds arrays for a specific model configuration.
+        
+        Returns arrays suitable for SBI BoxUniform prior.
+        """
+        low = []
+        high = []
+        
+        if model_type == "faraday_thin":
+            # 3 params per component: [RM, amp, chi0]
+            for _ in range(n_components):
+                low.extend([self.rm_min, self.amp_min, self.chi0_min])
+                high.extend([self.rm_max, self.amp_max, self.chi0_max])
+        
+        elif model_type == "burn_slab":
+            # 4 params per component: [phi_c, delta_phi, amp, chi0]
+            for _ in range(n_components):
+                low.extend([self.rm_min, self.delta_phi_min, self.amp_min, self.chi0_min])
+                high.extend([self.rm_max, self.delta_phi_max, self.amp_max, self.chi0_max])
+        
+        else:  # external_dispersion, internal_dispersion
+            # 4 params per component: [phi, sigma_phi, amp, chi0]
+            for _ in range(n_components):
+                low.extend([self.rm_min, self.sigma_phi_min, self.amp_min, self.chi0_min])
+                high.extend([self.rm_max, self.sigma_phi_max, self.amp_max, self.chi0_max])
+        
+        return np.array(low), np.array(high)
 
 
 @dataclass
@@ -94,28 +161,9 @@ class ModelSelectionConfig:
 
 
 @dataclass
-class PhysicsModelParams:
-    """Parameters for a specific physical model type."""
-    max_delta_phi: float = 200.0  # For burn_slab
-    max_sigma_phi: float = 200.0  # For external/internal dispersion
-
-
-@dataclass
 class PhysicsConfig:
     """Physical model configuration."""
     model_types: List[str] = field(default_factory=lambda: ["faraday_thin"])
-    burn_slab: PhysicsModelParams = field(default_factory=PhysicsModelParams)
-    external_dispersion: PhysicsModelParams = field(default_factory=PhysicsModelParams)
-    internal_dispersion: PhysicsModelParams = field(default_factory=PhysicsModelParams)
-    
-    def get_model_params(self, model_type: str) -> Dict[str, float]:
-        """Get parameters for a specific model type."""
-        if model_type == "burn_slab":
-            return {"max_delta_phi": self.burn_slab.max_delta_phi}
-        elif model_type in ("external_dispersion", "internal_dispersion"):
-            params = getattr(self, model_type)
-            return {"max_sigma_phi": params.max_sigma_phi}
-        return {}
 
 
 @dataclass
@@ -183,9 +231,6 @@ class Configuration:
     Loads from YAML and provides structured access to all settings.
     """
     freq_file: str = "freq.txt"
-    phi_min: float = -1000.0
-    phi_max: float = 1000.0
-    phi_n_samples: int = 200
     
     priors: PriorConfig = field(default_factory=PriorConfig)
     noise: NoiseConfig = field(default_factory=NoiseConfig)
@@ -207,19 +252,25 @@ class Configuration:
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> 'Configuration':
         """Create Configuration from dictionary."""
-        # Extract phi settings
-        phi_cfg = raw.get("phi", {})
-        
-        # Extract priors
+        # Extract ALL priors from ONE place
         priors_raw = raw.get("priors", {})
         rm_raw = priors_raw.get("rm", {})
         amp_raw = priors_raw.get("amp", {})
+        chi0_raw = priors_raw.get("chi0", {})
+        sigma_phi_raw = priors_raw.get("sigma_phi", {})
+        delta_phi_raw = priors_raw.get("delta_phi", {})
         
         priors = PriorConfig(
             rm_min=float(rm_raw.get("min", -500.0)),
             rm_max=float(rm_raw.get("max", 500.0)),
             amp_min=float(amp_raw.get("min", 0.01)),
             amp_max=float(amp_raw.get("max", 1.0)),
+            chi0_min=float(chi0_raw.get("min", 0.0)),
+            chi0_max=float(chi0_raw.get("max", np.pi)),
+            sigma_phi_min=float(sigma_phi_raw.get("min", 0.0)),
+            sigma_phi_max=float(sigma_phi_raw.get("max", 200.0)),
+            delta_phi_min=float(delta_phi_raw.get("min", 0.0)),
+            delta_phi_max=float(delta_phi_raw.get("max", 200.0)),
         )
         
         # Extract noise config
@@ -268,22 +319,13 @@ class Configuration:
             classifier_only=bool(ms_raw.get("classifier_only", False)),
         )
         
-        # Extract physics config
+        # Extract physics config (just model types - priors are in PriorConfig!)
         phys_raw = raw.get("physics", {})
         model_types = phys_raw.get("model_types", phys_raw.get("model_type", ["faraday_thin"]))
         if isinstance(model_types, str):
             model_types = [model_types]
-            
-        burn_raw = phys_raw.get("burn_slab", {})
-        ext_raw = phys_raw.get("external_dispersion", {})
-        int_raw = phys_raw.get("internal_dispersion", {})
         
-        physics = PhysicsConfig(
-            model_types=model_types,
-            burn_slab=PhysicsModelParams(max_delta_phi=float(burn_raw.get("max_delta_phi", 200.0))),
-            external_dispersion=PhysicsModelParams(max_sigma_phi=float(ext_raw.get("max_sigma_phi", 200.0))),
-            internal_dispersion=PhysicsModelParams(max_sigma_phi=float(int_raw.get("max_sigma_phi", 200.0))),
-        )
+        physics = PhysicsConfig(model_types=model_types)
         
         # Extract SBI config
         sbi_raw = raw.get("sbi", {})
@@ -331,9 +373,6 @@ class Configuration:
         
         return cls(
             freq_file=str(raw.get("freq_file", "freq.txt")),
-            phi_min=float(phi_cfg.get("min", -1000.0)),
-            phi_max=float(phi_cfg.get("max", 1000.0)),
-            phi_n_samples=int(phi_cfg.get("n_samples", 200)),
             priors=priors,
             noise=noise,
             training=training,
@@ -349,14 +388,12 @@ class Configuration:
         """Convert to dictionary for serialization."""
         return {
             "freq_file": self.freq_file,
-            "phi": {
-                "min": self.phi_min,
-                "max": self.phi_max,
-                "n_samples": self.phi_n_samples,
-            },
             "priors": {
                 "rm": {"min": self.priors.rm_min, "max": self.priors.rm_max},
                 "amp": {"min": self.priors.amp_min, "max": self.priors.amp_max},
+                "chi0": {"min": self.priors.chi0_min, "max": self.priors.chi0_max},
+                "sigma_phi": {"min": self.priors.sigma_phi_min, "max": self.priors.sigma_phi_max},
+                "delta_phi": {"min": self.priors.delta_phi_min, "max": self.priors.delta_phi_max},
             },
             "noise": {
                 "base_level": self.noise.base_level,
