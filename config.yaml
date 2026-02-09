@@ -12,7 +12,7 @@ phi:
 # Prior ranges for parameters
 priors:
   rm:
-    min: 0.0
+    min: -500.0
     max: 500.0
   amp:
     min: 0.01
@@ -30,10 +30,10 @@ noise:
 
 # Training settings
 training:
-  n_simulations: 20000        # Base simulations (for N=1)
+  n_simulations: 30000        # Base simulations (for N=1)
   simulation_scaling: true    # Scale up for complex models
   simulation_scaling_mode: "power"  # Options: "linear", "quadratic" (N^2), "subquadratic" (N^1.5), "power" (N^scaling_power)
-  scaling_power: 2.0          # Exponent for power scaling (2.0 = N^2, 2.5 = N^2.5, 3.0 = N^3)
+  scaling_power: 2.5          # Exponent for power scaling (2.0 = N^2, 2.5 = N^2.5, 3.0 = N^3)
                               # Higher power for bigger SBI architectures!
   batch_size: 50
   n_rounds: 1
@@ -91,8 +91,8 @@ classifier:
   
   # Training
   n_epochs: 50                  # Training epochs
-  batch_size: 128               # Batch size (can be large, fast training)
-  learning_rate: 0.001          # Adam learning rate
+  batch_size: 1024               # Batch size (can be large, fast training)
+  learning_rate: 0.0001          # Adam learning rate
   validation_fraction: 0.2      # Fraction for validation
   use_posterior_simulations: true  # Reuse simulations from posterior training
 
@@ -108,17 +108,17 @@ sbi:
   # If N=5 still struggles, increase simulations, not architecture.
   architecture_scaling:
     1:  # Use same architecture as N=5
-      hidden_features: 512
-      num_transforms: 30
+      hidden_features: 256
+      num_transforms: 15
     2:  # Use same architecture as N=5
-      hidden_features: 512
-      num_transforms: 30
+      hidden_features: 256
+      num_transforms: 15
     3:  # Use same architecture as N=5
-      hidden_features: 512
-      num_transforms: 30
+      hidden_features: 256
+      num_transforms: 15
     4:  # Use same architecture as N=5
-      hidden_features: 512
-      num_transforms: 30
+      hidden_features: 256
+      num_transforms: 15
     5:  # Maximum capacity
-      hidden_features: 512
-      num_transforms: 30
+      hidden_features: 256
+      num_transforms: 15
