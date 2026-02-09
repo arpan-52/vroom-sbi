@@ -20,20 +20,65 @@ logger = logging.getLogger(__name__)
 
 
 def load_posterior(model_path: Path, device: str = 'cpu') -> Tuple[Any, Dict[str, Any]]:
-    """Load a trained posterior from disk."""
+    """
+    Load a trained posterior from disk and move to device.
+    
+    CRITICAL: For SBI posteriors with rejection sampling, we need to move:
+    1. The posterior's neural network  
+    2. The prior's bounds (used for rejection sampling support check)
+    """
     model_path = Path(model_path)
     
+    # Always load to CPU first, then move
     if model_path.suffix == '.pt':
-        data = torch.load(model_path, map_location=device, weights_only=False)
-        posterior = data.get('posterior_object')
+        data = torch.load(model_path, map_location='cpu', weights_only=False)
+        posterior = data.get('posterior') or data.get('posterior_object')
         if posterior is None:
             raise ValueError(f"No posterior object found in {model_path}")
-        return posterior, data
     else:
         import pickle
         with open(model_path, 'rb') as f:
             data = pickle.load(f)
-        return data['posterior'], data
+        posterior = data['posterior']
+    
+    # Move everything to device
+    if device != 'cpu':
+        # 1. Move neural network
+        if hasattr(posterior, 'posterior_estimator'):
+            posterior.posterior_estimator = posterior.posterior_estimator.to(device)
+        if hasattr(posterior, '_neural_net'):
+            posterior._neural_net = posterior._neural_net.to(device)
+        
+        # 2. Move prior bounds (CRITICAL for rejection sampling)
+        def move_prior_to_device(prior, dev):
+            if prior is None:
+                return
+            if hasattr(prior, 'base_dist'):
+                bd = prior.base_dist
+                if hasattr(bd, 'low') and hasattr(bd, 'high'):
+                    bd.low = bd.low.to(dev)
+                    bd.high = bd.high.to(dev)
+            elif hasattr(prior, 'low') and hasattr(prior, 'high'):
+                prior.low = prior.low.to(dev)
+                prior.high = prior.high.to(dev)
+        
+        if hasattr(posterior, '_prior'):
+            move_prior_to_device(posterior._prior, device)
+        if hasattr(posterior, 'prior'):
+            move_prior_to_device(posterior.prior, device)
+        
+        # 3. Set device attribute
+        if hasattr(posterior, '_device'):
+            posterior._device = device
+        
+        # 4. Try generic .to()
+        if hasattr(posterior, 'to'):
+            try:
+                posterior = posterior.to(device)
+            except:
+                pass
+    
+    return posterior, data
 
 
 def load_classifier(model_path: Path, device: str = 'cpu') -> Any:
