@@ -334,14 +334,41 @@ class SBITrainer:
         history = {}
         
         try:
-            if hasattr(inference, '_summary'):
+            # Try different SBI versions' APIs
+            summary = None
+            
+            # Newer SBI (0.22+)
+            if hasattr(inference, 'summary'):
+                summary = inference.summary
+            # Older SBI
+            elif hasattr(inference, '_summary'):
                 summary = inference._summary
-                if 'train_log_probs' in summary:
+            
+            if summary is not None:
+                # Extract training log probs (negative = loss)
+                if 'training_log_probs' in summary:
+                    history['train_loss'] = [-x for x in summary['training_log_probs']]
+                elif 'train_log_probs' in summary:
                     history['train_loss'] = [-x for x in summary['train_log_probs']]
+                
+                # Extract validation log probs
                 if 'validation_log_probs' in summary:
                     history['val_loss'] = [-x for x in summary['validation_log_probs']]
-                if 'epochs' in summary:
+                
+                # Extract epochs
+                if 'epochs_trained' in summary:
+                    history['epochs'] = list(range(1, summary['epochs_trained'] + 1))
+                elif 'epochs' in summary:
                     history['epochs'] = summary['epochs']
+                
+                # Extract best validation
+                if 'best_validation_log_prob' in summary:
+                    history['best_val_loss'] = -summary['best_validation_log_prob']
+                    
+            # If no history found, log it
+            if not history:
+                logger.warning("Could not extract training history from SBI inference object")
+                
         except Exception as e:
             logger.warning(f"Could not extract training history: {e}")
         
@@ -360,11 +387,40 @@ class SBITrainer:
     ):
         """Save posterior model using torch.save()."""
         
-        # Get prior bounds
-        prior_bounds = {
-            'low': prior._prior.base_dist.low.cpu().numpy().tolist(),
-            'high': prior._prior.base_dist.high.cpu().numpy().tolist(),
-        }
+        # Get prior bounds - handle different SBI versions
+        try:
+            # Try newer SBI API
+            if hasattr(prior, 'base_dist'):
+                prior_bounds = {
+                    'low': prior.base_dist.low.cpu().numpy().tolist(),
+                    'high': prior.base_dist.high.cpu().numpy().tolist(),
+                }
+            elif hasattr(prior, '_prior') and hasattr(prior._prior, 'base_dist'):
+                prior_bounds = {
+                    'low': prior._prior.base_dist.low.cpu().numpy().tolist(),
+                    'high': prior._prior.base_dist.high.cpu().numpy().tolist(),
+                }
+            elif hasattr(prior, 'low') and hasattr(prior, 'high'):
+                # Direct BoxUniform attributes
+                prior_bounds = {
+                    'low': prior.low.cpu().numpy().tolist(),
+                    'high': prior.high.cpu().numpy().tolist(),
+                }
+            else:
+                # Fallback: reconstruct from config
+                low, high = self.config.priors.get_bounds_for_model(model_type, n_components)
+                prior_bounds = {
+                    'low': low.tolist(),
+                    'high': high.tolist(),
+                }
+                logger.warning("Could not extract prior bounds from SBI object, using config")
+        except Exception as e:
+            logger.warning(f"Error extracting prior bounds: {e}, using config")
+            low, high = self.config.priors.get_bounds_for_model(model_type, n_components)
+            prior_bounds = {
+                'low': low.tolist(),
+                'high': high.tolist(),
+            }
         
         save_dict = {
             # Model info
@@ -378,8 +434,8 @@ class SBITrainer:
             'posterior_state': posterior.state_dict() if hasattr(posterior, 'state_dict') else None,
             'embedding_net_state': embedding_net.state_dict(),
             
-            # For SBI posterior reconstruction
-            'posterior_object': posterior,  # Full object for backwards compatibility
+            # For SBI posterior reconstruction - save the full object
+            'posterior': posterior,
             
             # Prior info
             'prior_bounds': prior_bounds,

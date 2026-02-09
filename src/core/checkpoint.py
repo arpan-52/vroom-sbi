@@ -350,36 +350,85 @@ def save_training_plots(
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    import numpy as np
     
-    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+    # Check if we have any data
+    has_train = 'train_loss' in loss_history and loss_history['train_loss']
+    has_val = 'val_loss' in loss_history and loss_history['val_loss']
     
-    epochs = range(1, len(loss_history.get('train_loss', [])) + 1)
+    if not has_train and not has_val:
+        logger.warning(f"No training history to plot for {model_type} N={n_components}")
+        return
     
-    if 'train_loss' in loss_history and loss_history['train_loss']:
-        ax.plot(epochs, loss_history['train_loss'], 'b-', linewidth=2, 
-                label='Training Loss', alpha=0.8)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     
-    if 'val_loss' in loss_history and loss_history['val_loss']:
-        ax.plot(epochs, loss_history['val_loss'], 'r-', linewidth=2,
-                label='Validation Loss', alpha=0.8)
+    # --- Left plot: Loss curves ---
+    ax1 = axes[0]
     
-    ax.set_xlabel('Epoch', fontsize=12)
-    ax.set_ylabel('Loss', fontsize=12)
-    ax.set_title(f'Training Progress: {model_type} (N={n_components})', fontsize=14)
-    ax.legend(fontsize=11)
-    ax.grid(True, alpha=0.3)
+    if has_train:
+        train_loss = loss_history['train_loss']
+        epochs = range(1, len(train_loss) + 1)
+        ax1.plot(epochs, train_loss, 'b-', linewidth=2, label='Training Loss', alpha=0.8)
     
-    # Add final values as text
-    if 'train_loss' in loss_history and loss_history['train_loss']:
-        final_train = loss_history['train_loss'][-1]
-        text = f'Final Train: {final_train:.4f}'
-        if 'val_loss' in loss_history and loss_history['val_loss']:
-            text += f'\nFinal Val: {loss_history["val_loss"][-1]:.4f}'
-        ax.text(0.98, 0.98, text, transform=ax.transAxes,
-                fontsize=10, va='top', ha='right',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    if has_val:
+        val_loss = loss_history['val_loss']
+        epochs_val = range(1, len(val_loss) + 1)
+        ax1.plot(epochs_val, val_loss, 'r-', linewidth=2, label='Validation Loss', alpha=0.8)
+        
+        # Mark best validation
+        best_idx = np.argmin(val_loss)
+        ax1.axvline(x=best_idx + 1, color='g', linestyle='--', alpha=0.5, label=f'Best (epoch {best_idx + 1})')
+        ax1.scatter([best_idx + 1], [val_loss[best_idx]], color='g', s=100, zorder=5, marker='*')
+    
+    ax1.set_xlabel('Epoch', fontsize=12)
+    ax1.set_ylabel('Negative Log Probability (Loss)', fontsize=12)
+    ax1.set_title(f'Training Progress: {model_type} (N={n_components})', fontsize=14)
+    ax1.legend(fontsize=10, loc='upper right')
+    ax1.grid(True, alpha=0.3)
+    
+    # --- Right plot: Convergence analysis ---
+    ax2 = axes[1]
+    
+    if has_val and len(val_loss) > 1:
+        # Plot smoothed validation loss
+        window = min(5, len(val_loss) // 3) if len(val_loss) > 5 else 1
+        if window > 1:
+            smoothed = np.convolve(val_loss, np.ones(window)/window, mode='valid')
+            epochs_smooth = range(window, len(val_loss) + 1)
+            ax2.plot(epochs_smooth, smoothed, 'r-', linewidth=2, label=f'Smoothed Val (window={window})')
+        
+        # Calculate improvement rate
+        improvements = np.diff(val_loss)
+        ax2.bar(range(2, len(val_loss) + 1), -improvements, alpha=0.5, color='blue', label='Epoch Improvement')
+        ax2.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
+        
+        ax2.set_xlabel('Epoch', fontsize=12)
+        ax2.set_ylabel('Improvement (decrease in loss)', fontsize=12)
+        ax2.set_title('Convergence Analysis', fontsize=14)
+        ax2.legend(fontsize=10)
+        ax2.grid(True, alpha=0.3)
+    else:
+        ax2.text(0.5, 0.5, 'Not enough data\nfor convergence analysis',
+                 ha='center', va='center', transform=ax2.transAxes, fontsize=14)
+        ax2.set_title('Convergence Analysis', fontsize=14)
+    
+    # Add summary text box
+    summary_text = []
+    if has_train:
+        summary_text.append(f"Final Train Loss: {train_loss[-1]:.4f}")
+    if has_val:
+        summary_text.append(f"Final Val Loss: {val_loss[-1]:.4f}")
+        summary_text.append(f"Best Val Loss: {min(val_loss):.4f}")
+        summary_text.append(f"Best Epoch: {np.argmin(val_loss) + 1}")
+        summary_text.append(f"Total Epochs: {len(val_loss)}")
+    
+    if summary_text:
+        fig.text(0.02, 0.02, '\n'.join(summary_text), fontsize=9,
+                 verticalalignment='bottom', fontfamily='monospace',
+                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
     
     plt.tight_layout()
+    plt.subplots_adjust(bottom=0.2)  # Make room for summary text
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     
