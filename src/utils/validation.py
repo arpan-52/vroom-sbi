@@ -172,8 +172,9 @@ def _validate_one_model(
     print(f"Validating: {model_type}, N={n_components}")
     print(f"{'=' * 70}")
     
-    # Load model
-    posterior, model_data = _load_posterior(model_path)
+    # Load model and move to device
+    posterior, model_data, actual_device = _load_posterior(model_path, device=device)
+    device = actual_device  # Use actual device (may have fallen back to CPU)
     
     # Verify model configuration
     saved_n_components = model_data.get("n_components")
@@ -281,17 +282,44 @@ def _validate_one_model(
     }
 
 
-def _load_posterior(model_path: Path) -> Tuple[Any, Dict]:
+def _load_posterior(model_path: Path, device: str = "cpu") -> Tuple[Any, Dict]:
     """Load posterior from file (supports both .pt and .pkl)."""
     import pickle
     
+    # Load to CPU first
     if model_path.suffix == ".pt":
         data = torch.load(model_path, map_location="cpu")
     else:
         with open(model_path, "rb") as f:
             data = pickle.load(f)
     
-    return data["posterior"], data
+    posterior = data["posterior"]
+    
+    # Move posterior to device if needed
+    # SBI posteriors have different device handling
+    if device != "cpu":
+        try:
+            # For SBI DirectPosterior, we need to move the underlying neural net
+            if hasattr(posterior, 'posterior_estimator'):
+                posterior.posterior_estimator = posterior.posterior_estimator.to(device)
+            elif hasattr(posterior, '_neural_net'):
+                posterior._neural_net = posterior._neural_net.to(device)
+            elif hasattr(posterior, 'net'):
+                posterior.net = posterior.net.to(device)
+            elif hasattr(posterior, 'to'):
+                posterior = posterior.to(device)
+            
+            # Also set the device attribute if it exists
+            if hasattr(posterior, '_device'):
+                posterior._device = device
+                
+            print(f"  Moved posterior to {device}")
+        except Exception as e:
+            print(f"  Warning: Could not move posterior to {device}: {e}")
+            print(f"  Running inference on CPU instead")
+            device = "cpu"
+    
+    return posterior, data, device
 
 
 def _plot_recovery(
