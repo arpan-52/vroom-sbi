@@ -43,8 +43,6 @@ class RMSimulator(BaseSimulator):
         Base noise standard deviation
     model_type : str
         Physical model type
-    model_params : dict, optional
-        Model-specific parameters
     """
     
     VALID_MODEL_TYPES = [
@@ -61,14 +59,12 @@ class RMSimulator(BaseSimulator):
         n_components: int,
         base_noise_level: float = 0.01,
         model_type: str = "faraday_thin",
-        model_params: Optional[Dict] = None
     ):
         self.freq, self._weights = load_frequencies(freq_file)
         self.lambda_sq = freq_to_lambda_sq(self.freq)
         self._n_freq = len(self.freq)
         self.n_components = n_components
         self.model_type = model_type.lower()
-        self.model_params = model_params if model_params is not None else {}
         self.base_noise_level = base_noise_level
         
         # Validate model type

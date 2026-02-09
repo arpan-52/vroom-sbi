@@ -2,25 +2,26 @@
 Prior sampling and construction for VROOM-SBI.
 
 Handles:
-- Building SBI-compatible priors
+- Building SBI-compatible priors from centralized PriorConfig
 - Sampling from priors with RM ordering constraint
 - Sorting posterior samples to break label switching
 """
 
 import numpy as np
 import torch
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 
 def build_prior(
     n_components: int, 
-    config: Dict[str, float], 
+    prior_config,  # PriorConfig or dict
     device: str = "cpu",
     model_type: str = "faraday_thin",
-    model_params: Optional[Dict] = None
 ):
     """
     Build SBI BoxUniform prior for N components.
+    
+    Uses centralized PriorConfig for ALL parameter bounds.
     
     Parameter layout depends on model_type:
     - faraday_thin: [RM, amp, chi0] → 3N params
@@ -35,14 +36,12 @@ def build_prior(
     ----------
     n_components : int
         Number of RM components
-    config : dict
-        Prior configuration with rm_min, rm_max, amp_min, amp_max
+    prior_config : PriorConfig or dict
+        Prior configuration with all parameter bounds
     device : str
         Torch device
     model_type : str
         Physical model type
-    model_params : dict, optional
-        Model-specific parameters (max_delta_phi, max_sigma_phi)
         
     Returns
     -------
@@ -51,57 +50,13 @@ def build_prior(
     """
     from sbi.utils import BoxUniform
     
-    if model_params is None:
-        model_params = {}
-    
-    low = []
-    high = []
-    
-    if model_type == "faraday_thin":
-        # 3 params per component: [RM, amp, chi0]
-        for _ in range(n_components):
-            low.extend([
-                config["rm_min"],
-                config["amp_min"],
-                0.0,  # chi0 min
-            ])
-            high.extend([
-                config["rm_max"],
-                config["amp_max"],
-                np.pi,  # chi0 max
-            ])
-    elif model_type == "burn_slab":
-        # 4 params per component: [phi_c, delta_phi, amp, chi0]
-        max_delta_phi = model_params.get("max_delta_phi", 200.0)
-        for _ in range(n_components):
-            low.extend([
-                config["rm_min"],           # phi_c
-                0.0,                         # delta_phi (non-negative)
-                config["amp_min"],
-                0.0,                         # chi0
-            ])
-            high.extend([
-                config["rm_max"],
-                max_delta_phi,
-                config["amp_max"],
-                np.pi,
-            ])
-    else:  # external_dispersion or internal_dispersion
-        # 4 params per component: [phi, sigma_phi, amp, chi0]
-        max_sigma_phi = model_params.get("max_sigma_phi", 200.0)
-        for _ in range(n_components):
-            low.extend([
-                config["rm_min"],           # phi
-                0.0,                         # sigma_phi (non-negative)
-                config["amp_min"],
-                0.0,                         # chi0
-            ])
-            high.extend([
-                config["rm_max"],
-                max_sigma_phi,
-                config["amp_max"],
-                np.pi,
-            ])
+    # Handle both PriorConfig object and dict
+    if hasattr(prior_config, 'get_bounds_for_model'):
+        # It's a PriorConfig object - use its method
+        low, high = prior_config.get_bounds_for_model(model_type, n_components)
+    else:
+        # It's a dict - build bounds manually
+        low, high = _build_bounds_from_dict(prior_config, model_type, n_components)
     
     low_t = torch.tensor(low, dtype=torch.float32, device=device)
     high_t = torch.tensor(high, dtype=torch.float32, device=device)
@@ -109,12 +64,44 @@ def build_prior(
     return BoxUniform(low=low_t, high=high_t)
 
 
+def _build_bounds_from_dict(config: Dict, model_type: str, n_components: int):
+    """Build bounds arrays from a flat config dict."""
+    # Extract bounds with defaults
+    rm_min = config.get("rm_min", -500.0)
+    rm_max = config.get("rm_max", 500.0)
+    amp_min = config.get("amp_min", 0.01)
+    amp_max = config.get("amp_max", 1.0)
+    chi0_min = config.get("chi0_min", 0.0)
+    chi0_max = config.get("chi0_max", np.pi)
+    sigma_phi_min = config.get("sigma_phi_min", 0.0)
+    sigma_phi_max = config.get("sigma_phi_max", config.get("max_sigma_phi", 200.0))
+    delta_phi_min = config.get("delta_phi_min", 0.0)
+    delta_phi_max = config.get("delta_phi_max", config.get("max_delta_phi", 200.0))
+    
+    low = []
+    high = []
+    
+    if model_type == "faraday_thin":
+        for _ in range(n_components):
+            low.extend([rm_min, amp_min, chi0_min])
+            high.extend([rm_max, amp_max, chi0_max])
+    elif model_type == "burn_slab":
+        for _ in range(n_components):
+            low.extend([rm_min, delta_phi_min, amp_min, chi0_min])
+            high.extend([rm_max, delta_phi_max, amp_max, chi0_max])
+    else:  # external_dispersion, internal_dispersion
+        for _ in range(n_components):
+            low.extend([rm_min, sigma_phi_min, amp_min, chi0_min])
+            high.extend([rm_max, sigma_phi_max, amp_max, chi0_max])
+    
+    return np.array(low), np.array(high)
+
+
 def sample_prior(
     n_samples: int, 
     n_components: int, 
-    config: Dict[str, float],
+    prior_config,  # PriorConfig or dict
     model_type: str = "faraday_thin",
-    model_params: Optional[Dict] = None
 ) -> np.ndarray:
     """
     Sample from prior with RM ordering constraint.
@@ -130,12 +117,10 @@ def sample_prior(
         Number of samples to generate
     n_components : int
         Number of components
-    config : dict
-        Prior configuration with rm_min, rm_max, amp_min, amp_max
+    prior_config : PriorConfig or dict
+        Prior configuration with all parameter bounds
     model_type : str
         Physical model type
-    model_params : dict, optional
-        Model-specific parameters
         
     Returns
     -------
@@ -143,59 +128,21 @@ def sample_prior(
         Parameter samples with shape (n_samples, n_params)
         Guaranteed: first param (RM/phi) sorted descending for n_components >= 2
     """
-    if model_params is None:
-        model_params = {}
-    
-    if model_type == "faraday_thin":
-        params_per_comp = 3
-        theta = np.zeros((n_samples, params_per_comp * n_components))
-        
-        for i in range(n_components):
-            # RM: uniform
-            theta[:, params_per_comp * i] = np.random.uniform(
-                config["rm_min"], config["rm_max"], n_samples
-            )
-            # Amplitude: uniform
-            theta[:, params_per_comp * i + 1] = np.random.uniform(
-                config["amp_min"], config["amp_max"], n_samples
-            )
-            # Chi0: uniform [0, π]
-            theta[:, params_per_comp * i + 2] = np.random.uniform(0, np.pi, n_samples)
-        
-        # Sort components by RM (descending)
-        if n_components >= 2:
-            theta = sort_components_by_rm(theta, n_components, params_per_comp)
-    
+    # Handle both PriorConfig object and dict
+    if hasattr(prior_config, 'get_bounds_for_model'):
+        low, high = prior_config.get_bounds_for_model(model_type, n_components)
     else:
-        # burn_slab, external_dispersion, internal_dispersion
-        params_per_comp = 4
-        theta = np.zeros((n_samples, params_per_comp * n_components))
-        
-        # Get the appropriate max value based on model type
-        if model_type == "burn_slab":
-            max_second_param = model_params.get("max_delta_phi", 200.0)
-        else:  # external_dispersion or internal_dispersion
-            max_second_param = model_params.get("max_sigma_phi", 200.0)
-        
-        for i in range(n_components):
-            # phi/phi_c: uniform
-            theta[:, params_per_comp * i] = np.random.uniform(
-                config["rm_min"], config["rm_max"], n_samples
-            )
-            # sigma_phi or delta_phi: uniform [0, max]
-            theta[:, params_per_comp * i + 1] = np.random.uniform(
-                0.0, max_second_param, n_samples
-            )
-            # Amplitude: uniform
-            theta[:, params_per_comp * i + 2] = np.random.uniform(
-                config["amp_min"], config["amp_max"], n_samples
-            )
-            # Chi0: uniform [0, π]
-            theta[:, params_per_comp * i + 3] = np.random.uniform(0, np.pi, n_samples)
-        
-        # Sort components by phi (descending)
-        if n_components >= 2:
-            theta = sort_components_by_rm(theta, n_components, params_per_comp)
+        low, high = _build_bounds_from_dict(prior_config, model_type, n_components)
+    
+    params_per_comp = get_params_per_component(model_type)
+    n_params = params_per_comp * n_components
+    
+    # Sample uniformly
+    theta = np.random.uniform(low, high, size=(n_samples, n_params))
+    
+    # Sort components by RM/phi (descending) to break label switching
+    if n_components >= 2:
+        theta = sort_components_by_rm(theta, n_components, params_per_comp)
     
     return theta
 
@@ -230,7 +177,7 @@ def sort_components_by_rm(
     theta_sorted = np.zeros_like(theta)
     
     for s in range(n_samples):
-        # Extract first parameter (RM or phi) for this sample
+        # Extract first parameter (RM or phi) for each component
         first_params = np.array([
             theta[s, params_per_comp * i] 
             for i in range(n_components)
