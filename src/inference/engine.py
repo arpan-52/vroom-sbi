@@ -71,10 +71,12 @@ def load_posterior(model_path: Path, device: str = 'cpu') -> Tuple[Any, Dict[str
         if hasattr(posterior, '_device'):
             posterior._device = device
         
-        # 4. Try generic .to()
+        # 4. Try generic .to() - BUT DON'T reassign if it returns None!
         if hasattr(posterior, 'to'):
             try:
-                posterior = posterior.to(device)
+                result = posterior.to(device)
+                if result is not None:
+                    posterior = result
             except:
                 pass
     
