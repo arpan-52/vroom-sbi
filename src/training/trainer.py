@@ -199,20 +199,30 @@ class SBITrainer:
         # Append simulations
         inference.append_simulations(theta_t, x_t)
         
-        # Train
+        # Train with proper settings
         start_time = datetime.now()
         
         density_estimator = inference.train(
             training_batch_size=min(4096, max(1, self.config.training.batch_size)),
             learning_rate=5e-4,
-            show_train_summary=True,
             validation_fraction=self.config.training.validation_fraction,
+            stop_after_epochs=self.config.training.early_stopping_patience,
+            show_train_summary=True,
         )
         
         training_time = (datetime.now() - start_time).total_seconds()
         
-        # Extract training history
+        # Extract training history from SBI summary
         training_history = self._extract_training_history(inference)
+        
+        # Log training summary
+        if training_history.get('train_loss'):
+            logger.info(f"Training epochs: {len(training_history['train_loss'])}")
+            logger.info(f"Final train loss: {training_history['train_loss'][-1]:.4f}")
+        if training_history.get('val_loss'):
+            best_val = min(training_history['val_loss'])
+            best_epoch = training_history['val_loss'].index(best_val) + 1
+            logger.info(f"Best validation loss: {best_val:.4f} (epoch {best_epoch})")
         
         # Build posterior
         posterior = inference.build_posterior(density_estimator)
@@ -251,9 +261,12 @@ class SBITrainer:
                 ))
         
         # Save training plots
-        if training_history:
+        if training_history and (training_history.get('train_loss') or training_history.get('val_loss')):
             plot_path = output_dir / f"training_{model_type}_n{n_components}.png"
             save_training_plots(training_history, plot_path, model_type, n_components)
+            logger.info(f"Saved training plot to {plot_path}")
+        else:
+            logger.warning("No training history available for plotting")
         
         # Store result
         key = f"{model_type}_n{n_components}"
@@ -330,47 +343,102 @@ class SBITrainer:
         return theta, x, all_weights
     
     def _extract_training_history(self, inference) -> Dict[str, List[float]]:
-        """Extract training history from SBI inference object."""
+        """
+        Extract training history from SBI inference object.
+        
+        SBI stores training info in inference.summary (dict) with keys that vary by version.
+        We need to handle:
+        - training_log_probs / validation_log_probs (newer SBI)
+        - training_loss / validation_loss (some versions)
+        - best_validation_log_prob / epochs_trained
+        
+        We convert log probs to loss (negative log prob) for plotting.
+        """
         history = {}
         
         try:
-            # Try different SBI versions' APIs
+            # Get summary - attribute name varies by SBI version
             summary = None
-            
-            # Newer SBI (0.22+)
             if hasattr(inference, 'summary'):
                 summary = inference.summary
-            # Older SBI
             elif hasattr(inference, '_summary'):
                 summary = inference._summary
             
-            if summary is not None:
-                # Extract training log probs (negative = loss)
-                if 'training_log_probs' in summary:
-                    history['train_loss'] = [-x for x in summary['training_log_probs']]
-                elif 'train_log_probs' in summary:
-                    history['train_loss'] = [-x for x in summary['train_log_probs']]
-                
-                # Extract validation log probs
-                if 'validation_log_probs' in summary:
-                    history['val_loss'] = [-x for x in summary['validation_log_probs']]
-                
-                # Extract epochs
-                if 'epochs_trained' in summary:
-                    history['epochs'] = list(range(1, summary['epochs_trained'] + 1))
-                elif 'epochs' in summary:
-                    history['epochs'] = summary['epochs']
-                
-                # Extract best validation
-                if 'best_validation_log_prob' in summary:
-                    history['best_val_loss'] = -summary['best_validation_log_prob']
-                    
-            # If no history found, log it
+            if summary is None or not isinstance(summary, dict):
+                logger.warning(f"No valid summary found. Type: {type(summary)}")
+                return history
+            
+            # Log available keys for debugging
+            logger.info(f"SBI summary keys available: {list(summary.keys())}")
+            
+            # Helper to safely convert to float
+            def to_float(x):
+                if hasattr(x, 'item'):
+                    return x.item()
+                elif hasattr(x, 'cpu'):
+                    return float(x.cpu().numpy())
+                return float(x)
+            
+            # Extract training log probs → convert to loss (negative log prob)
+            for key in ['training_log_probs', 'train_log_probs', 'training_loss']:
+                if key in summary and summary[key] is not None:
+                    values = summary[key]
+                    if isinstance(values, (list, tuple)) and len(values) > 0:
+                        if 'log_prob' in key:
+                            # Convert log prob to loss (negate)
+                            history['train_loss'] = [-to_float(x) for x in values]
+                        else:
+                            history['train_loss'] = [to_float(x) for x in values]
+                        logger.info(f"Found training data in '{key}': {len(history['train_loss'])} epochs")
+                        break
+            
+            # Extract validation log probs
+            for key in ['validation_log_probs', 'val_log_probs', 'validation_loss']:
+                if key in summary and summary[key] is not None:
+                    values = summary[key]
+                    if isinstance(values, (list, tuple)) and len(values) > 0:
+                        if 'log_prob' in key:
+                            history['val_loss'] = [-to_float(x) for x in values]
+                        else:
+                            history['val_loss'] = [to_float(x) for x in values]
+                        logger.info(f"Found validation data in '{key}': {len(history['val_loss'])} epochs")
+                        break
+            
+            # Extract best validation log prob
+            for key in ['best_validation_log_prob', 'best_validation_loss']:
+                if key in summary and summary[key] is not None:
+                    val = summary[key]
+                    if 'log_prob' in key:
+                        history['best_val_loss'] = -to_float(val)
+                    else:
+                        history['best_val_loss'] = to_float(val)
+                    break
+            
+            # Extract epochs trained
+            if 'epochs_trained' in summary:
+                epochs = summary['epochs_trained']
+                if isinstance(epochs, (list, tuple)):
+                    history['epochs_trained'] = int(epochs[-1]) if epochs else 0
+                else:
+                    history['epochs_trained'] = int(to_float(epochs))
+            
+            # Summary
+            if history.get('train_loss'):
+                logger.info(f"Training history: {len(history['train_loss'])} epochs")
+                logger.info(f"  Final train loss: {history['train_loss'][-1]:.4f}")
+            if history.get('val_loss'):
+                best_val = min(history['val_loss'])
+                best_epoch = history['val_loss'].index(best_val) + 1
+                logger.info(f"  Best val loss: {best_val:.4f} (epoch {best_epoch})")
+            
             if not history:
-                logger.warning("Could not extract training history from SBI inference object")
+                logger.warning("Could not extract any training history")
+                logger.warning(f"Summary content: {summary}")
                 
         except Exception as e:
-            logger.warning(f"Could not extract training history: {e}")
+            logger.warning(f"Error extracting training history: {e}")
+            import traceback
+            traceback.print_exc()
         
         return history
     

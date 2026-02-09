@@ -108,14 +108,6 @@ def validate_all_models(
     all_results = []
     
     for model_type in model_types:
-        # Get model-specific parameters
-        model_params = getattr(config.physics, model_type, {})
-        if hasattr(model_params, '__dict__'):
-            model_params = {k: v for k, v in model_params.__dict__.items() 
-                          if not k.startswith('_')}
-        else:
-            model_params = {}
-        
         for n_components in range(1, max_components + 1):
             result = _validate_one_model(
                 model_type=model_type,
@@ -123,7 +115,6 @@ def validate_all_models(
                 models_dir=models_dir,
                 freq_file=freq_file,
                 flat_priors=flat_priors,
-                model_params=model_params,
                 base_noise_level=base_noise_level,
                 n_tests=n_tests,
                 n_samples=n_samples,
@@ -152,7 +143,6 @@ def _validate_one_model(
     models_dir: Path,
     freq_file: str,
     flat_priors: Dict[str, float],
-    model_params: Dict[str, float],
     base_noise_level: float,
     n_tests: int,
     n_samples: int,
@@ -195,13 +185,12 @@ def _validate_one_model(
     np.random.seed(seed)
     torch.manual_seed(seed)
     
-    # Create simulator
+    # Create simulator (no model_params needed - bounds are in flat_priors)
     simulator = RMSimulator(
         freq_file=freq_file,
         n_components=n_components,
         base_noise_level=base_noise_level,
         model_type=model_type,
-        model_params=model_params,
     )
     
     params_per_comp = get_params_per_component(model_type)
@@ -210,7 +199,7 @@ def _validate_one_model(
     # Generate test cases with known parameters (sorted by RM)
     theta_true_all = sample_prior(
         n_tests, n_components, flat_priors,
-        model_type=model_type, model_params=model_params
+        model_type=model_type
     )
     
     # Simulate observations
