@@ -169,15 +169,25 @@ def print_config_summary(config: Configuration):
     print("=" * 70)
     
     print(f"\nFrequency file: {config.freq_file}")
-    print(f"Faraday depth range: [{config.phi_min}, {config.phi_max}] rad/m²")
     
     print(f"\nPriors:")
-    print(f"  RM: [{config.priors.rm_min}, {config.priors.rm_max}] rad/m²")
+    print(f"  RM/phi: [{config.priors.rm_min}, {config.priors.rm_max}] rad/m²")
     print(f"  Amplitude: [{config.priors.amp_min}, {config.priors.amp_max}]")
+    print(f"  chi0: [{config.priors.chi0_min:.3f}, {config.priors.chi0_max:.3f}] rad")
+    print(f"  sigma_phi: [{config.priors.sigma_phi_min}, {config.priors.sigma_phi_max}] rad/m²")
+    print(f"  delta_phi: [{config.priors.delta_phi_min}, {config.priors.delta_phi_max}] rad/m²")
     
     print(f"\nNoise:")
     print(f"  Base level: {config.noise.base_level}")
     print(f"  Augmentation: {config.noise.augmentation_enable}")
+    if config.noise.augmentation_enable:
+        print(f"  Noise range: [{config.noise.augmentation_min_factor}x, {config.noise.augmentation_max_factor}x]")
+    
+    print(f"\nWeight Augmentation:")
+    print(f"  Enabled: {config.weight_augmentation.enable}")
+    print(f"  Scattered prob: {config.weight_augmentation.scattered_prob}")
+    print(f"  Gap prob: {config.weight_augmentation.gap_prob}")
+    print(f"  Large block prob: {config.weight_augmentation.large_block_prob}")
     
     print(f"\nTraining:")
     print(f"  Device: {config.training.device}")

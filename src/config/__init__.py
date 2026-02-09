@@ -12,8 +12,9 @@ from .configuration import (
     SBIConfig,
     ClassifierConfig,
     MemoryConfig,
+    WeightAugmentationConfig,
 )
-from .validators import validate_config, ConfigurationError
+from .validators import validate_config, print_config_summary, ConfigurationError
 
 __all__ = [
     'Configuration',
@@ -25,6 +26,8 @@ __all__ = [
     'SBIConfig',
     'ClassifierConfig',
     'MemoryConfig',
+    'WeightAugmentationConfig',
     'validate_config',
+    'print_config_summary',
     'ConfigurationError',
 ]
