@@ -373,10 +373,14 @@ def _load_posterior(model_path: Path, device: str = "cpu") -> Tuple[Any, Dict, s
             if hasattr(posterior, '_device'):
                 posterior._device = device
             
-            # 4. Try the generic .to() method
+            # 4. Try the generic .to() method - BUT DON'T reassign!
+            # SBI's .to() modifies in place and may return None
             if hasattr(posterior, 'to'):
                 try:
-                    posterior = posterior.to(device)
+                    result = posterior.to(device)
+                    # Only use result if it's not None (some .to() methods return self, some return None)
+                    if result is not None:
+                        posterior = result
                 except Exception:
                     pass
                 
