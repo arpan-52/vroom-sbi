@@ -176,6 +176,12 @@ def _validate_one_model(
     posterior, model_data, actual_device = _load_posterior(model_path, device=device)
     device = actual_device  # Use actual device (may have fallen back to CPU)
     
+    # Sanity check
+    if posterior is None:
+        print(f"  ⚠️  ERROR: Posterior is None after loading!")
+        print(f"  Model data keys: {list(model_data.keys())}")
+        return None
+    
     # Verify model configuration
     saved_n_components = model_data.get("n_components")
     if saved_n_components != n_components:
@@ -282,7 +288,7 @@ def _validate_one_model(
     }
 
 
-def _load_posterior(model_path: Path, device: str = "cpu") -> Tuple[Any, Dict]:
+def _load_posterior(model_path: Path, device: str = "cpu") -> Tuple[Any, Dict, str]:
     """
     Load posterior from file and move to device.
     
@@ -294,6 +300,8 @@ def _load_posterior(model_path: Path, device: str = "cpu") -> Tuple[Any, Dict]:
     """
     import pickle
     
+    print(f"  Loading model from {model_path}")
+    
     # Load to CPU first
     if model_path.suffix == ".pt":
         data = torch.load(model_path, map_location="cpu")
@@ -301,7 +309,20 @@ def _load_posterior(model_path: Path, device: str = "cpu") -> Tuple[Any, Dict]:
         with open(model_path, "rb") as f:
             data = pickle.load(f)
     
-    posterior = data["posterior"]
+    # Debug: show available keys
+    print(f"  Model file keys: {list(data.keys())}")
+    
+    # Try different keys for the posterior
+    posterior = None
+    for key in ['posterior', 'posterior_object']:
+        if key in data and data[key] is not None:
+            posterior = data[key]
+            print(f"  Found posterior under key: '{key}'")
+            break
+    
+    if posterior is None:
+        raise ValueError(f"No posterior found in {model_path}. Available keys: {list(data.keys())}")
+    
     actual_device = device
     
     # Move everything to device if needed
@@ -310,48 +331,60 @@ def _load_posterior(model_path: Path, device: str = "cpu") -> Tuple[Any, Dict]:
             # 1. Move the posterior's neural network
             if hasattr(posterior, 'posterior_estimator'):
                 posterior.posterior_estimator = posterior.posterior_estimator.to(device)
+                print(f"  Moved posterior_estimator to {device}")
             if hasattr(posterior, '_neural_net'):
                 posterior._neural_net = posterior._neural_net.to(device)
+                print(f"  Moved _neural_net to {device}")
             if hasattr(posterior, 'net'):
                 posterior.net = posterior.net.to(device)
+                print(f"  Moved net to {device}")
             
             # 2. CRITICAL: Move the prior bounds (needed for rejection sampling)
-            # The prior is used to check if samples are within support
             def move_prior_to_device(prior, dev):
                 """Move prior bounds to device."""
                 if prior is None:
-                    return
+                    return False
+                moved = False
                 # Handle BoxUniform wrapped in Independent
                 if hasattr(prior, 'base_dist'):
                     bd = prior.base_dist
                     if hasattr(bd, 'low') and hasattr(bd, 'high'):
                         bd.low = bd.low.to(dev)
                         bd.high = bd.high.to(dev)
+                        moved = True
                 # Handle direct BoxUniform
                 elif hasattr(prior, 'low') and hasattr(prior, 'high'):
                     prior.low = prior.low.to(dev)
                     prior.high = prior.high.to(dev)
+                    moved = True
+                return moved
             
             # Check different attribute names for prior
+            prior_moved = False
             if hasattr(posterior, '_prior'):
-                move_prior_to_device(posterior._prior, device)
+                prior_moved = move_prior_to_device(posterior._prior, device) or prior_moved
             if hasattr(posterior, 'prior'):
-                move_prior_to_device(posterior.prior, device)
+                prior_moved = move_prior_to_device(posterior.prior, device) or prior_moved
+            
+            if prior_moved:
+                print(f"  Moved prior bounds to {device}")
             
             # 3. Set device attribute if it exists
             if hasattr(posterior, '_device'):
                 posterior._device = device
             
-            # 4. Try the generic .to() method (may help with some components)
+            # 4. Try the generic .to() method
             if hasattr(posterior, 'to'):
                 try:
                     posterior = posterior.to(device)
                 except Exception:
-                    pass  # Some posteriors don't fully support .to()
+                    pass
                 
-            print(f"  Moved posterior and prior to {device}")
+            print(f"  Successfully moved posterior to {device}")
         except Exception as e:
             print(f"  Warning: Could not fully move to {device}: {e}")
+            import traceback
+            traceback.print_exc()
             print(f"  Falling back to CPU")
             actual_device = "cpu"
     
