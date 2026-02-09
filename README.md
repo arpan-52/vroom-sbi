@@ -1,163 +1,138 @@
-# VROOM-SBI: Simulation-Based Inference for RM Synthesis
+# VROOM-SBI
 
-VROOM-SBI (Variable Rotation Measure via Simulation-Based Inference) is a Python package for inferring Rotation Measure (RM) components from polarized radio observations using neural posterior estimation.
+Simulation-Based Inference for RM (Rotation Measure) Synthesis.
 
 ## Features
 
-- **Simulation-Based Inference**: Uses neural density estimation (SNPE) to learn posterior distributions
-- **Multi-Component Support**: Automatically infers the number of RM components (1-5)
-- **Model Selection**: Uses log evidence for model comparison
-- **GPU Acceleration**: Full CUDA support for training and inference
-- **Faraday Synthesis**: Built on standard RM synthesis techniques
+- **Multiple physical models**: Faraday thin, Burn slab, External dispersion, Internal dispersion
+- **Multi-component support**: 1-5 RM components with RM sorting to break label switching
+- **CNN classifier**: Automatic model/component selection
+- **Proper depolarization**: Corrected λ⁴ formulas for dispersion models
+- **HuggingFace integration**: Push/download models to HF Hub
 
 ## Installation
 
-1. Clone the repository:
 ```bash
-git clone https://github.com/arpan-52/vroom-sbi.git
+# Clone the repository
+git clone <your-repo-url>
 cd vroom-sbi
+
+# Install in development mode
+pip install -e .
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+## Usage
 
-## Quick Start
-
-### 1. Train Models
-
-Train neural posterior estimators for all component models (N=1 to 5):
+### Train Models
 
 ```bash
-python train_all.py
+vroom-sbi train --config config.yaml
+vroom-sbi train --config config.yaml --device cuda
+vroom-sbi train --config config.yaml --classifier-only  # Retrain classifier only
 ```
 
-This will create trained models in the `models/` directory:
-- `model_n1.pkl` - Single component
-- `model_n2.pkl` - Two components
-- `model_n3.pkl` - Three components
-- `model_n4.pkl` - Four components
-- `model_n5.pkl` - Five components
-
-### 2. Run Inference
-
-Provide observed Stokes Q and U values to infer RM components:
+### Validate Trained Models
 
 ```bash
-python infer.py --q 0.5,0.3,-0.1,0.2,0.4,0.1,-0.2,0.3,0.1,0.2,0.3,0.1 \
-                --u 0.1,0.2,0.3,0.1,-0.2,0.3,0.4,0.2,0.1,0.3,0.2,0.1 \
-                --output results.png
+vroom-sbi validate --config config.yaml --models-dir models/
+vroom-sbi validate --config config.yaml --n-tests 50 --n-samples 10000
+vroom-sbi validate --config config.yaml --output-dir validation_results/
 ```
 
-Output:
-- Best model and number of components
-- Posterior samples for each parameter
-- Visualization with data, RMSF, posterior, and corner plot
+### Run Inference
 
-## How It Works
-
-### Forward Model
-
-VROOM-SBI models polarized emission as a sum of Faraday-thin components:
-
-```
-P(λ²) = Σᵢ pᵢ exp(2i·RMᵢ·λ²)
+```bash
+vroom-sbi infer --q "0.5,0.3,-0.1,0.2" --u "0.1,0.2,0.3,0.4"
+vroom-sbi infer --q "..." --u "..." --models-dir models/ --n-samples 20000
+vroom-sbi infer --q "..." --u "..." --output results.png
 ```
 
-where:
-- `pᵢ = qᵢ + i·uᵢ` is the complex polarization amplitude
-- `RMᵢ` is the Rotation Measure in rad/m²
-- `λ²` is the squared wavelength
+### Push to HuggingFace
 
-This is converted to Stokes Q and U:
-```
-Q(λ²) = Re[P(λ²)] + noise
-U(λ²) = Im[P(λ²)] + noise
+```bash
+export HF_TOKEN=your_token_here
+vroom-sbi push --models-dir models/ --repo-id username/vroom-sbi-models
 ```
 
-### Neural Posterior Estimation
+## Python API
 
-1. **Training Phase**: 
-   - Generate synthetic observations from the forward model
-   - Train a neural density estimator to approximate p(θ|x)
-   - Separate models for N=1,2,3,4,5 components
+```python
+from src import Configuration, train_all_models, InferenceEngine
 
-2. **Inference Phase**:
-   - Load trained models
-   - Compute posterior samples for each model
-   - Select best model using log evidence
-   - Return posterior distributions for parameters
+# Train
+config = Configuration.from_yaml('config.yaml')
+train_all_models(config)
 
-### Model Selection
+# Inference
+engine = InferenceEngine(config, model_dir='models')
+engine.load_models()
 
-The best number of components is selected using the log marginal likelihood (evidence):
+import numpy as np
+qu_obs = np.concatenate([Q_data, U_data])
+result, all_results = engine.infer(qu_obs)
 
+print(f"Best model: {result.model_type}, N={result.n_components}")
+for comp in result.components:
+    print(f"  RM = {comp.rm_mean:.2f} ± {comp.rm_std:.2f}")
 ```
-log p(x|N) ≈ log Σᵢ p(x|θᵢ,N)
-```
 
-This naturally penalizes overly complex models (Occam's razor).
+## Physical Models
+
+| Model | Parameters per component | Description |
+|-------|-------------------------|-------------|
+| `faraday_thin` | RM, amp, χ₀ | Simple Faraday rotation |
+| `burn_slab` | φ_c, Δφ, amp, χ₀ | Slab with sinc depolarization |
+| `external_dispersion` | φ, σ_φ, amp, χ₀ | External Gaussian depolarization (λ⁴) |
+| `internal_dispersion` | φ, σ_φ, amp, χ₀ | Internal/Sokoloff dispersion (λ⁴) |
+
+## RM Sorting (Label Switching)
+
+For multi-component models (N ≥ 2), components are sorted by Faraday depth:
+- RM₁ > RM₂ > RM₃ > ... (descending)
+
+This ensures unique ordering and breaks the label switching symmetry where
+(RM₁, RM₂) and (RM₂, RM₁) represent the same physical configuration.
+
+Sorting is applied:
+1. During prior sampling (training)
+2. After posterior sampling (inference)
 
 ## Configuration
 
-Edit `config.yaml` to customize:
-- Frequency file path
-- Faraday depth sampling range
-- Prior ranges for RM, amplitude, and noise
-- Training parameters (simulations, batch size, device)
+See `config.yaml` for all options:
 
-## File Structure
+```yaml
+freq_file: "freq.txt"
 
-```
-vroom-sbi/
-├── requirements.txt       # Python dependencies
-├── config.yaml           # Configuration file
-├── freq.txt              # Frequency channels
-├── README.md             # This file
-├── train_all.py          # Training script
-├── infer.py              # Inference script
-├── test_recovery.py      # Recovery tests
-└── src/
-    ├── __init__.py       # Package initialization
-    ├── physics.py        # RM synthesis physics
-    ├── simulator.py      # Forward model simulator
-    ├── train.py          # Training functions
-    ├── inference.py      # Inference and model selection
-    └── plots.py          # Visualization functions
-```
+physics:
+  model_types:
+    - faraday_thin
+    - burn_slab
+    - external_dispersion
+    - internal_dispersion
 
-## Testing
+priors:
+  rm:
+    min: -800.0
+    max: 800.0
+  amp:
+    min: 0.001
+    max: 1.0
 
-Run recovery tests to validate the implementation:
+model_selection:
+  max_components: 5
+  use_classifier: true
 
-```bash
-pytest test_recovery.py -v
+training:
+  n_simulations: 20000
+  device: "cuda"
+  save_dir: "models"
 ```
 
 ## Requirements
 
-- Python 3.7+
-- PyTorch (GPU recommended)
-- SBI library
-- NumPy, SciPy, AstroPy
-- Matplotlib, Corner (for visualization)
-
-## Citation
-
-If you use VROOM-SBI in your research, please cite:
-
-```
-[Citation information to be added]
-```
-
-## License
-
-[License information to be added]
-
-## References
-
-- Burn, B. J. 1966, MNRAS, 133, 67 (RM Synthesis)
-- Brentjens, M. A., & de Bruyn, A. G. 2005, A&A, 441, 1217 (RM Synthesis)
-- Greenberg, D. et al. 2019, ICML (SBI/SNPE)
-- Papamakarios, G. et al. 2019, NeurIPS (Neural Posterior Estimation)
+- Python >= 3.8
+- PyTorch >= 1.10
+- sbi >= 0.18
+- numpy, astropy, matplotlib, corner, tqdm, pyyaml
+- huggingface_hub (optional, for HF integration)

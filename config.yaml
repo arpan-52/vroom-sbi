@@ -1,9 +1,9 @@
-# VROOM-SBI Configuration File
+# VROOM-SBI Configuration File (v2.0)
 
 # Frequency file path
 freq_file: "freq.txt"
 
-# Faraday depth range (rad/m^2)
+# Faraday depth range (rad/m²)
 phi:
   min: -1000.0
   max: 1000.0
@@ -19,106 +19,102 @@ priors:
     max: 1.0
 
 # Noise configuration
-# Base noise level - actual noise σ = base_level / weight
-# During training, base_level is randomly varied for robustness
 noise:
-  base_level: 0.01           # Default/reference noise level
+  base_level: 0.01
   augmentation:
-    enable: true             # Enable random noise level variation
-    min_factor: 0.5          # Minimum: 0.5 × base_level
-    max_factor: 2.0          # Maximum: 2.0 × base_level
+    enable: true
+    min_factor: 0.5
+    max_factor: 2.0
+
+# Memory management (NEW in v2.0)
+memory:
+  max_ram_gb: 16.0          # Maximum RAM to use for staging models
+  max_vram_gb: 8.0          # Maximum GPU memory to use
+  stage_models_to_ram: true # Keep models in RAM when not on GPU
+  prefetch_models: true     # Load all models at startup
+  gradient_checkpointing: false  # Trade compute for memory
+  mixed_precision: true     # Use FP16 where possible
 
 # Training settings
 training:
-  n_simulations: 30000        # Base simulations (for N=1)
-  simulation_scaling: true    # Scale up for complex models
-  simulation_scaling_mode: "power"  # Options: "linear", "quadratic" (N^2), "subquadratic" (N^1.5), "power" (N^scaling_power)
-  scaling_power: 2.5          # Exponent for power scaling (2.0 = N^2, 2.5 = N^2.5, 3.0 = N^3)
-                              # Higher power for bigger SBI architectures!
+  n_simulations: 30000
+  simulation_scaling: true
+  simulation_scaling_mode: "power"
+  scaling_power: 2.5
   batch_size: 50
   n_rounds: 1
-  device: "cuda"  # or "cpu"
+  device: "cuda"
   validation_fraction: 0.1
   save_dir: "models"
   
+  # Checkpointing (NEW in v2.0)
+  checkpoint_interval: 5    # Save every N epochs
+  log_interval: 1           # Log metrics every N epochs
+  early_stopping_patience: 10
+
 # Model selection
 model_selection:
-  max_components: 5           # Support 1-5 components (full scale!)
-  use_classifier: false       # DISABLED: Focus on SBI posteriors only for now
-  classifier_only: false      # If true, skip worker model training (simulations must exist)
+  max_components: 5
+  use_classifier: true
+  classifier_only: false
 
 # Physical model types
-# CROSS-MODEL TRAINING: Train all model types together!
-# Classifier will learn to distinguish between ALL combinations
 physics:
-  # Train ALL these model types (4 models × 5 components = 20 classes!)
   model_types:
     - "faraday_thin"
     - "burn_slab"
     - "external_dispersion"
     - "internal_dispersion"
 
-  # For single-model training, use model_type (string) instead of model_types (list)
-  # model_type: "faraday_thin"  # Uncomment to train only one model
-
-  # Model-specific prior ranges (actually used!)
+  # Model-specific parameters
   burn_slab:
-    max_delta_phi: 200.0      # Maximum slab thickness for sinc depolarization
+    max_delta_phi: 200.0
 
   external_dispersion:
-    max_sigma_phi: 200.0      # Maximum RM dispersion (turbulent foreground)
+    max_sigma_phi: 200.0
 
   internal_dispersion:
-    max_sigma_phi: 200.0      # Maximum RM dispersion (internal turbulence)
+    max_sigma_phi: 200.0
 
-# Weight augmentation settings
-# These are applied during simulation for both posterior and classifier training
+# Weight augmentation
 weight_augmentation:
   enable: true
-  scattered_prob: 0.3         # Probability of scattered missing channels
-  gap_prob: 0.3               # Probability of contiguous gaps  
-  large_block_prob: 0.1       # Probability of large RFI blocks
-  noise_variation: true       # Add variation to weights
+  scattered_prob: 0.3
+  gap_prob: 0.3
+  large_block_prob: 0.1
+  noise_variation: true
 
 # Model Selection Classifier (1D CNN)
-# A convolutional classifier that learns to predict N from spectra
-# Uses the same simulations as posterior training (no extra cost!)
 classifier:
-  # CNN Architecture
-  conv_channels: [32, 64, 128]  # Channels in each conv layer
-  kernel_sizes: [7, 5, 3]       # Kernel size for each conv layer
-  dropout: 0.1                  # Dropout for regularization
-  
-  # Training
-  n_epochs: 50                  # Training epochs
-  batch_size: 1024               # Batch size (can be large, fast training)
-  learning_rate: 0.0001          # Adam learning rate
-  validation_fraction: 0.2      # Fraction for validation
-  use_posterior_simulations: true  # Reuse simulations from posterior training
+  conv_channels: [32, 64, 128]
+  kernel_sizes: [7, 5, 3]
+  dropout: 0.1
+  n_epochs: 50
+  batch_size: 1024
+  learning_rate: 0.0001
+  validation_fraction: 0.2
+  use_posterior_simulations: true
 
 # SBI Architecture (Neural Posterior Estimation)
-# FIXED ARCHITECTURE: Same network size for ALL N to isolate effect of simulation scaling!
 sbi:
-  model: 'nsf'               # Neural Spline Flow (better than MAF)
-  num_bins: 16               # Spline resolution
-  embedding_dim: 64          # Output dimension of spectral embedding
-
-  # FIXED architecture - same for ALL component counts (1-5)
-  # This isolates the effect of simulation scaling!
-  # If N=5 still struggles, increase simulations, not architecture.
+  model: 'nsf'
+  num_bins: 16
+  embedding_dim: 64
+  
+  # Architecture per component count
   architecture_scaling:
-    1:  # Use same architecture as N=5
+    1:
       hidden_features: 256
       num_transforms: 15
-    2:  # Use same architecture as N=5
+    2:
       hidden_features: 256
       num_transforms: 15
-    3:  # Use same architecture as N=5
+    3:
       hidden_features: 256
       num_transforms: 15
-    4:  # Use same architecture as N=5
+    4:
       hidden_features: 256
       num_transforms: 15
-    5:  # Maximum capacity
+    5:
       hidden_features: 256
       num_transforms: 15
