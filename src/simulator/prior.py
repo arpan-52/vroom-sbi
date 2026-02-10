@@ -74,9 +74,9 @@ def _build_bounds_from_dict(config: Dict, model_type: str, n_components: int):
     chi0_min = config.get("chi0_min", 0.0)
     chi0_max = config.get("chi0_max", np.pi)
     sigma_phi_min = config.get("sigma_phi_min", 0.0)
-    sigma_phi_max = config.get("sigma_phi_max", config.get("max_sigma_phi", 200.0))
+    sigma_phi_max = config.get("sigma_phi_max", config.get("max_sigma_phi", 100.0))
     delta_phi_min = config.get("delta_phi_min", 0.0)
-    delta_phi_max = config.get("delta_phi_max", config.get("max_delta_phi", 200.0))
+    delta_phi_max = config.get("delta_phi_max", config.get("max_delta_phi", 100.0))
     
     low = []
     high = []
