@@ -81,12 +81,18 @@ def validate_all_models(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Get configuration
+    # Get ALL prior bounds from config - must be consistent with training!
     flat_priors = {
         "rm_min": config.priors.rm_min,
         "rm_max": config.priors.rm_max,
         "amp_min": config.priors.amp_min,
         "amp_max": config.priors.amp_max,
+        "chi0_min": config.priors.chi0_min,
+        "chi0_max": config.priors.chi0_max,
+        "sigma_phi_min": config.priors.sigma_phi_min,
+        "sigma_phi_max": config.priors.sigma_phi_max,
+        "delta_phi_min": config.priors.delta_phi_min,
+        "delta_phi_max": config.priors.delta_phi_max,
     }
     base_noise_level = config.noise.base_level
     freq_file = config.freq_file

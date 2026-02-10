@@ -44,12 +44,12 @@ class PriorConfig:
     # RM dispersion for external/internal dispersion models (rad/m²)
     # Used for: sigma_phi in external_dispersion, internal_dispersion
     sigma_phi_min: float = 0.0
-    sigma_phi_max: float = 200.0
+    sigma_phi_max: float = 100.0  # Reasonable default, override in config.yaml
     
     # Slab half-width for burn_slab model (rad/m²)
     # Used for: delta_phi in burn_slab (full width = 2*delta_phi)
     delta_phi_min: float = 0.0
-    delta_phi_max: float = 200.0
+    delta_phi_max: float = 100.0  # Reasonable default, override in config.yaml
     
     def to_flat_dict(self) -> Dict[str, float]:
         """Convert to flat dictionary for simulator functions."""
@@ -271,9 +271,9 @@ class Configuration:
             chi0_min=float(chi0_raw.get("min", 0.0)),
             chi0_max=float(chi0_raw.get("max", np.pi)),
             sigma_phi_min=float(sigma_phi_raw.get("min", 0.0)),
-            sigma_phi_max=float(sigma_phi_raw.get("max", 200.0)),
+            sigma_phi_max=float(sigma_phi_raw.get("max", 100.0)),
             delta_phi_min=float(delta_phi_raw.get("min", 0.0)),
-            delta_phi_max=float(delta_phi_raw.get("max", 200.0)),
+            delta_phi_max=float(delta_phi_raw.get("max", 100.0)),
         )
         
         # Extract noise config
