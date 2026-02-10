@@ -1,15 +1,24 @@
+# =============================================================================
 # VROOM-SBI Configuration File
-# =============================
+# =============================================================================
+# 
+# Hardware optimization is AUTOMATIC - batch size and prefetching are
+# auto-configured based on your GPU VRAM and system RAM.
+# Use --no-auto-optimize to use values from this file instead.
+#
+# =============================================================================
 
-# Frequency file path
+# Frequency file (wavelength² values in m²)
 freq_file: "freq.txt"
 
 # =============================================================================
-# PRIORS - ALL parameter ranges defined in ONE place
+# PRIORS - Parameter ranges for all physical models
 # =============================================================================
+# These define the prior bounds for Bayesian inference.
+# Adjust based on your expected parameter ranges.
+
 priors:
   # Faraday depth / Rotation Measure (rad/m²)
-  # Used for: RM (faraday_thin), phi/phi_c (all other models)
   rm:
     min: -500.0
     max: 500.0
@@ -19,92 +28,107 @@ priors:
     min: 0.01
     max: 1.0
 
-  # Intrinsic polarization angle (radians)
-  # Fixed by physics: [0, π]
+  # Intrinsic polarization angle (radians, 0 to π)
   chi0:
     min: 0.0
-    max: 3.141592653589793  # π
+    max: 3.141592653589793
 
-  # RM dispersion for external/internal dispersion models (rad/m²)
+  # Faraday dispersion for external/internal models (rad/m²)
   sigma_phi:
     min: 0.0
     max: 200.0
 
   # Slab half-width for burn_slab model (rad/m²)
-  # Full slab width = 2 × delta_phi
   delta_phi:
     min: 0.0
     max: 200.0
 
 # =============================================================================
-# NOISE CONFIGURATION
-# =============================================================================
-noise:
-  base_level: 0.01
-  
-  # Noise augmentation during training
-  augmentation:
-    enable: true
-    min_factor: 0.5   # Minimum noise multiplier
-    max_factor: 2.0   # Maximum noise multiplier
-
-# =============================================================================
-# WEIGHT AUGMENTATION (missing channels, RFI simulation)
-# =============================================================================
-weight_augmentation:
-  enable: true
-  scattered_prob: 0.3      # Probability of random missing channels
-  scattered_fraction: 0.1  # Fraction of channels to remove when applied
-  gap_prob: 0.3            # Probability of contiguous gap
-  gap_min: 2               # Minimum gap size (channels)
-  gap_max: 8               # Maximum gap size (channels)
-  large_block_prob: 0.1    # Probability of large RFI block
-  large_block_min: 10      # Minimum block size (channels)
-  large_block_max: 30      # Maximum block size (channels)
-  noise_variation: true    # Add per-channel noise variation
-
-# =============================================================================
 # PHYSICAL MODELS
 # =============================================================================
-physics:
-  # Which models to train
-  model_types:
-    - "faraday_thin"
-    - "burn_slab"
-    - "external_dispersion"
-    - "internal_dispersion"
+# Which depolarization models to train posteriors for.
+# Each model has different physics assumptions.
 
-# =============================================================================
-# MODEL SELECTION
-# =============================================================================
-model_selection:
-  max_components: 5        # Maximum number of RM components
-  use_classifier: true     # Use CNN to select model/components
-  classifier_only: false   # If true, only retrain classifier
+physics:
+  model_types:
+    - "faraday_thin"          # Simple Faraday rotation (no depolarization)
+    - "burn_slab"             # Burn slab (uniform internal Faraday)
+    - "external_dispersion"   # External Faraday dispersion (λ⁴ depol)
+    - "internal_dispersion"   # Internal Faraday dispersion (λ⁴ depol)
 
 # =============================================================================
 # TRAINING CONFIGURATION
 # =============================================================================
+
 training:
-  n_simulations: 30000     # Base number of simulations (for N=1)
-  simulation_scaling: true # Scale simulations with component count
-  simulation_scaling_mode: "power"  # linear, quadratic, subquadratic, power
-  scaling_power: 2.0       # Exponent for power mode
+  # --- Simulation settings ---
+  n_simulations: 30000          # Base simulations for N=1 component
+  simulation_scaling: true      # Scale simulations with complexity
+  simulation_scaling_mode: "power"
+  scaling_power: 2.0            # N^2.0 scaling (e.g., N=2 → 4x sims)
   
-  batch_size: 50           # Simulation batch size
-  n_rounds: 1              # Number of SBI rounds (1 = amortized)
-  device: "cuda"           # cuda or cpu
-  validation_fraction: 0.1
-  save_dir: "models"
+  # --- Training settings ---
+  # NOTE: training_batch_size is AUTO-CONFIGURED based on GPU VRAM
+  # These values are fallbacks if auto-optimization is disabled
+  learning_rate: 0.0005         # Adam learning rate (5e-4)
+  training_batch_size: 256      # Neural network batch size
+  stop_after_epochs: 20         # Early stopping patience
+  validation_fraction: 0.1      # Fraction for validation
   
-  # Checkpointing
-  checkpoint_interval: 5   # Save every N epochs
-  log_interval: 1          # Log metrics every N epochs
-  early_stopping_patience: 10
+  # --- Output ---
+  device: "cuda"                # cuda or cpu
+  save_dir: "models"            # Where to save trained models
 
 # =============================================================================
-# CLASSIFIER (1D CNN for model/component selection)
+# MODEL SELECTION
 # =============================================================================
+
+model_selection:
+  max_components: 5             # Train posteriors for N=1,2,...,max
+  use_classifier: true          # Train CNN classifier for model selection
+  classifier_only: false        # Set true to only retrain classifier
+
+# =============================================================================
+# NOISE & DATA AUGMENTATION
+# =============================================================================
+# Augmentation makes the network robust to real-world data variations.
+
+noise:
+  base_level: 0.01              # Base noise level (σ_Q = σ_U)
+  augmentation:
+    enable: true
+    min_factor: 0.5             # Noise × 0.5 to × 2.0
+    max_factor: 2.0
+
+weight_augmentation:
+  enable: true
+  scattered_prob: 0.3           # Random missing channels
+  scattered_fraction: 0.1
+  gap_prob: 0.3                 # Contiguous gaps (RFI)
+  gap_min: 2
+  gap_max: 8
+  large_block_prob: 0.1         # Large RFI blocks
+  large_block_min: 10
+  large_block_max: 30
+  noise_variation: true         # Per-channel noise variation
+
+# =============================================================================
+# NEURAL NETWORK ARCHITECTURE
+# =============================================================================
+
+sbi:
+  model: "nsf"                  # Neural Spline Flow
+  num_bins: 16                  # Spline bins
+  embedding_dim: 64             # Embedding network output dim
+  
+  # Architecture per component count (scales with parameter dimension)
+  architecture_scaling:
+    1: { hidden_features: 256, num_transforms: 15 }
+    2: { hidden_features: 256, num_transforms: 15 }
+    3: { hidden_features: 256, num_transforms: 15 }
+    4: { hidden_features: 256, num_transforms: 15 }
+    5: { hidden_features: 256, num_transforms: 15 }
+
 classifier:
   conv_channels: [32, 64, 128]
   kernel_sizes: [7, 5, 3]
@@ -113,39 +137,3 @@ classifier:
   batch_size: 1024
   learning_rate: 0.0001
   validation_fraction: 0.2
-
-# =============================================================================
-# SBI ARCHITECTURE (Neural Posterior Estimation)
-# =============================================================================
-sbi:
-  model: 'nsf'             # Neural Spline Flow
-  num_bins: 16             # Spline bins
-  embedding_dim: 64        # Spectral embedding dimension
-  
-  # Architecture scales with parameter dimension
-  architecture_scaling:
-    1:
-      hidden_features: 256
-      num_transforms: 15
-    2:
-      hidden_features: 256
-      num_transforms: 15
-    3:
-      hidden_features: 256
-      num_transforms: 15
-    4:
-      hidden_features: 256
-      num_transforms: 15
-    5:
-      hidden_features: 256
-      num_transforms: 15
-
-# =============================================================================
-# MEMORY MANAGEMENT
-# =============================================================================
-memory:
-  max_ram_gb: 16.0
-  max_vram_gb: 8.0
-  stage_models_to_ram: true
-  prefetch_models: true
-  mixed_precision: true

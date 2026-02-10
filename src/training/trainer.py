@@ -199,14 +199,21 @@ class SBITrainer:
         # Append simulations
         inference.append_simulations(theta_t, x_t)
         
-        # Train with proper settings
+        # Train with proper settings from config
         start_time = datetime.now()
         
+        # Get training parameters from config
+        learning_rate = self.config.training.learning_rate
+        training_batch_size = self.config.training.training_batch_size
+        stop_after_epochs = self.config.training.stop_after_epochs
+        
+        logger.info(f"Training: batch_size={training_batch_size}, lr={learning_rate}, patience={stop_after_epochs}")
+        
         density_estimator = inference.train(
-            training_batch_size=min(4096, max(1, self.config.training.batch_size)),
-            learning_rate=5e-4,
+            training_batch_size=training_batch_size,
+            learning_rate=learning_rate,
             validation_fraction=self.config.training.validation_fraction,
-            stop_after_epochs=self.config.training.early_stopping_patience,
+            stop_after_epochs=stop_after_epochs,
             show_train_summary=True,
         )
         
@@ -373,6 +380,12 @@ class SBITrainer:
             
             # Helper to safely convert to float
             def to_float(x):
+                # Handle lists/tuples - take first element or last element
+                if isinstance(x, (list, tuple)):
+                    if len(x) == 0:
+                        return 0.0
+                    x = x[-1]  # Take last element (usually the final/best value)
+                # Handle tensors
                 if hasattr(x, 'item'):
                     return x.item()
                 elif hasattr(x, 'cpu'):
