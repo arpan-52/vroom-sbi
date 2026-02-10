@@ -108,20 +108,23 @@ class NoiseConfig:
 @dataclass
 class TrainingConfig:
     """Training hyperparameters."""
+    # Simulation settings
     n_simulations: int = 30000
     simulation_scaling: bool = True
     simulation_scaling_mode: str = "power"  # "linear", "quadratic", "subquadratic", "power"
-    scaling_power: float = 2.5
-    batch_size: int = 50
-    n_rounds: int = 1
-    device: str = "cuda"
-    validation_fraction: float = 0.1
-    save_dir: str = "models"
+    scaling_power: float = 2.0
+    batch_size: int = 100  # Batch size for simulation generation (RAM usage)
     
-    # Checkpointing and monitoring
-    checkpoint_interval: int = 5  # Save checkpoint every N epochs
-    log_interval: int = 1  # Log metrics every N epochs
-    early_stopping_patience: int = 10  # Stop if no improvement for N epochs
+    # Neural network training parameters
+    # NOTE: training_batch_size is auto-configured based on GPU VRAM
+    learning_rate: float = 5e-4
+    training_batch_size: int = 256
+    stop_after_epochs: int = 20
+    validation_fraction: float = 0.1
+    
+    # Output settings
+    device: str = "cuda"
+    save_dir: str = "models"
     
     def get_scaled_simulations(self, n_components: int) -> int:
         """Calculate scaled number of simulations based on model complexity."""
@@ -289,15 +292,14 @@ class Configuration:
             n_simulations=int(train_raw.get("n_simulations", 30000)),
             simulation_scaling=bool(train_raw.get("simulation_scaling", True)),
             simulation_scaling_mode=str(train_raw.get("simulation_scaling_mode", "power")),
-            scaling_power=float(train_raw.get("scaling_power", 2.5)),
-            batch_size=int(train_raw.get("batch_size", 50)),
-            n_rounds=int(train_raw.get("n_rounds", 1)),
-            device=str(train_raw.get("device", "cuda")),
+            scaling_power=float(train_raw.get("scaling_power", 2.0)),
+            batch_size=int(train_raw.get("batch_size", 100)),
+            learning_rate=float(train_raw.get("learning_rate", 5e-4)),
+            training_batch_size=int(train_raw.get("training_batch_size", 256)),
+            stop_after_epochs=int(train_raw.get("stop_after_epochs", 20)),
             validation_fraction=float(train_raw.get("validation_fraction", 0.1)),
+            device=str(train_raw.get("device", "cuda")),
             save_dir=str(train_raw.get("save_dir", "models")),
-            checkpoint_interval=int(train_raw.get("checkpoint_interval", 5)),
-            log_interval=int(train_raw.get("log_interval", 1)),
-            early_stopping_patience=int(train_raw.get("early_stopping_patience", 10)),
         )
         
         # Extract memory config

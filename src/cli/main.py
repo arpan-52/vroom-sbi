@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 def train_command(args):
     """Train models command."""
     from ..config import Configuration, validate_config, print_config_summary
+    from ..config import auto_configure, detect_hardware
     from ..training import train_all_models
     
     # Load config
@@ -29,12 +30,21 @@ def train_command(args):
     for w in warnings:
         logger.warning(w)
     
-    # Print summary
-    print_config_summary(config)
+    # Auto-optimize based on hardware (unless --no-auto-optimize)
+    if not args.no_auto_optimize:
+        print("\n" + "=" * 60)
+        print("AUTO-DETECTING HARDWARE AND OPTIMIZING SETTINGS")
+        print("=" * 60)
+        config = auto_configure(config, verbose=True)
+    else:
+        print("\nUsing config file settings (auto-optimization disabled)")
     
-    # Override device if specified
+    # Override device if specified via CLI
     if args.device:
         config.training.device = args.device
+    
+    # Print final config summary
+    print_config_summary(config)
     
     # Train
     results = train_all_models(config, classifier_only=args.classifier_only)
@@ -159,6 +169,8 @@ def cli():
                              help='Device (cuda/cpu)')
     train_parser.add_argument('--classifier-only', action='store_true',
                              help='Only train classifier')
+    train_parser.add_argument('--no-auto-optimize', action='store_true',
+                             help='Disable automatic hardware optimization (use config values)')
     train_parser.set_defaults(func=train_command)
     
     # Infer command
