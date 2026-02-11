@@ -187,12 +187,16 @@ def print_config_summary(config: Configuration):
     print(f"  Device: {config.training.device}")
     print(f"  Base simulations: {config.training.n_simulations:,}")
     print(f"  Scaling mode: {config.training.simulation_scaling_mode}")
-    print(f"  Batch size: {config.training.batch_size}")
+    batch_str = "auto" if config.training.training_batch_size == 0 else config.training.training_batch_size
+    print(f"  Training batch size: {batch_str}")
+    print(f"  Learning rate: {config.training.learning_rate}")
+    print(f"  Early stopping patience: {config.training.stop_after_epochs}")
     
-    print(f"\nMemory:")
-    print(f"  Max RAM: {config.memory.max_ram_gb}GB")
-    print(f"  Max VRAM: {config.memory.max_vram_gb}GB")
-    print(f"  Mixed precision: {config.memory.mixed_precision}")
+    print(f"\nHardware:")
+    hw_vram = "auto" if config.hardware.vram_gb == 0 else f"{config.hardware.vram_gb}GB"
+    hw_ram = "auto" if config.hardware.ram_gb == 0 else f"{config.hardware.ram_gb}GB"
+    print(f"  VRAM: {hw_vram}")
+    print(f"  RAM: {hw_ram}")
     
     print(f"\nModel Selection:")
     print(f"  Max components: {config.model_selection.max_components}")
