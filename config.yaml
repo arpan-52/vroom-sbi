@@ -1,15 +1,25 @@
+# =============================================================================
 # VROOM-SBI Configuration File
+# =============================================================================
 
-# Frequency file path
+# Frequency file (wavelength² values in m²)
 freq_file: "freq.txt"
 
-# Faraday depth range (rad/m^2)
-phi:
-  min: -1000. 0
-  max: 1000.0
-  n_samples: 200
+# =============================================================================
+# HARDWARE SETTINGS
+# =============================================================================
+# Set these to match your machine for optimal performance.
+# If set to "auto", will attempt to detect automatically.
 
-# Prior ranges for parameters
+hardware:
+  vram_gb: "auto"              # GPU VRAM in GB (e.g., 20 for 20GB, or "auto")
+  ram_gb: "auto"               # System RAM in GB (e.g., 60 for 60GB, or "auto")
+  num_workers: "auto"          # Data loader workers (or "auto" = CPU cores / 2)
+
+# =============================================================================
+# PRIORS - Parameter ranges for all physical models
+# =============================================================================
+
 priors:
   rm:
     min: -500.0
@@ -17,21 +27,101 @@ priors:
   amp:
     min: 0.01
     max: 1.0
-  noise:
-    min: 0.001
-    max: 0.01
+  chi0:
+    min: 0.0
+    max: 3.141592653589793
+  sigma_phi:
+    min: 0.0
+    max: 100.0
+  delta_phi:
+    min: 0.0
+    max: 100.0
 
-# Training settings
+# =============================================================================
+# PHYSICAL MODELS
+# =============================================================================
+
+physics:
+  model_types:
+    - "faraday_thin"
+    - "burn_slab"
+    - "external_dispersion"
+    - "internal_dispersion"
+
+# =============================================================================
+# TRAINING CONFIGURATION
+# =============================================================================
+
 training:
-  n_simulations: 10000        # Base simulations (for N=1)
-  simulation_scaling: true    # Scale up for complex models (N=2,3,4,5)
-  batch_size: 50
-  n_rounds: 1
-  device: "cuda"  # or "cpu"
-  validation_fraction: 0.1
-  save_dir: "models"
+  # Simulation settings
+  n_simulations: 30000          # Base simulations for N=1 component
+  simulation_scaling: true
+  simulation_scaling_mode: "power"
+  scaling_power: 2.0
+  num_parallel_jobs: "auto"     # Parallel simulation jobs ("auto" or integer)
   
-# Model selection
+  # Neural network training (batch_size auto-configured from VRAM)
+  learning_rate: 0.0005
+  training_batch_size: "auto"   # "auto" or integer
+  stop_after_epochs: 20
+  validation_fraction: 0.1
+  
+  # Output
+  device: "cuda"
+  save_dir: "models"
+
+# =============================================================================
+# MODEL SELECTION
+# =============================================================================
+
 model_selection:
-  max_components: 1
-  use_log_evidence: true
+  max_components: 5
+  use_classifier: true
+  classifier_only: false
+
+# =============================================================================
+# NOISE & DATA AUGMENTATION
+# =============================================================================
+
+noise:
+  base_level: 0.01
+  augmentation:
+    enable: true
+    min_factor: 0.5
+    max_factor: 2.0
+
+weight_augmentation:
+  enable: true
+  scattered_prob: 0.3
+  scattered_fraction: 0.1
+  gap_prob: 0.3
+  gap_min: 2
+  gap_max: 8
+  large_block_prob: 0.1
+  large_block_min: 10
+  large_block_max: 30
+  noise_variation: true
+
+# =============================================================================
+# NEURAL NETWORK ARCHITECTURE
+# =============================================================================
+
+sbi:
+  model: "nsf"
+  num_bins: 16
+  embedding_dim: 64
+  architecture_scaling:
+    1: { hidden_features: 256, num_transforms: 15 }
+    2: { hidden_features: 256, num_transforms: 15 }
+    3: { hidden_features: 256, num_transforms: 15 }
+    4: { hidden_features: 256, num_transforms: 15 }
+    5: { hidden_features: 256, num_transforms: 15 }
+
+classifier:
+  conv_channels: [32, 64, 128]
+  kernel_sizes: [7, 5, 3]
+  dropout: 0.1
+  n_epochs: 50
+  batch_size: 1024
+  learning_rate: 0.0001
+  validation_fraction: 0.2
