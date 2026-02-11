@@ -106,19 +106,26 @@ class NoiseConfig:
 
 
 @dataclass
+class HardwareConfig:
+    """Hardware configuration - set explicitly or use 'auto' for detection."""
+    vram_gb: float = 0.0        # 0 = auto-detect
+    ram_gb: float = 0.0         # 0 = auto-detect
+    num_workers: int = 0        # 0 = auto (cpu_cores / 2)
+
+
+@dataclass
 class TrainingConfig:
     """Training hyperparameters."""
     # Simulation settings
     n_simulations: int = 30000
     simulation_scaling: bool = True
-    simulation_scaling_mode: str = "power"  # "linear", "quadratic", "subquadratic", "power"
+    simulation_scaling_mode: str = "power"
     scaling_power: float = 2.0
-    batch_size: int = 100  # Batch size for simulation generation (RAM usage)
+    num_parallel_jobs: int = 0  # 0 = auto (use all cores)
     
     # Neural network training parameters
-    # NOTE: training_batch_size is auto-configured based on GPU VRAM
     learning_rate: float = 5e-4
-    training_batch_size: int = 256
+    training_batch_size: int = 0  # 0 = auto (based on VRAM)
     stop_after_epochs: int = 20
     validation_fraction: float = 0.1
     
@@ -238,6 +245,7 @@ class Configuration:
     priors: PriorConfig = field(default_factory=PriorConfig)
     noise: NoiseConfig = field(default_factory=NoiseConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
+    hardware: HardwareConfig = field(default_factory=HardwareConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     model_selection: ModelSelectionConfig = field(default_factory=ModelSelectionConfig)
     physics: PhysicsConfig = field(default_factory=PhysicsConfig)
@@ -286,23 +294,52 @@ class Configuration:
             augmentation_max_factor=float(aug_raw.get("max_factor", 2.0)),
         )
         
+        # Extract hardware config
+        hw_raw = raw.get("hardware", {})
+        
+        def parse_auto_or_number(val, default=0):
+            """Parse 'auto' as 0, or return the number."""
+            if val == "auto" or val is None:
+                return 0
+            return float(val) if isinstance(val, (int, float)) else 0
+        
+        hardware = HardwareConfig(
+            vram_gb=parse_auto_or_number(hw_raw.get("vram_gb")),
+            ram_gb=parse_auto_or_number(hw_raw.get("ram_gb")),
+            num_workers=int(parse_auto_or_number(hw_raw.get("num_workers"))),
+        )
+        
         # Extract training config
         train_raw = raw.get("training", {})
+        
+        # Handle "auto" for training_batch_size and num_parallel_jobs
+        train_batch = train_raw.get("training_batch_size", "auto")
+        if train_batch == "auto":
+            train_batch = 0
+        else:
+            train_batch = int(train_batch)
+            
+        num_parallel = train_raw.get("num_parallel_jobs", "auto")
+        if num_parallel == "auto":
+            num_parallel = 0
+        else:
+            num_parallel = int(num_parallel)
+        
         training = TrainingConfig(
             n_simulations=int(train_raw.get("n_simulations", 30000)),
             simulation_scaling=bool(train_raw.get("simulation_scaling", True)),
             simulation_scaling_mode=str(train_raw.get("simulation_scaling_mode", "power")),
             scaling_power=float(train_raw.get("scaling_power", 2.0)),
-            batch_size=int(train_raw.get("batch_size", 100)),
+            num_parallel_jobs=num_parallel,
             learning_rate=float(train_raw.get("learning_rate", 5e-4)),
-            training_batch_size=int(train_raw.get("training_batch_size", 256)),
+            training_batch_size=train_batch,
             stop_after_epochs=int(train_raw.get("stop_after_epochs", 20)),
             validation_fraction=float(train_raw.get("validation_fraction", 0.1)),
             device=str(train_raw.get("device", "cuda")),
             save_dir=str(train_raw.get("save_dir", "models")),
         )
         
-        # Extract memory config
+        # Extract memory config (legacy, mostly unused now)
         mem_raw = raw.get("memory", {})
         memory = MemoryConfig(
             max_ram_gb=float(mem_raw.get("max_ram_gb", 16.0)),
@@ -378,6 +415,7 @@ class Configuration:
             priors=priors,
             noise=noise,
             training=training,
+            hardware=hardware,
             memory=memory,
             model_selection=model_selection,
             physics=physics,

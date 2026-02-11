@@ -292,7 +292,9 @@ class SBITrainer:
         flat_priors: Dict[str, float],
         model_type: str,
     ) -> tuple:
-        """Generate simulations with augmentation."""
+        """Generate simulations with augmentation - PARALLEL version."""
+        from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+        import multiprocessing as mp
         
         # Sample parameters (flat_priors contains ALL bounds)
         theta = sample_prior(
@@ -300,52 +302,99 @@ class SBITrainer:
             model_type=model_type
         )
         
-        batch_size = self.config.training.batch_size
         base_noise_level = self.config.noise.base_level
+        n_jobs = self.config.training.num_parallel_jobs
+        if n_jobs == 0:
+            n_jobs = max(1, mp.cpu_count() - 2)
         
+        logger.info(f"Generating {n_simulations} simulations using {n_jobs} parallel jobs...")
+        
+        # Prepare augmentation config for workers
+        aug_config = {
+            'scattered_prob': self.config.weight_augmentation.scattered_prob,
+            'gap_prob': self.config.weight_augmentation.gap_prob,
+            'large_block_prob': self.config.weight_augmentation.large_block_prob,
+            'noise_variation': self.config.weight_augmentation.noise_variation,
+            'noise_aug_enable': self.config.noise.augmentation_enable,
+            'noise_aug_min': self.config.noise.augmentation_min_factor,
+            'noise_aug_max': self.config.noise.augmentation_max_factor,
+        }
+        
+        # Worker function for parallel simulation
+        def simulate_batch(args):
+            batch_theta, sim_params = args
+            batch_size = len(batch_theta)
+            
+            # Create local simulator (thread-safe)
+            local_sim = RMSimulator(
+                freq_file=sim_params['freq_file'],
+                n_components=sim_params['n_components'],
+                base_noise_level=sim_params['base_noise_level'],
+                model_type=sim_params['model_type'],
+            )
+            
+            batch_xs = []
+            batch_weights = []
+            
+            for j in range(batch_size):
+                # Augment weights
+                w = augment_weights_combined(
+                    local_sim.weights,
+                    scattered_prob=aug_config['scattered_prob'],
+                    gap_prob=aug_config['gap_prob'],
+                    large_block_prob=aug_config['large_block_prob'],
+                    noise_variation=aug_config['noise_variation'],
+                )
+                
+                # Augment noise level
+                if aug_config['noise_aug_enable']:
+                    aug_noise = augment_base_noise_level(
+                        sim_params['base_noise_level'],
+                        aug_config['noise_aug_min'],
+                        aug_config['noise_aug_max'],
+                    )
+                    local_sim.base_noise_level = aug_noise
+                
+                x = local_sim(batch_theta[j:j+1], weights=w)
+                batch_xs.append(x)
+                batch_weights.append(w)
+            
+            return np.vstack(batch_xs), np.vstack(batch_weights)
+        
+        # Prepare simulation parameters
+        sim_params = {
+            'freq_file': self.config.freq_file,
+            'n_components': n_components,
+            'base_noise_level': base_noise_level,
+            'model_type': model_type,
+        }
+        
+        # Split theta into chunks for parallel processing
+        chunk_size = max(1, n_simulations // (n_jobs * 4))  # 4 chunks per worker
+        chunks = []
+        for i in range(0, n_simulations, chunk_size):
+            chunks.append((theta[i:i+chunk_size], sim_params))
+        
+        # Run parallel simulations
         xs = []
         all_weights = []
         
-        logger.info("Generating simulations...")
+        # Use ThreadPoolExecutor (safer than ProcessPoolExecutor with numpy)
+        with ThreadPoolExecutor(max_workers=n_jobs) as executor:
+            results = list(tqdm(
+                executor.map(simulate_batch, chunks),
+                total=len(chunks),
+                desc="Simulating"
+            ))
         
-        for i in tqdm(range(0, n_simulations, batch_size), desc="Simulating"):
-            batch_theta = theta[i:i + batch_size]
-            batch_size_actual = len(batch_theta)
-            
-            # Generate augmented weights
-            augmented_weights = np.zeros((batch_size_actual, simulator.n_freq))
-            for j in range(batch_size_actual):
-                augmented_weights[j] = augment_weights_combined(
-                    simulator.weights,
-                    scattered_prob=self.config.weight_augmentation.scattered_prob,
-                    gap_prob=self.config.weight_augmentation.gap_prob,
-                    large_block_prob=self.config.weight_augmentation.large_block_prob,
-                    noise_variation=self.config.weight_augmentation.noise_variation,
-                )
-            
-            # Simulate with augmented noise levels
-            batch_xs = []
-            for j in range(batch_size_actual):
-                # Augment noise level
-                if self.config.noise.augmentation_enable:
-                    aug_noise = augment_base_noise_level(
-                        base_noise_level,
-                        self.config.noise.augmentation_min_factor,
-                        self.config.noise.augmentation_max_factor,
-                    )
-                    simulator.base_noise_level = aug_noise
-                
-                x_sample = simulator(batch_theta[j:j+1], weights=augmented_weights[j])
-                batch_xs.append(x_sample)
-            
-            xs.append(np.vstack(batch_xs))
-            all_weights.append(augmented_weights)
-        
-        # Restore original noise level
-        simulator.base_noise_level = base_noise_level
+        for batch_x, batch_w in results:
+            xs.append(batch_x)
+            all_weights.append(batch_w)
         
         x = np.vstack(xs)
         all_weights = np.vstack(all_weights)
+        
+        logger.info(f"Generated {len(x)} simulations")
         
         return theta, x, all_weights
     

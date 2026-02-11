@@ -54,6 +54,9 @@ class OptimizedSettings:
     pin_memory: bool = True
     prefetch_factor: int = 2
     
+    # Parallel simulation
+    num_parallel_jobs: int = 4
+    
     # Device
     device: str = "cuda"
     
@@ -64,6 +67,7 @@ class OptimizedSettings:
             "=" * 60,
             f"Device: {self.device}",
             f"Training batch size: {self.training_batch_size}",
+            f"Parallel simulation jobs: {self.num_parallel_jobs}",
             f"Data workers: {self.num_workers}",
             f"Prefetch factor: {self.prefetch_factor}",
             f"Pin memory: {self.pin_memory}",
@@ -72,9 +76,16 @@ class OptimizedSettings:
         return "\n".join(lines)
 
 
-def detect_hardware() -> HardwareInfo:
+def detect_hardware(config_hardware=None) -> HardwareInfo:
     """
     Detect available hardware (GPU, RAM, CPU).
+    
+    If config_hardware is provided, use those values instead of auto-detecting.
+    
+    Parameters
+    ----------
+    config_hardware : HardwareConfig, optional
+        Hardware settings from config (0 = auto-detect)
     
     Returns
     -------
@@ -83,72 +94,95 @@ def detect_hardware() -> HardwareInfo:
     """
     info = HardwareInfo()
     
+    # Check if config provides explicit values
+    config_vram = getattr(config_hardware, 'vram_gb', 0) if config_hardware else 0
+    config_ram = getattr(config_hardware, 'ram_gb', 0) if config_hardware else 0
+    config_workers = getattr(config_hardware, 'num_workers', 0) if config_hardware else 0
+    
     # Detect CPU cores
     try:
         info.cpu_cores = os.cpu_count() or 1
     except:
         info.cpu_cores = 1
     
-    # Detect RAM
-    try:
-        import psutil
-        mem = psutil.virtual_memory()
-        info.ram_total_gb = mem.total / (1024**3)
-        info.ram_available_gb = mem.available / (1024**3)
-    except ImportError:
-        # Fallback: try to read from /proc/meminfo on Linux
+    # Detect or use config RAM
+    if config_ram > 0:
+        info.ram_total_gb = config_ram
+        info.ram_available_gb = config_ram * 0.8  # Assume 80% available
+        logger.info(f"Using config RAM: {config_ram} GB")
+    else:
+        # Auto-detect RAM
         try:
-            with open('/proc/meminfo', 'r') as f:
-                for line in f:
-                    if line.startswith('MemTotal:'):
-                        info.ram_total_gb = int(line.split()[1]) / (1024**2)
-                    elif line.startswith('MemAvailable:'):
-                        info.ram_available_gb = int(line.split()[1]) / (1024**2)
-        except:
-            info.ram_total_gb = 16.0  # Assume 16GB
-            info.ram_available_gb = 8.0
+            import psutil
+            mem = psutil.virtual_memory()
+            info.ram_total_gb = mem.total / (1024**3)
+            info.ram_available_gb = mem.available / (1024**3)
+        except ImportError:
+            # Fallback: read from /proc/meminfo on Linux
+            try:
+                with open('/proc/meminfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('MemTotal:'):
+                            info.ram_total_gb = int(line.split()[1]) / (1024**2)
+                        elif line.startswith('MemAvailable:'):
+                            info.ram_available_gb = int(line.split()[1]) / (1024**2)
+                if info.ram_total_gb == 0:
+                    raise ValueError("Could not parse /proc/meminfo")
+            except Exception as e:
+                logger.warning(f"RAM detection failed: {e}. Set hardware.ram_gb in config.yaml")
+                info.ram_total_gb = 16.0
+                info.ram_available_gb = 12.0
     
-    # Detect GPU
+    # Detect or use config VRAM
     try:
         import torch
         if torch.cuda.is_available():
             info.gpu_available = True
             info.num_gpus = torch.cuda.device_count()
             info.gpu_name = torch.cuda.get_device_name(0)
-            
-            # Get VRAM info
-            props = torch.cuda.get_device_properties(0)
-            info.gpu_vram_gb = props.total_memory / (1024**3)
-            
-            # Get free VRAM
-            torch.cuda.empty_cache()
-            free_mem, total_mem = torch.cuda.mem_get_info(0)
-            info.gpu_vram_free_gb = free_mem / (1024**3)
-            
-            # CUDA version
             info.cuda_version = torch.version.cuda or "unknown"
+            
+            if config_vram > 0:
+                info.gpu_vram_gb = config_vram
+                info.gpu_vram_free_gb = config_vram * 0.9  # Assume 90% available
+                logger.info(f"Using config VRAM: {config_vram} GB")
+            else:
+                # Auto-detect VRAM
+                props = torch.cuda.get_device_properties(0)
+                info.gpu_vram_gb = props.total_memory / (1024**3)
+                torch.cuda.empty_cache()
+                free_mem, total_mem = torch.cuda.mem_get_info(0)
+                info.gpu_vram_free_gb = free_mem / (1024**3)
     except Exception as e:
         logger.debug(f"GPU detection failed: {e}")
         info.gpu_available = False
+    
+    # Override num_workers if config specifies
+    if config_workers > 0:
+        info.cpu_cores = config_workers * 2  # Will be divided by 2 later
     
     return info
 
 
 def optimize_for_hardware(
     hardware: Optional[HardwareInfo] = None,
+    config=None,
     verbose: bool = True
 ) -> OptimizedSettings:
     """
-    Calculate optimal training settings based on detected hardware.
+    Calculate optimal training settings based on hardware.
     
     Goal: Maximize GPU utilization (~95-100%) by:
     - Setting batch size based on VRAM
     - Setting prefetch/workers based on RAM
+    - Setting parallel jobs based on CPU cores
     
     Parameters
     ----------
     hardware : HardwareInfo, optional
         Hardware info (auto-detected if not provided)
+    config : Configuration, optional
+        Configuration object (to get hardware settings)
     verbose : bool
         Print hardware and settings info
         
@@ -157,8 +191,11 @@ def optimize_for_hardware(
     OptimizedSettings
         Optimized training configuration
     """
+    # Get hardware config if available
+    config_hardware = getattr(config, 'hardware', None) if config else None
+    
     if hardware is None:
-        hardware = detect_hardware()
+        hardware = detect_hardware(config_hardware)
     
     if verbose:
         print(hardware)
@@ -173,30 +210,48 @@ def optimize_for_hardware(
         logger.warning("No GPU detected - training will be slow on CPU")
     
     # === VRAM-based Batch Size ===
-    # Goal: Use as much VRAM as possible without OOM
-    # Reserve ~2-3GB for model + overhead, use rest for batches
+    # Calculate based on actual memory requirements
+    #
+    # Memory per sample during training (approximate):
+    # - Input: n_freq * 2 (Q,U) * 4 bytes = ~4KB for 500 channels
+    # - Forward pass activations: ~10x input = ~40KB
+    # - Backward pass gradients: ~10x input = ~40KB  
+    # - Optimizer states (Adam): ~2x parameters
+    # - Total per sample: ~100KB with float32
+    #
+    # Model memory (NSF with embedding):
+    # - Embedding net: ~1-2M params = ~8MB
+    # - NSF flow: ~5-10M params = ~40MB
+    # - Total model: ~50-100MB
+    #
+    # Safe formula: batch_size = (VRAM_available - model_overhead) / mem_per_sample
+    
     if hardware.gpu_available:
-        vram = hardware.gpu_vram_free_gb
+        vram_gb = hardware.gpu_vram_free_gb
         
-        if vram >= 22:      # 24GB+ GPU (A100, RTX 4090)
-            settings.training_batch_size = 2048
-        elif vram >= 14:    # 16GB GPU (V100, RTX 4080)
-            settings.training_batch_size = 1024
-        elif vram >= 10:    # 12GB GPU (RTX 3080)
-            settings.training_batch_size = 512
-        elif vram >= 6:     # 8GB GPU (RTX 3070)
-            settings.training_batch_size = 256
-        elif vram >= 4:     # 6GB GPU
-            settings.training_batch_size = 128
-        else:               # <4GB GPU
-            settings.training_batch_size = 64
-            logger.warning("Low VRAM - training may be slow")
+        # Reserve 2GB for model, CUDA overhead, fragmentation
+        usable_vram_gb = max(0.5, vram_gb - 2.0)
+        usable_vram_mb = usable_vram_gb * 1024
+        
+        # ~0.5 MB per sample (conservative estimate including all activations)
+        mem_per_sample_mb = 0.5
+        
+        # Calculate max batch size
+        max_batch = int(usable_vram_mb / mem_per_sample_mb)
+        
+        # Round down to nearest power of 2 for efficiency
+        batch_size = 1
+        while batch_size * 2 <= max_batch:
+            batch_size *= 2
+        
+        # Clamp to reasonable range
+        settings.training_batch_size = max(64, min(4096, batch_size))
+        
+        logger.info(f"VRAM: {vram_gb:.1f}GB free → batch_size={settings.training_batch_size}")
     else:
-        # CPU mode
         settings.training_batch_size = 128
     
     # === RAM-based Prefetching ===
-    # More RAM = more aggressive prefetching = GPU never waits for data
     ram = hardware.ram_available_gb
     
     if ram >= 64:
@@ -215,6 +270,10 @@ def optimize_for_hardware(
         settings.num_workers = 1
         settings.prefetch_factor = 2
     
+    # === CPU-based Parallel Simulation ===
+    # Use most cores for parallel simulation
+    settings.num_parallel_jobs = max(1, hardware.cpu_cores - 2)
+    
     # Pin memory only if we have GPU and enough RAM
     settings.pin_memory = hardware.gpu_available and ram >= 8
     
@@ -227,19 +286,18 @@ def optimize_for_hardware(
 def apply_settings_to_config(config, settings: OptimizedSettings):
     """
     Apply optimized settings to a Configuration object.
-    
-    Parameters
-    ----------
-    config : Configuration
-        Configuration object to modify
-    settings : OptimizedSettings
-        Optimized settings to apply
     """
     # Training settings
     config.training.device = settings.device
-    config.training.training_batch_size = settings.training_batch_size
     
-    # Store data loading settings for use during training
+    # Only override if set to auto (0)
+    if config.training.training_batch_size == 0:
+        config.training.training_batch_size = settings.training_batch_size
+    
+    if config.training.num_parallel_jobs == 0:
+        config.training.num_parallel_jobs = settings.num_parallel_jobs
+    
+    # Store data loading settings
     if not hasattr(config, '_optimized'):
         config._optimized = {}
     config._optimized['num_workers'] = settings.num_workers
@@ -252,19 +310,7 @@ def apply_settings_to_config(config, settings: OptimizedSettings):
 def auto_configure(config, verbose: bool = True):
     """
     Convenience function: detect hardware and apply optimal settings to config.
-    
-    Parameters
-    ----------
-    config : Configuration
-        Configuration to optimize
-    verbose : bool
-        Print hardware and settings info
-        
-    Returns
-    -------
-    Configuration
-        Modified configuration with optimal settings
     """
-    hardware = detect_hardware()
-    settings = optimize_for_hardware(hardware, verbose=verbose)
+    hardware = detect_hardware(getattr(config, 'hardware', None))
+    settings = optimize_for_hardware(hardware, config=config, verbose=verbose)
     return apply_settings_to_config(config, settings)
