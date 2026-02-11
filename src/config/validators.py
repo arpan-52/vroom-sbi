@@ -72,12 +72,6 @@ def validate_config(config: Configuration) -> List[str]:
             f"Consider using at least 10000 for reliable posteriors."
         )
     
-    if config.training.batch_size > config.training.n_simulations:
-        warnings.append(
-            f"batch_size ({config.training.batch_size}) > n_simulations ({config.training.n_simulations}). "
-            f"Adjusting effective batch size."
-        )
-    
     # Validate device
     if config.training.device == "cuda" and not torch.cuda.is_available():
         warnings.append(
