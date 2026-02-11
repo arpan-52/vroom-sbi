@@ -1,127 +1,115 @@
 # =============================================================================
 # VROOM-SBI Configuration File
 # =============================================================================
-# 
-# Hardware optimization is AUTOMATIC - batch size and prefetching are
-# auto-configured based on your GPU VRAM and system RAM.
-# Use --no-auto-optimize to use values from this file instead.
-#
-# =============================================================================
 
 # Frequency file (wavelength² values in m²)
 freq_file: "freq.txt"
 
 # =============================================================================
+# HARDWARE SETTINGS
+# =============================================================================
+# Set these to match your machine for optimal performance.
+# If set to "auto", will attempt to detect automatically.
+
+hardware:
+  vram_gb: "auto"              # GPU VRAM in GB (e.g., 20 for 20GB, or "auto")
+  ram_gb: "auto"               # System RAM in GB (e.g., 60 for 60GB, or "auto")
+  num_workers: "auto"          # Data loader workers (or "auto" = CPU cores / 2)
+
+# =============================================================================
 # PRIORS - Parameter ranges for all physical models
 # =============================================================================
-# These define the prior bounds for Bayesian inference.
-# Adjust based on your expected parameter ranges.
 
 priors:
-  # Faraday depth / Rotation Measure (rad/m²)
   rm:
     min: -500.0
     max: 500.0
-
-  # Fractional polarization amplitude (dimensionless, 0-1)
   amp:
     min: 0.01
     max: 1.0
-
-  # Intrinsic polarization angle (radians, 0 to π)
   chi0:
     min: 0.0
     max: 3.141592653589793
-
-  # Faraday dispersion for external/internal models (rad/m²)
   sigma_phi:
     min: 0.0
-    max: 200.0
-
-  # Slab half-width for burn_slab model (rad/m²)
+    max: 100.0
   delta_phi:
     min: 0.0
-    max: 200.0
+    max: 100.0
 
 # =============================================================================
 # PHYSICAL MODELS
 # =============================================================================
-# Which depolarization models to train posteriors for.
-# Each model has different physics assumptions.
 
 physics:
   model_types:
-    - "faraday_thin"          # Simple Faraday rotation (no depolarization)
-    - "burn_slab"             # Burn slab (uniform internal Faraday)
-    - "external_dispersion"   # External Faraday dispersion (λ⁴ depol)
-    - "internal_dispersion"   # Internal Faraday dispersion (λ⁴ depol)
+    - "faraday_thin"
+    - "burn_slab"
+    - "external_dispersion"
+    - "internal_dispersion"
 
 # =============================================================================
 # TRAINING CONFIGURATION
 # =============================================================================
 
 training:
-  # --- Simulation settings ---
+  # Simulation settings
   n_simulations: 30000          # Base simulations for N=1 component
-  simulation_scaling: true      # Scale simulations with complexity
+  simulation_scaling: true
   simulation_scaling_mode: "power"
-  scaling_power: 2.0            # N^2.0 scaling (e.g., N=2 → 4x sims)
+  scaling_power: 2.0
+  num_parallel_jobs: "auto"     # Parallel simulation jobs ("auto" or integer)
   
-  # --- Training settings ---
-  # NOTE: training_batch_size is AUTO-CONFIGURED based on GPU VRAM
-  # These values are fallbacks if auto-optimization is disabled
-  learning_rate: 0.0005         # Adam learning rate (5e-4)
-  training_batch_size: 256      # Neural network batch size
-  stop_after_epochs: 20         # Early stopping patience
-  validation_fraction: 0.1      # Fraction for validation
+  # Neural network training (batch_size auto-configured from VRAM)
+  learning_rate: 0.0005
+  training_batch_size: "auto"   # "auto" or integer
+  stop_after_epochs: 20
+  validation_fraction: 0.1
   
-  # --- Output ---
-  device: "cuda"                # cuda or cpu
-  save_dir: "models"            # Where to save trained models
+  # Output
+  device: "cuda"
+  save_dir: "models"
 
 # =============================================================================
 # MODEL SELECTION
 # =============================================================================
 
 model_selection:
-  max_components: 5             # Train posteriors for N=1,2,...,max
-  use_classifier: true          # Train CNN classifier for model selection
-  classifier_only: false        # Set true to only retrain classifier
+  max_components: 5
+  use_classifier: true
+  classifier_only: false
 
 # =============================================================================
 # NOISE & DATA AUGMENTATION
 # =============================================================================
-# Augmentation makes the network robust to real-world data variations.
 
 noise:
-  base_level: 0.01              # Base noise level (σ_Q = σ_U)
+  base_level: 0.01
   augmentation:
     enable: true
-    min_factor: 0.5             # Noise × 0.5 to × 2.0
+    min_factor: 0.5
     max_factor: 2.0
 
 weight_augmentation:
   enable: true
-  scattered_prob: 0.3           # Random missing channels
+  scattered_prob: 0.3
   scattered_fraction: 0.1
-  gap_prob: 0.3                 # Contiguous gaps (RFI)
+  gap_prob: 0.3
   gap_min: 2
   gap_max: 8
-  large_block_prob: 0.1         # Large RFI blocks
+  large_block_prob: 0.1
   large_block_min: 10
   large_block_max: 30
-  noise_variation: true         # Per-channel noise variation
+  noise_variation: true
 
 # =============================================================================
 # NEURAL NETWORK ARCHITECTURE
 # =============================================================================
 
 sbi:
-  model: "nsf"                  # Neural Spline Flow
-  num_bins: 16                  # Spline bins
-  embedding_dim: 64             # Embedding network output dim
-  
-  # Architecture per component count (scales with parameter dimension)
+  model: "nsf"
+  num_bins: 16
+  embedding_dim: 64
   architecture_scaling:
     1: { hidden_features: 256, num_transforms: 15 }
     2: { hidden_features: 256, num_transforms: 15 }
