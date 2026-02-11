@@ -335,6 +335,70 @@ class RMSimulator(BaseSimulator):
         
         return x.squeeze()
     
+    def simulate_batch(
+        self,
+        theta: np.ndarray,
+        weights_batch: np.ndarray,
+        noise_levels: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Simulate batch with per-sample weights and noise levels.
+        
+        This is optimized for training where each sample can have
+        different augmented weights and noise levels.
+        
+        Parameters
+        ----------
+        theta : np.ndarray
+            Parameters of shape (batch, n_params)
+        weights_batch : np.ndarray
+            Per-sample weights of shape (batch, n_freq)
+        noise_levels : np.ndarray
+            Per-sample noise levels of shape (batch,)
+            
+        Returns
+        -------
+        np.ndarray
+            Simulated [Q, U] of shape (batch, 2*n_freq)
+        """
+        theta = np.atleast_2d(theta)
+        batch_size = theta.shape[0]
+        
+        # Compute complex polarization based on model type
+        if self.model_type == "faraday_thin":
+            P = self._compute_polarization_faraday_thin(theta)
+        elif self.model_type == "burn_slab":
+            P = self._compute_polarization_burn_slab(theta)
+        elif self.model_type == "external_dispersion":
+            P = self._compute_polarization_external_dispersion(theta)
+        elif self.model_type == "internal_dispersion":
+            P = self._compute_polarization_internal_dispersion(theta)
+        else:
+            raise ValueError(f"Unknown model type: {self.model_type}")
+        
+        # Check for numerical issues
+        if np.any(~np.isfinite(P)):
+            P = np.nan_to_num(P, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Vectorized Q, U computation with per-sample noise
+        # Create noise sigma array: sigma[b,j] = noise_levels[b] / weights[b,j]
+        # Avoid division by zero
+        safe_weights = np.where(weights_batch > 0, weights_batch, 1.0)
+        sigma = noise_levels[:, np.newaxis] / safe_weights  # (batch, n_freq)
+        
+        # Generate noise
+        noise_Q = np.random.normal(0, 1, (batch_size, self._n_freq)) * sigma
+        noise_U = np.random.normal(0, 1, (batch_size, self._n_freq)) * sigma
+        
+        # Apply weights mask (zero where weight is zero)
+        mask = weights_batch > 0
+        
+        Q = np.where(mask, P.real + noise_Q, 0.0)
+        U = np.where(mask, P.imag + noise_U, 0.0)
+        
+        # Concatenate [Q, U]
+        return np.hstack([Q, U])
+    
     def simulate_noiseless(
         self, 
         theta: np.ndarray
