@@ -121,11 +121,11 @@ class TrainingConfig:
     simulation_scaling: bool = True
     simulation_scaling_mode: str = "power"
     scaling_power: float = 2.0
-    simulation_batch_size: int = 0  # 0 = auto (based on RAM), batch size for generating sims
+    simulation_batch_size: int = 10000  # Chunk size for saving simulations to disk
     
     # Neural network training parameters
     learning_rate: float = 5e-4
-    training_batch_size: int = 0  # 0 = auto (based on VRAM), batch size for NN training
+    training_batch_size: int = 1024  # Mini-batch size for GPU training
     stop_after_epochs: int = 20
     validation_fraction: float = 0.1
     
@@ -312,27 +312,14 @@ class Configuration:
         # Extract training config
         train_raw = raw.get("training", {})
         
-        # Handle "auto" for batch sizes
-        train_batch = train_raw.get("training_batch_size", "auto")
-        if train_batch == "auto":
-            train_batch = 0
-        else:
-            train_batch = int(train_batch)
-        
-        sim_batch = train_raw.get("simulation_batch_size", "auto")
-        if sim_batch == "auto":
-            sim_batch = 0
-        else:
-            sim_batch = int(sim_batch)
-        
         training = TrainingConfig(
             n_simulations=int(train_raw.get("n_simulations", 30000)),
             simulation_scaling=bool(train_raw.get("simulation_scaling", True)),
             simulation_scaling_mode=str(train_raw.get("simulation_scaling_mode", "power")),
             scaling_power=float(train_raw.get("scaling_power", 2.0)),
-            simulation_batch_size=sim_batch,
+            simulation_batch_size=int(train_raw.get("simulation_batch_size", 10000)),
             learning_rate=float(train_raw.get("learning_rate", 5e-4)),
-            training_batch_size=train_batch,
+            training_batch_size=int(train_raw.get("training_batch_size", 1024)),
             stop_after_epochs=int(train_raw.get("stop_after_epochs", 20)),
             validation_fraction=float(train_raw.get("validation_fraction", 0.1)),
             device=str(train_raw.get("device", "cuda")),

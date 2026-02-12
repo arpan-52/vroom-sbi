@@ -54,15 +54,15 @@ physics:
 
 training:
   # Simulation settings
-  n_simulations: 30000          # Base simulations for N=1 component
+  n_simulations: 30000          # Total simulations for N=1 (scaled for higher N)
   simulation_scaling: true
   simulation_scaling_mode: "power"
   scaling_power: 2.0
-  simulation_batch_size: "auto" # Batch size for generating sims ("auto" or integer, based on RAM)
+  simulation_batch_size: 10000  # Chunk size - each .pt file has this many samples
   
   # Neural network training
   learning_rate: 0.0005
-  training_batch_size: "auto"   # Batch size for NN training ("auto" or integer, based on VRAM)
+  training_batch_size: 1024     # Mini-batch size for GPU training
   stop_after_epochs: 20
   validation_fraction: 0.1
   

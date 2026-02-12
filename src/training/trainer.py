@@ -268,45 +268,7 @@ class SBITrainer:
         
         return result
     
-    def _calculate_chunk_size(self, n_params: int, n_freq: int) -> int:
-        """
-        Calculate chunk size to fit in VRAM with headroom.
-        
-        Each sample: theta (n_params) + x (2*n_freq) floats = 4 bytes each
-        Chunk size is rounded to multiple of training_batch_size for clean batching.
-        """
-        # Get VRAM from config or use default
-        vram_gb = self.config.hardware.vram_gb
-        if vram_gb == 0:
-            vram_gb = 8.0  # Conservative default
-        
-        # Use 50% of VRAM for data (rest for model, gradients, overhead)
-        usable_bytes = vram_gb * 1024**3 * 0.5
-        
-        # Bytes per sample
-        bytes_per_sample = (n_params + 2 * n_freq) * 4  # float32
-        
-        # Calculate chunk size
-        chunk_size = int(usable_bytes / bytes_per_sample)
-        
-        # Get training batch size - if auto (0), calculate from VRAM
-        train_batch = self.config.training.training_batch_size
-        if train_batch == 0:
-            # Use ~10% of VRAM for a single batch (model + gradients need rest)
-            batch_bytes = vram_gb * 1024**3 * 0.1
-            train_batch = int(batch_bytes / bytes_per_sample)
-            # Round down to power of 2
-            train_batch = 2 ** (train_batch.bit_length() - 1) if train_batch > 0 else 64
-            train_batch = max(64, train_batch)
-        
-        # Round DOWN to nearest multiple of training_batch_size
-        chunk_size = (chunk_size // train_batch) * train_batch
-        
-        # Ensure at least one batch worth
-        chunk_size = max(train_batch, chunk_size)
-        
-        return chunk_size
-    
+
     def _generate_simulation_chunks(
         self,
         simulator: RMSimulator,
@@ -318,8 +280,10 @@ class SBITrainer:
         """
         Generate simulations and save as chunked .pt files.
         
-        Each chunk is sized to fit in VRAM for efficient training.
-        Memory usage: O(chunk_size) - one chunk at a time.
+        User controls everything:
+        - n_simulations: total simulations
+        - simulation_batch_size: chunk size (each .pt file)
+        - training_batch_size: mini-batch for GPU
         
         Returns path to chunk directory.
         """
@@ -327,31 +291,33 @@ class SBITrainer:
         n_freq = simulator.n_freq
         n_params = simulator.n_params
         
-        # Calculate chunk size based on VRAM (already multiple of training_batch_size)
-        chunk_size = self._calculate_chunk_size(n_params, n_freq)
+        # Chunk size = simulation_batch_size (user-supplied, no auto)
+        chunk_size = self.config.training.simulation_batch_size
         
-        # Round n_simulations UP to multiple of chunk_size
-        n_simulations_adjusted = ((n_simulations + chunk_size - 1) // chunk_size) * chunk_size
-        n_chunks = n_simulations_adjusted // chunk_size
+        # Number of chunks
+        n_full_chunks = n_simulations // chunk_size
+        remainder = n_simulations % chunk_size
+        n_chunks = n_full_chunks + (1 if remainder > 0 else 0)
         
-        if n_simulations_adjusted != n_simulations:
-            logger.info(f"Adjusted simulations: {n_simulations:,} -> {n_simulations_adjusted:,} (multiple of chunk_size)")
-        
-        logger.info(f"Generating {n_simulations_adjusted:,} simulations in {n_chunks} chunks")
-        logger.info(f"Chunk size: {chunk_size:,} samples (~{chunk_size * (n_params + 2*n_freq) * 4 / 1024**3:.2f} GB each)")
+        logger.info(f"Generating {n_simulations:,} simulations in {n_chunks} chunk(s)")
+        logger.info(f"Chunk size: {chunk_size:,} samples")
         
         # Create chunk directory
         output_dir = Path(self.config.training.save_dir)
         chunk_dir = output_dir / f"chunks_{model_type}_n{n_components}"
         chunk_dir.mkdir(parents=True, exist_ok=True)
         
-        # Generate and save chunks - each chunk is exactly chunk_size
+        # Generate and save chunks
+        samples_generated = 0
         for chunk_idx in range(n_chunks):
-            logger.info(f"Generating chunk {chunk_idx + 1}/{n_chunks} ({chunk_size:,} samples)...")
+            # Last chunk may be smaller
+            this_chunk_size = min(chunk_size, n_simulations - samples_generated)
+            
+            logger.info(f"Generating chunk {chunk_idx + 1}/{n_chunks} ({this_chunk_size:,} samples)...")
             
             # Sample parameters for this chunk
             chunk_theta = sample_prior(
-                chunk_size, n_components, flat_priors,
+                this_chunk_size, n_components, flat_priors,
                 model_type=model_type
             )
             
@@ -363,7 +329,7 @@ class SBITrainer:
                     gap_prob=self.config.weight_augmentation.gap_prob,
                     large_block_prob=self.config.weight_augmentation.large_block_prob,
                     noise_variation=self.config.weight_augmentation.noise_variation,
-                ) for _ in range(chunk_size)
+                ) for _ in range(this_chunk_size)
             ], dtype=np.float32)
             
             # Augment noise levels
@@ -373,10 +339,10 @@ class SBITrainer:
                         base_noise_level,
                         self.config.noise.augmentation_min_factor,
                         self.config.noise.augmentation_max_factor,
-                    ) for _ in range(chunk_size)
+                    ) for _ in range(this_chunk_size)
                 ], dtype=np.float32)
             else:
-                noise_levels = np.full(chunk_size, base_noise_level, dtype=np.float32)
+                noise_levels = np.full(this_chunk_size, base_noise_level, dtype=np.float32)
             
             # Simulate
             chunk_x = simulator.simulate_batch(chunk_theta, chunk_weights, noise_levels)
@@ -392,11 +358,13 @@ class SBITrainer:
             
             # Free memory
             del chunk_theta, chunk_weights, noise_levels, chunk_x
+            
+            samples_generated += this_chunk_size
         
         # Save metadata
         meta_path = chunk_dir / "metadata.pt"
         torch.save({
-            'n_simulations': n_simulations_adjusted,
+            'n_simulations': n_simulations,
             'n_chunks': n_chunks,
             'chunk_size': chunk_size,
             'n_components': n_components,
@@ -405,9 +373,8 @@ class SBITrainer:
             'n_params': n_params,
         }, meta_path)
         
-        logger.info(f"Generated {n_simulations_adjusted:,} simulations in {n_chunks} chunks")
+        logger.info(f"Generated {n_simulations:,} simulations in {n_chunks} chunk(s)")
         return chunk_dir
-    
     def _train_on_chunks(
         self,
         chunk_dir: Path,
