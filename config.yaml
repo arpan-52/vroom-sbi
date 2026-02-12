@@ -58,11 +58,11 @@ training:
   simulation_scaling: true
   simulation_scaling_mode: "power"
   scaling_power: 2.0
-  num_parallel_jobs: "auto"     # Parallel simulation jobs ("auto" or integer)
+  simulation_batch_size: "auto" # Batch size for generating sims ("auto" or integer, based on RAM)
   
-  # Neural network training (batch_size auto-configured from VRAM)
+  # Neural network training
   learning_rate: 0.0005
-  training_batch_size: "auto"   # "auto" or integer
+  training_batch_size: "auto"   # Batch size for NN training ("auto" or integer, based on VRAM)
   stop_after_epochs: 20
   validation_fraction: 0.1
   

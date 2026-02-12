@@ -121,11 +121,11 @@ class TrainingConfig:
     simulation_scaling: bool = True
     simulation_scaling_mode: str = "power"
     scaling_power: float = 2.0
-    num_parallel_jobs: int = 0  # 0 = auto (use all cores)
+    simulation_batch_size: int = 0  # 0 = auto (based on RAM), batch size for generating sims
     
     # Neural network training parameters
     learning_rate: float = 5e-4
-    training_batch_size: int = 0  # 0 = auto (based on VRAM)
+    training_batch_size: int = 0  # 0 = auto (based on VRAM), batch size for NN training
     stop_after_epochs: int = 20
     validation_fraction: float = 0.1
     
@@ -312,25 +312,25 @@ class Configuration:
         # Extract training config
         train_raw = raw.get("training", {})
         
-        # Handle "auto" for training_batch_size and num_parallel_jobs
+        # Handle "auto" for batch sizes
         train_batch = train_raw.get("training_batch_size", "auto")
         if train_batch == "auto":
             train_batch = 0
         else:
             train_batch = int(train_batch)
-            
-        num_parallel = train_raw.get("num_parallel_jobs", "auto")
-        if num_parallel == "auto":
-            num_parallel = 0
+        
+        sim_batch = train_raw.get("simulation_batch_size", "auto")
+        if sim_batch == "auto":
+            sim_batch = 0
         else:
-            num_parallel = int(num_parallel)
+            sim_batch = int(sim_batch)
         
         training = TrainingConfig(
             n_simulations=int(train_raw.get("n_simulations", 30000)),
             simulation_scaling=bool(train_raw.get("simulation_scaling", True)),
             simulation_scaling_mode=str(train_raw.get("simulation_scaling_mode", "power")),
             scaling_power=float(train_raw.get("scaling_power", 2.0)),
-            num_parallel_jobs=num_parallel,
+            simulation_batch_size=sim_batch,
             learning_rate=float(train_raw.get("learning_rate", 5e-4)),
             training_batch_size=train_batch,
             stop_after_epochs=int(train_raw.get("stop_after_epochs", 20)),
@@ -448,10 +448,10 @@ class Configuration:
                 "simulation_scaling": self.training.simulation_scaling,
                 "simulation_scaling_mode": self.training.simulation_scaling_mode,
                 "scaling_power": self.training.scaling_power,
+                "simulation_batch_size": self.training.simulation_batch_size,
                 "training_batch_size": self.training.training_batch_size,
                 "learning_rate": self.training.learning_rate,
                 "stop_after_epochs": self.training.stop_after_epochs,
-                "num_parallel_jobs": self.training.num_parallel_jobs,
                 "device": self.training.device,
                 "validation_fraction": self.training.validation_fraction,
                 "save_dir": self.training.save_dir,

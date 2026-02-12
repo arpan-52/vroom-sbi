@@ -3,18 +3,256 @@ Data loading utilities for VROOM-SBI training.
 
 Handles:
 - Simulation dataset creation
-- Saving/loading simulations with torch.save()
-- DataLoader creation
+- Streaming from HDF5 (memory-efficient)
+- Async prefetching: Disk → RAM → GPU pipeline
+- Saving/loading simulations
 """
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, IterableDataset
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Iterator
 import logging
+import threading
+import queue
 
 logger = logging.getLogger(__name__)
+
+
+class HDF5StreamingDataset(IterableDataset):
+    """
+    Streaming dataset that reads from HDF5 file.
+    
+    Memory usage: O(batch_size * prefetch_factor), not O(dataset_size)
+    
+    Parameters
+    ----------
+    h5_path : Path
+        Path to HDF5 file with 'theta' and 'x' datasets
+    batch_size : int
+        Batch size for reading chunks
+    shuffle : bool
+        Whether to shuffle indices (loads index array only)
+    device : str
+        Target device for tensors
+    """
+    
+    def __init__(
+        self,
+        h5_path: Path,
+        batch_size: int = 256,
+        shuffle: bool = True,
+        device: str = 'cuda',
+    ):
+        self.h5_path = Path(h5_path)
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.device = device
+        
+        # Read metadata without loading data
+        import h5py
+        with h5py.File(self.h5_path, 'r') as f:
+            self.n_samples = f['theta'].shape[0]
+            self.n_params = f['theta'].shape[1]
+            self.x_dim = f['x'].shape[1]
+            self.n_freq = f.attrs.get('n_freq', self.x_dim // 2)
+    
+    def __len__(self):
+        return self.n_samples
+    
+    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        """Iterate over batches, reading from disk."""
+        import h5py
+        
+        # Generate indices
+        indices = np.arange(self.n_samples)
+        if self.shuffle:
+            np.random.shuffle(indices)
+        
+        # Open file for this worker
+        with h5py.File(self.h5_path, 'r') as f:
+            theta_ds = f['theta']
+            x_ds = f['x']
+            
+            # Yield batches
+            for start in range(0, self.n_samples, self.batch_size):
+                end = min(start + self.batch_size, self.n_samples)
+                batch_indices = indices[start:end]
+                
+                # Sort indices for efficient HDF5 read (contiguous access)
+                sorted_idx = np.argsort(batch_indices)
+                sorted_batch_indices = batch_indices[sorted_idx]
+                
+                # Read from disk
+                theta_batch = theta_ds[sorted_batch_indices]
+                x_batch = x_ds[sorted_batch_indices]
+                
+                # Unsort to restore shuffle order
+                unsort_idx = np.argsort(sorted_idx)
+                theta_batch = theta_batch[unsort_idx]
+                x_batch = x_batch[unsort_idx]
+                
+                # Convert to tensors and move to device
+                theta_t = torch.tensor(theta_batch, dtype=torch.float32, device=self.device)
+                x_t = torch.tensor(x_batch, dtype=torch.float32, device=self.device)
+                
+                yield theta_t, x_t
+
+
+class AsyncPrefetchLoader:
+    """
+    Async data loader that prefetches batches in background thread.
+    
+    Pipeline: Disk → RAM (background) → GPU (foreground)
+    
+    Parameters
+    ----------
+    h5_path : Path
+        Path to HDF5 file
+    batch_size : int
+        Batch size
+    prefetch_batches : int
+        Number of batches to prefetch (controls RAM usage)
+    shuffle : bool
+        Whether to shuffle
+    device : str
+        Target GPU device
+    """
+    
+    def __init__(
+        self,
+        h5_path: Path,
+        batch_size: int = 256,
+        prefetch_batches: int = 4,
+        shuffle: bool = True,
+        device: str = 'cuda',
+    ):
+        self.h5_path = Path(h5_path)
+        self.batch_size = batch_size
+        self.prefetch_batches = prefetch_batches
+        self.shuffle = shuffle
+        self.device = device
+        
+        # Read metadata
+        import h5py
+        with h5py.File(self.h5_path, 'r') as f:
+            self.n_samples = f['theta'].shape[0]
+            self.n_params = f['theta'].shape[1]
+            self.x_dim = f['x'].shape[1]
+        
+        self.n_batches = (self.n_samples + batch_size - 1) // batch_size
+    
+    def __len__(self):
+        return self.n_batches
+    
+    def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+        """Iterate with async prefetching."""
+        import h5py
+        
+        # Queue for prefetched batches
+        prefetch_queue = queue.Queue(maxsize=self.prefetch_batches)
+        stop_event = threading.Event()
+        
+        # Generate indices
+        indices = np.arange(self.n_samples)
+        if self.shuffle:
+            np.random.shuffle(indices)
+        
+        def prefetch_worker():
+            """Background thread that reads from disk to RAM."""
+            try:
+                with h5py.File(self.h5_path, 'r') as f:
+                    theta_ds = f['theta']
+                    x_ds = f['x']
+                    
+                    for start in range(0, self.n_samples, self.batch_size):
+                        if stop_event.is_set():
+                            break
+                        
+                        end = min(start + self.batch_size, self.n_samples)
+                        batch_indices = indices[start:end]
+                        
+                        # Sort for efficient HDF5 read
+                        sorted_idx = np.argsort(batch_indices)
+                        sorted_batch_indices = batch_indices[sorted_idx]
+                        
+                        # Read from disk to RAM (numpy arrays)
+                        theta_batch = theta_ds[sorted_batch_indices]
+                        x_batch = x_ds[sorted_batch_indices]
+                        
+                        # Unsort
+                        unsort_idx = np.argsort(sorted_idx)
+                        theta_batch = theta_batch[unsort_idx]
+                        x_batch = x_batch[unsort_idx]
+                        
+                        # Put in queue (blocks if queue full)
+                        prefetch_queue.put((theta_batch, x_batch))
+                
+                # Signal end of data
+                prefetch_queue.put(None)
+            except Exception as e:
+                logger.error(f"Prefetch worker error: {e}")
+                prefetch_queue.put(None)
+        
+        # Start prefetch thread
+        prefetch_thread = threading.Thread(target=prefetch_worker, daemon=True)
+        prefetch_thread.start()
+        
+        try:
+            # Consume from queue, move to GPU
+            while True:
+                item = prefetch_queue.get()
+                if item is None:
+                    break
+                
+                theta_batch, x_batch = item
+                
+                # Move to GPU (this is the only GPU transfer)
+                theta_t = torch.tensor(theta_batch, dtype=torch.float32, device=self.device)
+                x_t = torch.tensor(x_batch, dtype=torch.float32, device=self.device)
+                
+                yield theta_t, x_t
+        finally:
+            stop_event.set()
+            prefetch_thread.join(timeout=1.0)
+
+
+def create_streaming_loader(
+    h5_path: Path,
+    batch_size: int = 256,
+    prefetch_batches: int = 4,
+    shuffle: bool = True,
+    device: str = 'cuda',
+) -> AsyncPrefetchLoader:
+    """
+    Create an async streaming data loader for training.
+    
+    Parameters
+    ----------
+    h5_path : Path
+        Path to HDF5 simulation file
+    batch_size : int
+        Training batch size
+    prefetch_batches : int
+        Number of batches to prefetch (RAM usage = prefetch_batches * batch_size * data_size)
+    shuffle : bool
+        Whether to shuffle data each epoch
+    device : str
+        Target device
+        
+    Returns
+    -------
+    AsyncPrefetchLoader
+        Streaming data loader
+    """
+    return AsyncPrefetchLoader(
+        h5_path=h5_path,
+        batch_size=batch_size,
+        prefetch_batches=prefetch_batches,
+        shuffle=shuffle,
+        device=device,
+    )
 
 
 class SimulationDataset(Dataset):
