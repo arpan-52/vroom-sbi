@@ -251,29 +251,26 @@ def optimize_for_hardware(
     else:
         settings.training_batch_size = 128
     
-    # === RAM-based Prefetching ===
+    # === RAM-based settings ===
     ram = hardware.ram_available_gb
     
-    if ram >= 64:
-        settings.num_workers = min(16, hardware.cpu_cores)
-        settings.prefetch_factor = 8
-        settings.simulation_batch_size = 50000  # 60GB+ RAM: huge batches
-    elif ram >= 32:
+    # num_workers scales with RAM and cores
+    if ram >= 32:
         settings.num_workers = min(8, hardware.cpu_cores)
         settings.prefetch_factor = 4
-        settings.simulation_batch_size = 20000  # 32GB RAM
     elif ram >= 16:
         settings.num_workers = min(4, hardware.cpu_cores)
         settings.prefetch_factor = 2
-        settings.simulation_batch_size = 10000  # 16GB RAM
-    elif ram >= 8:
+    else:
         settings.num_workers = min(2, hardware.cpu_cores)
         settings.prefetch_factor = 2
-        settings.simulation_batch_size = 5000   # 8GB RAM
-    else:
-        settings.num_workers = 1
-        settings.prefetch_factor = 2
-        settings.simulation_batch_size = 1000   # Low RAM
+    
+    # simulation_batch_size: use ~25% of RAM
+    # Assuming ~1KB per sample (theta + x + weights for 128 freq channels)
+    # This is for simulation generation, not training
+    bytes_per_sample = 1024  # ~1KB conservative estimate
+    usable_ram_bytes = ram * 1024**3 * 0.25
+    settings.simulation_batch_size = max(1000, int(usable_ram_bytes / bytes_per_sample))
     
     # Pin memory only if we have GPU and enough RAM
     settings.pin_memory = hardware.gpu_available and ram >= 8

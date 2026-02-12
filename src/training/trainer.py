@@ -273,7 +273,7 @@ class SBITrainer:
         Calculate chunk size to fit in VRAM with headroom.
         
         Each sample: theta (n_params) + x (2*n_freq) floats = 4 bytes each
-        Target: ~70% of VRAM to leave room for model + gradients
+        Chunk size is rounded to multiple of training_batch_size for clean batching.
         """
         # Get VRAM from config or use default
         vram_gb = self.config.hardware.vram_gb
@@ -289,8 +289,21 @@ class SBITrainer:
         # Calculate chunk size
         chunk_size = int(usable_bytes / bytes_per_sample)
         
-        # Clamp to reasonable range
-        chunk_size = max(1000, min(chunk_size, 500000))
+        # Get training batch size - if auto (0), calculate from VRAM
+        train_batch = self.config.training.training_batch_size
+        if train_batch == 0:
+            # Use ~10% of VRAM for a single batch (model + gradients need rest)
+            batch_bytes = vram_gb * 1024**3 * 0.1
+            train_batch = int(batch_bytes / bytes_per_sample)
+            # Round down to power of 2
+            train_batch = 2 ** (train_batch.bit_length() - 1) if train_batch > 0 else 64
+            train_batch = max(64, train_batch)
+        
+        # Round DOWN to nearest multiple of training_batch_size
+        chunk_size = (chunk_size // train_batch) * train_batch
+        
+        # Ensure at least one batch worth
+        chunk_size = max(train_batch, chunk_size)
         
         return chunk_size
     
@@ -314,30 +327,31 @@ class SBITrainer:
         n_freq = simulator.n_freq
         n_params = simulator.n_params
         
-        # Calculate chunk size based on VRAM
+        # Calculate chunk size based on VRAM (already multiple of training_batch_size)
         chunk_size = self._calculate_chunk_size(n_params, n_freq)
-        n_chunks = (n_simulations + chunk_size - 1) // chunk_size
         
-        logger.info(f"Generating {n_simulations:,} simulations in {n_chunks} chunks")
-        logger.info(f"Chunk size: {chunk_size:,} samples (~{chunk_size * (n_params + 2*n_freq) * 4 / 1024**3:.1f} GB each)")
+        # Round n_simulations UP to multiple of chunk_size
+        n_simulations_adjusted = ((n_simulations + chunk_size - 1) // chunk_size) * chunk_size
+        n_chunks = n_simulations_adjusted // chunk_size
+        
+        if n_simulations_adjusted != n_simulations:
+            logger.info(f"Adjusted simulations: {n_simulations:,} -> {n_simulations_adjusted:,} (multiple of chunk_size)")
+        
+        logger.info(f"Generating {n_simulations_adjusted:,} simulations in {n_chunks} chunks")
+        logger.info(f"Chunk size: {chunk_size:,} samples (~{chunk_size * (n_params + 2*n_freq) * 4 / 1024**3:.2f} GB each)")
         
         # Create chunk directory
         output_dir = Path(self.config.training.save_dir)
         chunk_dir = output_dir / f"chunks_{model_type}_n{n_components}"
         chunk_dir.mkdir(parents=True, exist_ok=True)
         
-        # Generate and save chunks
-        samples_generated = 0
-        chunk_idx = 0
-        
-        while samples_generated < n_simulations:
-            actual_chunk_size = min(chunk_size, n_simulations - samples_generated)
-            
-            logger.info(f"Generating chunk {chunk_idx + 1}/{n_chunks} ({actual_chunk_size:,} samples)...")
+        # Generate and save chunks - each chunk is exactly chunk_size
+        for chunk_idx in range(n_chunks):
+            logger.info(f"Generating chunk {chunk_idx + 1}/{n_chunks} ({chunk_size:,} samples)...")
             
             # Sample parameters for this chunk
             chunk_theta = sample_prior(
-                actual_chunk_size, n_components, flat_priors,
+                chunk_size, n_components, flat_priors,
                 model_type=model_type
             )
             
@@ -349,7 +363,7 @@ class SBITrainer:
                     gap_prob=self.config.weight_augmentation.gap_prob,
                     large_block_prob=self.config.weight_augmentation.large_block_prob,
                     noise_variation=self.config.weight_augmentation.noise_variation,
-                ) for _ in range(actual_chunk_size)
+                ) for _ in range(chunk_size)
             ], dtype=np.float32)
             
             # Augment noise levels
@@ -359,10 +373,10 @@ class SBITrainer:
                         base_noise_level,
                         self.config.noise.augmentation_min_factor,
                         self.config.noise.augmentation_max_factor,
-                    ) for _ in range(actual_chunk_size)
+                    ) for _ in range(chunk_size)
                 ], dtype=np.float32)
             else:
-                noise_levels = np.full(actual_chunk_size, base_noise_level, dtype=np.float32)
+                noise_levels = np.full(chunk_size, base_noise_level, dtype=np.float32)
             
             # Simulate
             chunk_x = simulator.simulate_batch(chunk_theta, chunk_weights, noise_levels)
@@ -378,14 +392,11 @@ class SBITrainer:
             
             # Free memory
             del chunk_theta, chunk_weights, noise_levels, chunk_x
-            
-            samples_generated += actual_chunk_size
-            chunk_idx += 1
         
         # Save metadata
         meta_path = chunk_dir / "metadata.pt"
         torch.save({
-            'n_simulations': n_simulations,
+            'n_simulations': n_simulations_adjusted,
             'n_chunks': n_chunks,
             'chunk_size': chunk_size,
             'n_components': n_components,
@@ -394,7 +405,7 @@ class SBITrainer:
             'n_params': n_params,
         }, meta_path)
         
-        logger.info(f"Generated {n_simulations:,} simulations in {n_chunks} chunks")
+        logger.info(f"Generated {n_simulations_adjusted:,} simulations in {n_chunks} chunks")
         return chunk_dir
     
     def _train_on_chunks(
@@ -474,12 +485,18 @@ class SBITrainer:
                 x = chunk_data['x'].to(self.device)
                 del chunk_data
                 
+                # Ensure correct shape: (n_samples, n_features)
+                if theta.dim() == 1:
+                    theta = theta.unsqueeze(0)
+                if x.dim() == 1:
+                    x = x.unsqueeze(0)
+                
                 # Split into train/val
-                n_samples = len(theta)
+                n_samples = theta.shape[0]
                 n_val = int(n_samples * validation_fraction)
                 n_train = n_samples - n_val
                 
-                indices = torch.randperm(n_samples)
+                indices = torch.randperm(n_samples, device=self.device)
                 train_idx = indices[:n_train]
                 val_idx = indices[n_train:]
                 
@@ -488,12 +505,13 @@ class SBITrainer:
                 
                 # Mini-batch training within chunk
                 for i in range(0, n_train, training_batch_size):
-                    batch_idx = train_idx[i:i + training_batch_size]
+                    end_i = min(i + training_batch_size, n_train)
+                    batch_idx = train_idx[i:end_i]
                     theta_batch = theta[batch_idx]
                     x_batch = x[batch_idx]
                     
                     optimizer.zero_grad()
-                    # SBI flow: log_prob(inputs, context) - positional args
+                    # SBI flow: log_prob(inputs=theta, condition=x)
                     loss = -density_estimator.log_prob(theta_batch, x_batch).mean()
                     loss.backward()
                     optimizer.step()
@@ -504,9 +522,9 @@ class SBITrainer:
                 density_estimator.eval()
                 with torch.no_grad():
                     if n_val > 0:
-                        val_loss = -density_estimator.log_prob(
-                            theta[val_idx], x[val_idx]
-                        ).mean()
+                        theta_val = theta[val_idx]
+                        x_val = x[val_idx]
+                        val_loss = -density_estimator.log_prob(theta_val, x_val).mean()
                         epoch_val_losses.append(val_loss.item())
                 
                 # Free GPU memory
