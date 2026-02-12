@@ -415,7 +415,7 @@ class SBITrainer:
         Memory usage: O(chunk_size) - one chunk at a time.
         """
         # Load metadata
-        meta = torch.load(chunk_dir / "metadata.pt")
+        meta = torch.load(chunk_dir / "metadata.pt", weights_only=True)
         n_chunks = meta['n_chunks']
         n_params = meta['n_params']
         n_freq = meta['n_freq']
@@ -424,14 +424,12 @@ class SBITrainer:
         chunk_files = sorted(chunk_dir.glob("chunk_*.pt"))
         logger.info(f"Training on {len(chunk_files)} chunks")
         
-        # Build the density estimator
-        # Load first chunk to get dimensions
-        first_chunk = torch.load(chunk_files[0])
-        x_dim = first_chunk['x'].shape[1]
-        theta_dim = first_chunk['theta'].shape[1]
-        del first_chunk
+        # Load first chunk for network initialization (need real data for standardization)
+        first_chunk = torch.load(chunk_files[0], weights_only=True)
+        init_theta = first_chunk['theta']
+        init_x = first_chunk['x']
         
-        # Build neural network
+        # Build neural network using real data for standardization
         density_estimator = posterior_nn(
             model=self.config.sbi.model,
             hidden_features=arch_config.hidden_features,
@@ -440,11 +438,11 @@ class SBITrainer:
             embedding_net=embedding_net,
         )
         
-        # Initialize by passing dummy data
-        dummy_x = torch.zeros(1, x_dim)
-        dummy_theta = torch.zeros(1, theta_dim)
-        density_estimator = density_estimator(dummy_theta, dummy_x)
+        # Initialize with real data (SBI computes mean/std for normalization)
+        density_estimator = density_estimator(init_theta, init_x)
         density_estimator = density_estimator.to(self.device)
+        
+        del first_chunk, init_theta, init_x
         
         # Optimizer
         optimizer = torch.optim.Adam(density_estimator.parameters(), lr=learning_rate)
@@ -471,7 +469,7 @@ class SBITrainer:
                 chunk_path = chunk_files[chunk_idx]
                 
                 # Load chunk to GPU
-                chunk_data = torch.load(chunk_path)
+                chunk_data = torch.load(chunk_path, weights_only=True)
                 theta = chunk_data['theta'].to(self.device)
                 x = chunk_data['x'].to(self.device)
                 del chunk_data
