@@ -493,7 +493,8 @@ class SBITrainer:
                     x_batch = x[batch_idx]
                     
                     optimizer.zero_grad()
-                    loss = -density_estimator.log_prob(theta_batch, context=x_batch).mean()
+                    # SBI flow: log_prob(inputs, context) - positional args
+                    loss = -density_estimator.log_prob(theta_batch, x_batch).mean()
                     loss.backward()
                     optimizer.step()
                     
@@ -504,7 +505,7 @@ class SBITrainer:
                 with torch.no_grad():
                     if n_val > 0:
                         val_loss = -density_estimator.log_prob(
-                            theta[val_idx], context=x[val_idx]
+                            theta[val_idx], x[val_idx]
                         ).mean()
                         epoch_val_losses.append(val_loss.item())
                 

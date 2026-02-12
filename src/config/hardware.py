@@ -244,8 +244,8 @@ def optimize_for_hardware(
         while batch_size * 2 <= max_batch:
             batch_size *= 2
         
-        # Clamp to reasonable range
-        settings.training_batch_size = max(64, min(4096, batch_size))
+        # Minimum 64, no upper cap (let VRAM decide)
+        settings.training_batch_size = max(64, batch_size)
         
         logger.info(f"VRAM: {vram_gb:.1f}GB free → batch_size={settings.training_batch_size}")
     else:
