@@ -448,15 +448,25 @@ class SBITrainer:
                 
                 # Load chunk to GPU
                 chunk_data = torch.load(chunk_path, weights_only=True)
-                theta = chunk_data['theta'].to(self.device)
-                x = chunk_data['x'].to(self.device)
+                theta = chunk_data['theta']
+                x = chunk_data['x']
                 del chunk_data
                 
-                # Ensure correct shape: (n_samples, n_features)
-                if theta.dim() == 1:
-                    theta = theta.unsqueeze(0)
-                if x.dim() == 1:
-                    x = x.unsqueeze(0)
+                # Debug: check shapes before moving to device
+                if epoch == 1 and chunk_idx == chunk_order[0]:
+                    logger.info(f"  Raw chunk shapes: theta={theta.shape}, x={x.shape}")
+                
+                # Ensure theta is (n_samples, n_params) and x is (n_samples, n_features)
+                # If shapes look swapped, transpose
+                if theta.shape[0] < theta.shape[1] if theta.dim() == 2 else False:
+                    logger.warning(f"  Transposing theta from {theta.shape}")
+                    theta = theta.T
+                if x.shape[0] < x.shape[1] if x.dim() == 2 else False:
+                    logger.warning(f"  Transposing x from {x.shape}")
+                    x = x.T
+                
+                theta = theta.to(self.device)
+                x = x.to(self.device)
                 
                 # Split into train/val
                 n_samples = theta.shape[0]
