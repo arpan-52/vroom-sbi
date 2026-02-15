@@ -204,19 +204,13 @@ class SBITrainer:
                 best_epoch = val_losses.index(best_val) + 1
                 logger.info(f"Best validation loss: {best_val:.4f} (epoch {best_epoch})")
         
-        # Build posterior using SBI
-        inference = SNPE(
+        # Build posterior using DirectPosterior with our wrapped flow
+        # density_estimator is already a StandardizedFlowWrapper from streaming training
+        from sbi.inference.posteriors import DirectPosterior
+        posterior = DirectPosterior(
+            posterior_estimator=density_estimator,
             prior=prior,
-            density_estimator=posterior_nn(
-                model=self.config.sbi.model,
-                hidden_features=arch_config.hidden_features,
-                num_transforms=arch_config.num_transforms,
-                num_bins=self.config.sbi.num_bins,
-                embedding_net=embedding_net,
-            ),
-            device=self.device,
         )
-        posterior = inference.build_posterior(density_estimator)
         
         # Save model with torch.save()
         output_dir = Path(self.config.training.save_dir)
@@ -375,6 +369,7 @@ class SBITrainer:
         
         logger.info(f"Generated {n_simulations:,} simulations in {n_chunks} chunk(s)")
         return chunk_dir
+    
     def _train_on_chunks(
         self,
         chunk_dir: Path,
@@ -387,152 +382,50 @@ class SBITrainer:
         validation_fraction: float,
     ) -> tuple:
         """
-        Train on chunked .pt files.
+        Train on chunked .pt files using custom streaming training.
         
-        Flow: Load chunk → Train on it → Free RAM → Load next chunk → ...
-        Memory usage: O(chunk_size) - one chunk at a time.
+        This uses a custom training loop that truly streams from disk,
+        avoiding the RAM bottleneck of SBI's append_simulations().
+        
+        Based on official SBI tutorial:
+        https://sbi-dev.github.io/sbi/latest/advanced_tutorials/18_training_interface/
+        
+        For single-round amortized NPE:
+        - Uses density_estimator.loss() method
+        - No proposal correction needed
         """
-        # Load metadata
-        meta = torch.load(chunk_dir / "metadata.pt", weights_only=True)
-        n_chunks = meta['n_chunks']
-        n_params = meta['n_params']
-        n_freq = meta['n_freq']
+        from .streaming_trainer import StreamingNPETrainer
         
-        # Get chunk files
-        chunk_files = sorted(chunk_dir.glob("chunk_*.pt"))
-        logger.info(f"Training on {len(chunk_files)} chunks")
+        logger.info("Using custom streaming NPE training (memory efficient)")
         
-        # Load first chunk for network initialization (need real data for standardization)
-        first_chunk = torch.load(chunk_files[0], weights_only=True)
-        init_theta = first_chunk['theta']
-        init_x = first_chunk['x']
+        # Create streaming trainer
+        trainer = StreamingNPETrainer(device=self.device)
         
-        # Build neural network using real data for standardization
-        density_estimator = posterior_nn(
-            model=self.config.sbi.model,
+        # Determine number of workers based on system
+        # Use 0 for safety with chunked data to avoid multiprocessing issues
+        num_workers = 0
+        
+        # Train with streaming
+        density_estimator, history = trainer.train(
+            chunk_dir=chunk_dir,
+            prior=prior,
+            embedding_net=embedding_net,
+            flow_type=self.config.sbi.model,
             hidden_features=arch_config.hidden_features,
             num_transforms=arch_config.num_transforms,
             num_bins=self.config.sbi.num_bins,
-            embedding_net=embedding_net,
+            learning_rate=learning_rate,
+            training_batch_size=training_batch_size,
+            validation_fraction=validation_fraction,
+            max_epochs=500,  # Will early stop
+            stop_after_epochs=stop_after_epochs,
+            clip_grad_norm=5.0,
+            num_workers=num_workers,
+            show_progress=True,
         )
         
-        # Initialize with real data (SBI computes mean/std for normalization)
-        density_estimator = density_estimator(init_theta, init_x)
-        density_estimator = density_estimator.to(self.device)
-        
-        del first_chunk, init_theta, init_x
-        
-        # Optimizer
-        optimizer = torch.optim.Adam(density_estimator.parameters(), lr=learning_rate)
-        
-        # Training history
-        history = {'train_loss': [], 'val_loss': []}
-        
-        best_val_loss = float('inf')
-        epochs_without_improvement = 0
-        best_state_dict = None
-        epoch = 0
-        
-        logger.info("Starting chunk-based training...")
-        
-        while epochs_without_improvement < stop_after_epochs:
-            epoch += 1
-            epoch_train_losses = []
-            epoch_val_losses = []
-            
-            # Shuffle chunk order each epoch
-            chunk_order = torch.randperm(len(chunk_files)).tolist()
-            
-            for chunk_idx in chunk_order:
-                chunk_path = chunk_files[chunk_idx]
-                
-                # Load chunk to GPU
-                chunk_data = torch.load(chunk_path, weights_only=True)
-                theta = chunk_data['theta']
-                x = chunk_data['x']
-                del chunk_data
-                
-                # Debug: check shapes before moving to device
-                if epoch == 1 and chunk_idx == chunk_order[0]:
-                    logger.info(f"  Raw chunk shapes: theta={theta.shape}, x={x.shape}")
-                
-                # Ensure theta is (n_samples, n_params) and x is (n_samples, n_features)
-                # If shapes look swapped, transpose
-                if theta.shape[0] < theta.shape[1] if theta.dim() == 2 else False:
-                    logger.warning(f"  Transposing theta from {theta.shape}")
-                    theta = theta.T
-                if x.shape[0] < x.shape[1] if x.dim() == 2 else False:
-                    logger.warning(f"  Transposing x from {x.shape}")
-                    x = x.T
-                
-                theta = theta.to(self.device)
-                x = x.to(self.device)
-                
-                # Split into train/val
-                n_samples = theta.shape[0]
-                n_val = int(n_samples * validation_fraction)
-                n_train = n_samples - n_val
-                
-                indices = torch.randperm(n_samples, device=self.device)
-                train_idx = indices[:n_train]
-                val_idx = indices[n_train:]
-                
-                # Training on this chunk
-                density_estimator.train()
-                
-                # Mini-batch training within chunk
-                for i in range(0, n_train, training_batch_size):
-                    end_i = min(i + training_batch_size, n_train)
-                    batch_idx = train_idx[i:end_i]
-                    theta_batch = theta[batch_idx]
-                    x_batch = x[batch_idx]
-                    
-                    optimizer.zero_grad()
-                    # SBI flow: log_prob(inputs=theta, condition=x)
-                    loss = -density_estimator.log_prob(theta_batch, x_batch).mean()
-                    loss.backward()
-                    optimizer.step()
-                    
-                    epoch_train_losses.append(loss.item())
-                
-                # Validation on this chunk
-                density_estimator.eval()
-                with torch.no_grad():
-                    if n_val > 0:
-                        theta_val = theta[val_idx]
-                        x_val = x[val_idx]
-                        val_loss = -density_estimator.log_prob(theta_val, x_val).mean()
-                        epoch_val_losses.append(val_loss.item())
-                
-                # Free GPU memory
-                del theta, x
-                torch.cuda.empty_cache()
-            
-            # Epoch statistics
-            avg_train_loss = np.mean(epoch_train_losses)
-            avg_val_loss = np.mean(epoch_val_losses) if epoch_val_losses else None
-            
-            history['train_loss'].append(avg_train_loss)
-            history['val_loss'].append(avg_val_loss)
-            
-            # Early stopping check
-            if avg_val_loss is not None and avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                epochs_without_improvement = 0
-                best_state_dict = {k: v.cpu().clone() for k, v in density_estimator.state_dict().items()}
-            else:
-                epochs_without_improvement += 1
-            
-            # Log progress
-            val_str = f"{avg_val_loss:.4f}" if avg_val_loss else "N/A"
-            logger.info(f"Epoch {epoch}: train={avg_train_loss:.4f}, val={val_str}, patience={epochs_without_improvement}/{stop_after_epochs}")
-        
-        # Restore best model
-        if best_state_dict is not None:
-            density_estimator.load_state_dict(best_state_dict)
-            logger.info(f"Restored best model (val_loss={best_val_loss:.4f})")
-        
-        logger.info(f"Training finished after {epoch} epochs")
+        # Store the trainer for building posterior later
+        self._streaming_trainer = trainer
         
         return density_estimator, history
     
@@ -723,6 +616,7 @@ class SBITrainer:
             # Metadata
             'save_timestamp': datetime.now().isoformat(),
             'torch_version': torch.__version__,
+            'training_type': 'streaming_npe',  # Mark as streaming trained
         }
         
         torch.save(save_dict, save_path)

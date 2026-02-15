@@ -23,6 +23,11 @@ from .networks import (
     SpectralEmbedding,
     SpectralClassifier,
 )
+from .streaming_trainer import (
+    StreamingNPETrainer,
+    ChunkedSimulationDataset,
+    train_streaming_npe,
+)
 
 __all__ = [
     'SBITrainer',
@@ -36,4 +41,8 @@ __all__ = [
     'load_simulations',
     'SpectralEmbedding',
     'SpectralClassifier',
+    # Streaming NPE
+    'StreamingNPETrainer',
+    'ChunkedSimulationDataset',
+    'train_streaming_npe',
 ]
