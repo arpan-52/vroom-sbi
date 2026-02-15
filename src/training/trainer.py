@@ -144,27 +144,17 @@ class SBITrainer:
         
         logger.info(f"Simulator: n_params={simulator.n_params}, n_freq={simulator.n_freq}")
         
-        # Generate simulations
-        theta, x, all_weights = self._generate_simulations(
+        # ============================================================
+        # PHASE 1: Generate all simulations as chunked .pt files
+        # ============================================================
+        chunk_dir = self._generate_simulation_chunks(
             simulator, n_simulations, n_components, 
             flat_priors, model_type
         )
         
-        # Save simulations for classifier
-        if save_simulations_flag:
-            output_dir = Path(self.config.training.save_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            sim_path = output_dir / f"simulations_{model_type}_n{n_components}.pt"
-            save_simulations(
-                sim_path, x, all_weights, theta,
-                n_components, model_type, simulator.n_freq,
-                metadata={'config': self.config.to_dict()}
-            )
-        
-        # Convert to torch
-        theta_t = torch.tensor(theta, dtype=torch.float32, device=self.device)
-        x_t = torch.tensor(x, dtype=torch.float32, device=self.device)
+        # ============================================================
+        # PHASE 2: Train on chunks
+        # ============================================================
         
         # Build embedding network
         input_dim = 2 * simulator.n_freq
@@ -177,62 +167,50 @@ class SBITrainer:
         # Get architecture config
         arch_config = self.config.sbi.get_architecture(n_components)
         
-        # Build density estimator
-        density_estimator_builder = posterior_nn(
-            model=self.config.sbi.model,
-            hidden_features=arch_config.hidden_features,
-            num_transforms=arch_config.num_transforms,
-            num_bins=self.config.sbi.num_bins,
-            embedding_net=embedding_net,
-        )
-        
         logger.info(f"SBI Architecture: {self.config.sbi.model.upper()}")
         logger.info(f"  Hidden: {arch_config.hidden_features}, Transforms: {arch_config.num_transforms}")
         
-        # Create SNPE inference
-        inference = SNPE(
-            prior=prior,
-            density_estimator=density_estimator_builder,
-            device=self.device,
-        )
-        
-        # Append simulations
-        inference.append_simulations(theta_t, x_t)
-        
-        # Train with proper settings from config
-        start_time = datetime.now()
-        
-        # Get training parameters from config
+        # Get training parameters
         learning_rate = self.config.training.learning_rate
         training_batch_size = self.config.training.training_batch_size
         stop_after_epochs = self.config.training.stop_after_epochs
         
         logger.info(f"Training: batch_size={training_batch_size}, lr={learning_rate}, patience={stop_after_epochs}")
         
-        density_estimator = inference.train(
-            training_batch_size=training_batch_size,
+        # Train on chunks
+        start_time = datetime.now()
+        
+        density_estimator, training_history = self._train_on_chunks(
+            chunk_dir=chunk_dir,
+            prior=prior,
+            embedding_net=embedding_net,
+            arch_config=arch_config,
             learning_rate=learning_rate,
-            validation_fraction=self.config.training.validation_fraction,
+            training_batch_size=training_batch_size,
             stop_after_epochs=stop_after_epochs,
-            show_train_summary=True,
+            validation_fraction=self.config.training.validation_fraction,
         )
         
         training_time = (datetime.now() - start_time).total_seconds()
-        
-        # Extract training history from SBI summary
-        training_history = self._extract_training_history(inference)
         
         # Log training summary
         if training_history.get('train_loss'):
             logger.info(f"Training epochs: {len(training_history['train_loss'])}")
             logger.info(f"Final train loss: {training_history['train_loss'][-1]:.4f}")
         if training_history.get('val_loss'):
-            best_val = min(training_history['val_loss'])
-            best_epoch = training_history['val_loss'].index(best_val) + 1
-            logger.info(f"Best validation loss: {best_val:.4f} (epoch {best_epoch})")
+            val_losses = [v for v in training_history['val_loss'] if v is not None]
+            if val_losses:
+                best_val = min(val_losses)
+                best_epoch = val_losses.index(best_val) + 1
+                logger.info(f"Best validation loss: {best_val:.4f} (epoch {best_epoch})")
         
-        # Build posterior
-        posterior = inference.build_posterior(density_estimator)
+        # Build posterior using DirectPosterior with our wrapped flow
+        # density_estimator is already a StandardizedFlowWrapper from streaming training
+        from sbi.inference.posteriors import DirectPosterior
+        posterior = DirectPosterior(
+            posterior_estimator=density_estimator,
+            prior=prior,
+        )
         
         # Save model with torch.save()
         output_dir = Path(self.config.training.save_dir)
@@ -284,71 +262,167 @@ class SBITrainer:
         
         return result
     
-    def _generate_simulations(
+
+    def _generate_simulation_chunks(
         self,
         simulator: RMSimulator,
         n_simulations: int,
         n_components: int,
         flat_priors: Dict[str, float],
         model_type: str,
-    ) -> tuple:
-        """Generate simulations with augmentation - VECTORIZED version."""
+    ) -> Path:
+        """
+        Generate simulations and save as chunked .pt files.
         
-        # Sample parameters (flat_priors contains ALL bounds)
-        theta = sample_prior(
-            n_simulations, n_components, flat_priors,
-            model_type=model_type
-        )
+        User controls everything:
+        - n_simulations: total simulations
+        - simulation_batch_size: chunk size (each .pt file)
+        - training_batch_size: mini-batch for GPU
         
+        Returns path to chunk directory.
+        """
         base_noise_level = self.config.noise.base_level
+        n_freq = simulator.n_freq
+        n_params = simulator.n_params
         
-        logger.info(f"Generating {n_simulations} simulations...")
+        # Chunk size = simulation_batch_size (user-supplied, no auto)
+        chunk_size = self.config.training.simulation_batch_size
         
-        # Process in batches for memory efficiency
-        batch_size = min(1000, n_simulations)  # Process 1000 at a time
+        # Number of chunks
+        n_full_chunks = n_simulations // chunk_size
+        remainder = n_simulations % chunk_size
+        n_chunks = n_full_chunks + (1 if remainder > 0 else 0)
         
-        xs = []
-        all_weights = []
+        logger.info(f"Generating {n_simulations:,} simulations in {n_chunks} chunk(s)")
+        logger.info(f"Chunk size: {chunk_size:,} samples")
         
-        for i in tqdm(range(0, n_simulations, batch_size), desc="Simulating"):
-            batch_theta = theta[i:i + batch_size]
-            actual_batch = len(batch_theta)
+        # Create chunk directory
+        output_dir = Path(self.config.training.save_dir)
+        chunk_dir = output_dir / f"chunks_{model_type}_n{n_components}"
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate and save chunks
+        samples_generated = 0
+        for chunk_idx in range(n_chunks):
+            # Last chunk may be smaller
+            this_chunk_size = min(chunk_size, n_simulations - samples_generated)
             
-            # Generate augmented weights for batch
-            batch_weights = np.array([
+            logger.info(f"Generating chunk {chunk_idx + 1}/{n_chunks} ({this_chunk_size:,} samples)...")
+            
+            # Sample parameters for this chunk
+            chunk_theta = sample_prior(
+                this_chunk_size, n_components, flat_priors,
+                model_type=model_type
+            )
+            
+            # Generate augmented weights
+            chunk_weights = np.array([
                 augment_weights_combined(
                     simulator.weights,
                     scattered_prob=self.config.weight_augmentation.scattered_prob,
                     gap_prob=self.config.weight_augmentation.gap_prob,
                     large_block_prob=self.config.weight_augmentation.large_block_prob,
                     noise_variation=self.config.weight_augmentation.noise_variation,
-                ) for _ in range(actual_batch)
-            ])
+                ) for _ in range(this_chunk_size)
+            ], dtype=np.float32)
             
-            # Augment noise levels for batch
+            # Augment noise levels
             if self.config.noise.augmentation_enable:
                 noise_levels = np.array([
                     augment_base_noise_level(
                         base_noise_level,
                         self.config.noise.augmentation_min_factor,
                         self.config.noise.augmentation_max_factor,
-                    ) for _ in range(actual_batch)
-                ])
+                    ) for _ in range(this_chunk_size)
+                ], dtype=np.float32)
             else:
-                noise_levels = np.full(actual_batch, base_noise_level)
+                noise_levels = np.full(this_chunk_size, base_noise_level, dtype=np.float32)
             
-            # Simulate entire batch at once (vectorized)
-            batch_x = simulator.simulate_batch(batch_theta, batch_weights, noise_levels)
+            # Simulate
+            chunk_x = simulator.simulate_batch(chunk_theta, chunk_weights, noise_levels)
             
-            xs.append(batch_x)
-            all_weights.append(batch_weights)
+            # Save chunk to disk
+            chunk_path = chunk_dir / f"chunk_{chunk_idx:04d}.pt"
+            torch.save({
+                'theta': torch.tensor(chunk_theta, dtype=torch.float32),
+                'x': torch.tensor(chunk_x, dtype=torch.float32),
+            }, chunk_path)
+            
+            logger.info(f"  Saved {chunk_path.name}")
+            
+            # Free memory
+            del chunk_theta, chunk_weights, noise_levels, chunk_x
+            
+            samples_generated += this_chunk_size
         
-        x = np.vstack(xs)
-        all_weights = np.vstack(all_weights)
+        # Save metadata
+        meta_path = chunk_dir / "metadata.pt"
+        torch.save({
+            'n_simulations': n_simulations,
+            'n_chunks': n_chunks,
+            'chunk_size': chunk_size,
+            'n_components': n_components,
+            'model_type': model_type,
+            'n_freq': n_freq,
+            'n_params': n_params,
+        }, meta_path)
         
-        logger.info(f"Generated {len(x)} simulations")
+        logger.info(f"Generated {n_simulations:,} simulations in {n_chunks} chunk(s)")
+        return chunk_dir
+    
+    def _train_on_chunks(
+        self,
+        chunk_dir: Path,
+        prior,
+        embedding_net: nn.Module,
+        arch_config,
+        learning_rate: float,
+        training_batch_size: int,
+        stop_after_epochs: int,
+        validation_fraction: float,
+    ) -> tuple:
+        """
+        Train on chunked .pt files using custom streaming training.
         
-        return theta, x, all_weights
+        This uses a custom training loop that truly streams from disk,
+        avoiding the RAM bottleneck of SBI's append_simulations().
+        
+        Based on official SBI tutorial:
+        https://sbi-dev.github.io/sbi/latest/advanced_tutorials/18_training_interface/
+        
+        For single-round amortized NPE:
+        - Uses density_estimator.loss() method
+        - No proposal correction needed
+        """
+        from .streaming_trainer import StreamingNPETrainer
+        
+        logger.info("Using async streaming NPE training (memory efficient)")
+        
+        # Create streaming trainer
+        trainer = StreamingNPETrainer(device=self.device)
+        
+        # Train with async chunk streaming
+        density_estimator, history = trainer.train(
+            chunk_dir=chunk_dir,
+            prior=prior,
+            embedding_net=embedding_net,
+            flow_type=self.config.sbi.model,
+            hidden_features=arch_config.hidden_features,
+            num_transforms=arch_config.num_transforms,
+            num_bins=self.config.sbi.num_bins,
+            learning_rate=learning_rate,
+            training_batch_size=training_batch_size,
+            validation_fraction=validation_fraction,
+            max_epochs=500,  # Will early stop
+            stop_after_epochs=stop_after_epochs,
+            clip_grad_norm=5.0,
+            show_progress=True,
+        )
+        
+        # Store the trainer for building posterior later
+        self._streaming_trainer = trainer
+        
+        return density_estimator, history
     
     def _extract_training_history(self, inference) -> Dict[str, List[float]]:
         """
@@ -537,6 +611,7 @@ class SBITrainer:
             # Metadata
             'save_timestamp': datetime.now().isoformat(),
             'torch_version': torch.__version__,
+            'training_type': 'streaming_npe',  # Mark as streaming trained
         }
         
         torch.save(save_dict, save_path)

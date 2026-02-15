@@ -49,13 +49,13 @@ class OptimizedSettings:
     # Training batch size (sized to maximize VRAM usage)
     training_batch_size: int = 256
     
+    # Simulation batch size (sized based on RAM)
+    simulation_batch_size: int = 5000
+    
     # Data loading (sized to prefetch into RAM)
     num_workers: int = 4
     pin_memory: bool = True
     prefetch_factor: int = 2
-    
-    # Parallel simulation
-    num_parallel_jobs: int = 4
     
     # Device
     device: str = "cuda"
@@ -67,7 +67,7 @@ class OptimizedSettings:
             "=" * 60,
             f"Device: {self.device}",
             f"Training batch size: {self.training_batch_size}",
-            f"Parallel simulation jobs: {self.num_parallel_jobs}",
+            f"Simulation batch size: {self.simulation_batch_size}",
             f"Data workers: {self.num_workers}",
             f"Prefetch factor: {self.prefetch_factor}",
             f"Pin memory: {self.pin_memory}",
@@ -244,35 +244,33 @@ def optimize_for_hardware(
         while batch_size * 2 <= max_batch:
             batch_size *= 2
         
-        # Clamp to reasonable range
-        settings.training_batch_size = max(64, min(4096, batch_size))
+        # Minimum 64, no upper cap (let VRAM decide)
+        settings.training_batch_size = max(64, batch_size)
         
         logger.info(f"VRAM: {vram_gb:.1f}GB free → batch_size={settings.training_batch_size}")
     else:
         settings.training_batch_size = 128
     
-    # === RAM-based Prefetching ===
+    # === RAM-based settings ===
     ram = hardware.ram_available_gb
     
-    if ram >= 64:
-        settings.num_workers = min(16, hardware.cpu_cores)
-        settings.prefetch_factor = 8
-    elif ram >= 32:
+    # num_workers scales with RAM and cores
+    if ram >= 32:
         settings.num_workers = min(8, hardware.cpu_cores)
         settings.prefetch_factor = 4
     elif ram >= 16:
         settings.num_workers = min(4, hardware.cpu_cores)
         settings.prefetch_factor = 2
-    elif ram >= 8:
+    else:
         settings.num_workers = min(2, hardware.cpu_cores)
         settings.prefetch_factor = 2
-    else:
-        settings.num_workers = 1
-        settings.prefetch_factor = 2
     
-    # === CPU-based Parallel Simulation ===
-    # Use most cores for parallel simulation
-    settings.num_parallel_jobs = max(1, hardware.cpu_cores - 2)
+    # simulation_batch_size: use ~25% of RAM
+    # Assuming ~1KB per sample (theta + x + weights for 128 freq channels)
+    # This is for simulation generation, not training
+    bytes_per_sample = 1024  # ~1KB conservative estimate
+    usable_ram_bytes = ram * 1024**3 * 0.25
+    settings.simulation_batch_size = max(1000, int(usable_ram_bytes / bytes_per_sample))
     
     # Pin memory only if we have GPU and enough RAM
     settings.pin_memory = hardware.gpu_available and ram >= 8
@@ -294,8 +292,8 @@ def apply_settings_to_config(config, settings: OptimizedSettings):
     if config.training.training_batch_size == 0:
         config.training.training_batch_size = settings.training_batch_size
     
-    if config.training.num_parallel_jobs == 0:
-        config.training.num_parallel_jobs = settings.num_parallel_jobs
+    if config.training.simulation_batch_size == 0:
+        config.training.simulation_batch_size = settings.simulation_batch_size
     
     # Store data loading settings
     if not hasattr(config, '_optimized'):

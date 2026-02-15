@@ -1,25 +1,15 @@
-# =============================================================================
 # VROOM-SBI Configuration File
-# =============================================================================
 
-# Frequency file (wavelength² values in m²)
+# Frequency file path
 freq_file: "freq.txt"
 
-# =============================================================================
-# HARDWARE SETTINGS
-# =============================================================================
-# Set these to match your machine for optimal performance.
-# If set to "auto", will attempt to detect automatically.
+# Faraday depth range (rad/m^2)
+phi:
+  min: -1000.0
+  max: 1000.0
+  n_samples: 200
 
-hardware:
-  vram_gb: "auto"              # GPU VRAM in GB (e.g., 20 for 20GB, or "auto")
-  ram_gb: "auto"               # System RAM in GB (e.g., 60 for 60GB, or "auto")
-  num_workers: "auto"          # Data loader workers (or "auto" = CPU cores / 2)
-
-# =============================================================================
-# PRIORS - Parameter ranges for all physical models
-# =============================================================================
-
+# Prior ranges for parameters
 priors:
   rm:
     min: -500.0
@@ -27,101 +17,114 @@ priors:
   amp:
     min: 0.01
     max: 1.0
-  chi0:
-    min: 0.0
-    max: 3.141592653589793
-  sigma_phi:
-    min: 0.0
-    max: 100.0
-  delta_phi:
-    min: 0.0
-    max: 100.0
 
-# =============================================================================
-# PHYSICAL MODELS
-# =============================================================================
+# Noise configuration
+# Base noise level - actual noise σ = base_level / weight
+# During training, base_level is randomly varied for robustness
+noise:
+  base_level: 0.01           # Default/reference noise level
+  augmentation:
+    enable: true             # Enable random noise level variation
+    min_factor: 0.5          # Minimum: 0.5 × base_level
+    max_factor: 2.0          # Maximum: 2.0 × base_level
 
+# Training settings
+training:
+  n_simulations: 30000        # Base simulations (for N=1)
+  simulation_scaling: true    # Scale up for complex models
+  simulation_scaling_mode: "power"  # Options: "linear", "quadratic" (N^2), "subquadratic" (N^1.5), "power" (N^scaling_power)
+  scaling_power: 2.5          # Exponent for power scaling (2.0 = N^2, 2.5 = N^2.5, 3.0 = N^3)
+                              # Higher power for bigger SBI architectures!
+  batch_size: 50
+  n_rounds: 1
+  device: "cuda"  # or "cpu"
+  validation_fraction: 0.1
+  save_dir: "models"
+  
+  # STREAMING MODE: For large datasets that don't fit in RAM
+  # When enabled, simulations are saved in chunks and streamed during training
+  # Recommended for >100k simulations to avoid OOM errors
+  streaming_mode: false       # Set to true for large datasets
+  chunk_size: 50000           # Simulations per chunk file (tune for your RAM)
+  
+# Model selection
+model_selection:
+  max_components: 5           # Support 1-5 components (full scale!)
+  use_classifier: false       # DISABLED: Focus on SBI posteriors only for now
+  classifier_only: false      # If true, skip worker model training (simulations must exist)
+
+# Physical model types
+# CROSS-MODEL TRAINING: Train all model types together!
+# Classifier will learn to distinguish between ALL combinations
 physics:
+  # Train ALL these model types (4 models × 5 components = 20 classes!)
   model_types:
     - "faraday_thin"
     - "burn_slab"
     - "external_dispersion"
     - "internal_dispersion"
 
-# =============================================================================
-# TRAINING CONFIGURATION
-# =============================================================================
+  # For single-model training, use model_type (string) instead of model_types (list)
+  # model_type: "faraday_thin"  # Uncomment to train only one model
 
-training:
-  # Simulation settings
-  n_simulations: 30000          # Base simulations for N=1 component
-  simulation_scaling: true
-  simulation_scaling_mode: "power"
-  scaling_power: 2.0
-  num_parallel_jobs: "auto"     # Parallel simulation jobs ("auto" or integer)
-  
-  # Neural network training (batch_size auto-configured from VRAM)
-  learning_rate: 0.0005
-  training_batch_size: "auto"   # "auto" or integer
-  stop_after_epochs: 20
-  validation_fraction: 0.1
-  
-  # Output
-  device: "cuda"
-  save_dir: "models"
+  # Model-specific prior ranges (actually used!)
+  burn_slab:
+    max_delta_phi: 200.0      # Maximum slab thickness for sinc depolarization
 
-# =============================================================================
-# MODEL SELECTION
-# =============================================================================
+  external_dispersion:
+    max_sigma_phi: 200.0      # Maximum RM dispersion (turbulent foreground)
 
-model_selection:
-  max_components: 5
-  use_classifier: true
-  classifier_only: false
+  internal_dispersion:
+    max_sigma_phi: 200.0      # Maximum RM dispersion (internal turbulence)
 
-# =============================================================================
-# NOISE & DATA AUGMENTATION
-# =============================================================================
-
-noise:
-  base_level: 0.01
-  augmentation:
-    enable: true
-    min_factor: 0.5
-    max_factor: 2.0
-
+# Weight augmentation settings
+# These are applied during simulation for both posterior and classifier training
 weight_augmentation:
   enable: true
-  scattered_prob: 0.3
-  scattered_fraction: 0.1
-  gap_prob: 0.3
-  gap_min: 2
-  gap_max: 8
-  large_block_prob: 0.1
-  large_block_min: 10
-  large_block_max: 30
-  noise_variation: true
+  scattered_prob: 0.3         # Probability of scattered missing channels
+  gap_prob: 0.3               # Probability of contiguous gaps  
+  large_block_prob: 0.1       # Probability of large RFI blocks
+  noise_variation: true       # Add variation to weights
 
-# =============================================================================
-# NEURAL NETWORK ARCHITECTURE
-# =============================================================================
-
-sbi:
-  model: "nsf"
-  num_bins: 16
-  embedding_dim: 64
-  architecture_scaling:
-    1: { hidden_features: 256, num_transforms: 15 }
-    2: { hidden_features: 256, num_transforms: 15 }
-    3: { hidden_features: 256, num_transforms: 15 }
-    4: { hidden_features: 256, num_transforms: 15 }
-    5: { hidden_features: 256, num_transforms: 15 }
-
+# Model Selection Classifier (1D CNN)
+# A convolutional classifier that learns to predict N from spectra
+# Uses the same simulations as posterior training (no extra cost!)
 classifier:
-  conv_channels: [32, 64, 128]
-  kernel_sizes: [7, 5, 3]
-  dropout: 0.1
-  n_epochs: 50
-  batch_size: 1024
-  learning_rate: 0.0001
-  validation_fraction: 0.2
+  # CNN Architecture
+  conv_channels: [32, 64, 128]  # Channels in each conv layer
+  kernel_sizes: [7, 5, 3]       # Kernel size for each conv layer
+  dropout: 0.1                  # Dropout for regularization
+  
+  # Training
+  n_epochs: 50                  # Training epochs
+  batch_size: 1024               # Batch size (can be large, fast training)
+  learning_rate: 0.0001          # Adam learning rate
+  validation_fraction: 0.2      # Fraction for validation
+  use_posterior_simulations: true  # Reuse simulations from posterior training
+
+# SBI Architecture (Neural Posterior Estimation)
+# FIXED ARCHITECTURE: Same network size for ALL N to isolate effect of simulation scaling!
+sbi:
+  model: 'nsf'               # Neural Spline Flow (better than MAF)
+  num_bins: 16               # Spline resolution
+  embedding_dim: 64          # Output dimension of spectral embedding
+
+  # FIXED architecture - same for ALL component counts (1-5)
+  # This isolates the effect of simulation scaling!
+  # If N=5 still struggles, increase simulations, not architecture.
+  architecture_scaling:
+    1:  # Use same architecture as N=5
+      hidden_features: 256
+      num_transforms: 15
+    2:  # Use same architecture as N=5
+      hidden_features: 256
+      num_transforms: 15
+    3:  # Use same architecture as N=5
+      hidden_features: 256
+      num_transforms: 15
+    4:  # Use same architecture as N=5
+      hidden_features: 256
+      num_transforms: 15
+    5:  # Maximum capacity
+      hidden_features: 256
+      num_transforms: 15
