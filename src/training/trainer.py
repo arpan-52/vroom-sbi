@@ -396,16 +396,12 @@ class SBITrainer:
         """
         from .streaming_trainer import StreamingNPETrainer
         
-        logger.info("Using custom streaming NPE training (memory efficient)")
+        logger.info("Using async streaming NPE training (memory efficient)")
         
         # Create streaming trainer
         trainer = StreamingNPETrainer(device=self.device)
         
-        # Determine number of workers based on system
-        # Use 0 for safety with chunked data to avoid multiprocessing issues
-        num_workers = 0
-        
-        # Train with streaming
+        # Train with async chunk streaming
         density_estimator, history = trainer.train(
             chunk_dir=chunk_dir,
             prior=prior,
@@ -420,7 +416,6 @@ class SBITrainer:
             max_epochs=500,  # Will early stop
             stop_after_epochs=stop_after_epochs,
             clip_grad_norm=5.0,
-            num_workers=num_workers,
             show_progress=True,
         )
         

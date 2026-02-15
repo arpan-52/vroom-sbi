@@ -25,7 +25,7 @@ from .networks import (
 )
 from .streaming_trainer import (
     StreamingNPETrainer,
-    ChunkedSimulationDataset,
+    AsyncChunkStreamer,
     train_streaming_npe,
 )
 
@@ -43,6 +43,6 @@ __all__ = [
     'SpectralClassifier',
     # Streaming NPE
     'StreamingNPETrainer',
-    'ChunkedSimulationDataset',
+    'AsyncChunkStreamer',
     'train_streaming_npe',
 ]
