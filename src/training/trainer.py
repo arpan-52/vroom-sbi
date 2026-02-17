@@ -653,20 +653,23 @@ def train_all_models(
     results = {}
     
     trainer = SBITrainer(config)
+    min_components = config.model_selection.min_components
     max_components = config.model_selection.max_components
     model_types = config.physics.model_types
+    
+    n_models = len(model_types) * (max_components - min_components + 1)
     
     logger.info(f"\n{'='*60}")
     logger.info("VROOM-SBI TRAINING")
     logger.info(f"{'='*60}")
     logger.info(f"Model types: {model_types}")
-    logger.info(f"Max components: {max_components}")
-    logger.info(f"Total models: {len(model_types) * max_components}")
+    logger.info(f"Components: {min_components} to {max_components}")
+    logger.info(f"Total models: {n_models}")
     
     if not classifier_only:
         # Train all posterior models
         for model_type in model_types:
-            for n_comp in range(1, max_components + 1):
+            for n_comp in range(min_components, max_components + 1):
                 result = trainer.train_model(model_type, n_comp)
                 key = f"{model_type}_n{n_comp}"
                 results[key] = result
@@ -682,6 +685,7 @@ def train_all_models(
         classifier_result = train_classifier(
             config=config,
             output_dir=Path(config.training.save_dir),
+            min_components=min_components,
             max_components=max_components,
             model_types=model_types,
             cross_model_training=len(model_types) > 1,

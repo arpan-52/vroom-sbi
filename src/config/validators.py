@@ -91,10 +91,23 @@ def validate_config(config: Configuration) -> List[str]:
                 )
     
     # Validate model selection
+    if config.model_selection.min_components < 1:
+        raise ConfigurationError(
+            f"Invalid min_components: {config.model_selection.min_components}\n"
+            f"Must be at least 1"
+        )
+    
     if config.model_selection.max_components < 1:
         raise ConfigurationError(
             f"Invalid max_components: {config.model_selection.max_components}\n"
             f"Must be at least 1"
+        )
+    
+    if config.model_selection.min_components > config.model_selection.max_components:
+        raise ConfigurationError(
+            f"Invalid component range: min_components ({config.model_selection.min_components}) > "
+            f"max_components ({config.model_selection.max_components})\n"
+            f"min_components must be <= max_components"
         )
     
     if config.model_selection.max_components > 10:
