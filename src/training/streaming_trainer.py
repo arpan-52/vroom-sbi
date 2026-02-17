@@ -370,23 +370,62 @@ class StreamingNPETrainer:
         if not all_chunks:
             raise ValueError(f"No chunk files found in {chunk_dir}")
         
-        # Split at chunk level (simpler, consistent)
-        n_val_chunks = max(1, int(len(all_chunks) * validation_fraction))
-        
-        # Shuffle before split to ensure randomness
-        shuffled_chunks = random.sample(all_chunks, len(all_chunks))
-        val_chunks = shuffled_chunks[:n_val_chunks]
-        train_chunks = shuffled_chunks[n_val_chunks:]
-        
-        # Count samples
-        train_samples = sum(
-            len(torch.load(f, weights_only=True)['theta']) 
-            for f in train_chunks
-        )
-        val_samples = sum(
-            len(torch.load(f, weights_only=True)['theta']) 
-            for f in val_chunks
-        )
+        # Handle single chunk case: split within the chunk
+        if len(all_chunks) == 1:
+            logger.info("Single chunk detected - splitting within chunk for train/val")
+            chunk_data = torch.load(all_chunks[0], weights_only=True)
+            n_total = len(chunk_data['theta'])
+            n_val = int(n_total * validation_fraction)
+            n_train = n_total - n_val
+            
+            # Shuffle indices
+            perm = torch.randperm(n_total)
+            train_idx = perm[:n_train]
+            val_idx = perm[n_train:]
+            
+            # Save as temporary train/val chunks
+            train_chunk_path = chunk_dir / "chunk_train_temp.pt"
+            val_chunk_path = chunk_dir / "chunk_val_temp.pt"
+            
+            torch.save({
+                'theta': chunk_data['theta'][train_idx],
+                'x': chunk_data['x'][train_idx],
+            }, train_chunk_path)
+            
+            torch.save({
+                'theta': chunk_data['theta'][val_idx],
+                'x': chunk_data['x'][val_idx],
+            }, val_chunk_path)
+            
+            train_chunks = [train_chunk_path]
+            val_chunks = [val_chunk_path]
+            train_samples = n_train
+            val_samples = n_val
+            
+            del chunk_data
+            
+        else:
+            # Multiple chunks: split at chunk level
+            n_val_chunks = max(1, int(len(all_chunks) * validation_fraction))
+            
+            # Ensure at least 1 training chunk
+            if n_val_chunks >= len(all_chunks):
+                n_val_chunks = len(all_chunks) - 1
+            
+            # Shuffle before split to ensure randomness
+            shuffled_chunks = random.sample(all_chunks, len(all_chunks))
+            val_chunks = shuffled_chunks[:n_val_chunks]
+            train_chunks = shuffled_chunks[n_val_chunks:]
+            
+            # Count samples
+            train_samples = sum(
+                len(torch.load(f, weights_only=True)['theta']) 
+                for f in train_chunks
+            )
+            val_samples = sum(
+                len(torch.load(f, weights_only=True)['theta']) 
+                for f in val_chunks
+            )
         
         logger.info(f"Chunks: {len(train_chunks)} train, {len(val_chunks)} val")
         logger.info(f"Samples: {train_samples:,} train, {val_samples:,} val")

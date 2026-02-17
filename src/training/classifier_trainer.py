@@ -293,6 +293,7 @@ class ClassifierTrainer:
 def train_classifier(
     config: Configuration,
     output_dir: Path,
+    min_components: int = 1,
     max_components: int = 5,
     model_types: Optional[List[str]] = None,
     cross_model_training: bool = False,
@@ -306,6 +307,8 @@ def train_classifier(
         Full configuration
     output_dir : Path
         Output directory
+    min_components : int
+        Minimum number of components
     max_components : int
         Maximum number of components
     model_types : List[str], optional
@@ -322,16 +325,18 @@ def train_classifier(
         model_types = config.physics.model_types
     
     # Calculate number of classes
+    n_component_range = max_components - min_components + 1
     if cross_model_training:
-        n_classes = len(model_types) * max_components
-        logger.info(f"Cross-model classifier: {n_classes} classes")
+        n_classes = len(model_types) * n_component_range
+        logger.info(f"Cross-model classifier: {n_classes} classes (components {min_components}-{max_components})")
     else:
-        n_classes = max_components
-        logger.info(f"Single-model classifier: {n_classes} classes")
+        n_classes = n_component_range
+        logger.info(f"Single-model classifier: {n_classes} classes (components {min_components}-{max_components})")
     
     # Load data
     train_loader, val_loader, n_freq, class_to_label = prepare_classifier_data(
         simulations_dir=output_dir,
+        min_components=min_components,
         max_components=max_components,
         model_types=model_types,
         cross_model_training=cross_model_training,

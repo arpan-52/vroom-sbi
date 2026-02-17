@@ -495,6 +495,7 @@ def create_simulation_dataloader(
 
 def prepare_classifier_data(
     simulations_dir: Path,
+    min_components: int = 1,
     max_components: int = 5,
     model_types: Optional[List[str]] = None,
     cross_model_training: bool = False,
@@ -508,6 +509,8 @@ def prepare_classifier_data(
     ----------
     simulations_dir : Path
         Directory containing saved simulations
+    min_components : int
+        Minimum number of components
     max_components : int
         Maximum number of components
     model_types : List[str], optional
@@ -541,7 +544,7 @@ def prepare_classifier_data(
     if cross_model_training:
         # Load from all model types
         for model_type in model_types:
-            for n_comp in range(1, max_components + 1):
+            for n_comp in range(min_components, max_components + 1):
                 # Try .pt first, then fall back to .pkl
                 sim_path = simulations_dir / f"simulations_{model_type}_n{n_comp}.pt"
                 if not sim_path.exists():
@@ -578,7 +581,7 @@ def prepare_classifier_data(
     else:
         # Single-model training
         model_type = model_types[0]
-        for n_comp in range(1, max_components + 1):
+        for n_comp in range(min_components, max_components + 1):
             sim_path = simulations_dir / f"simulations_{model_type}_n{n_comp}.pt"
             if not sim_path.exists():
                 sim_path = simulations_dir / f"simulations_{model_type}_n{n_comp}.pkl"
@@ -600,8 +603,9 @@ def prepare_classifier_data(
                 n_freq = weights.shape[1] if weights.ndim > 1 else len(weights)
             
             n_samples = len(spectra)
-            labels = np.full(n_samples, n_comp - 1, dtype=np.int64)
-            class_to_label[n_comp - 1] = (model_type, n_comp)
+            # Class index is relative to min_components
+            labels = np.full(n_samples, n_comp - min_components, dtype=np.int64)
+            class_to_label[n_comp - min_components] = (model_type, n_comp)
             
             all_spectra.append(spectra)
             all_weights.append(weights)

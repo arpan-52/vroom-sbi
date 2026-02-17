@@ -165,6 +165,7 @@ class MemoryConfig:
 @dataclass
 class ModelSelectionConfig:
     """Model selection configuration."""
+    min_components: int = 1
     max_components: int = 5
     use_classifier: bool = True
     classifier_only: bool = False
@@ -340,6 +341,7 @@ class Configuration:
         # Extract model selection
         ms_raw = raw.get("model_selection", {})
         model_selection = ModelSelectionConfig(
+            min_components=int(ms_raw.get("min_components", 1)),
             max_components=int(ms_raw.get("max_components", 5)),
             use_classifier=bool(ms_raw.get("use_classifier", True)),
             classifier_only=bool(ms_raw.get("classifier_only", False)),
@@ -449,6 +451,7 @@ class Configuration:
                 "num_workers": self.hardware.num_workers,
             },
             "model_selection": {
+                "min_components": self.model_selection.min_components,
                 "max_components": self.model_selection.max_components,
                 "use_classifier": self.model_selection.use_classifier,
             },
