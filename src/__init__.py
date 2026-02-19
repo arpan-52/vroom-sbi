@@ -11,6 +11,7 @@ from .config import Configuration, validate_config
 from .simulator import RMSimulator, load_frequencies, freq_to_lambda_sq
 from .training import train_model, train_all_models
 from .inference import InferenceEngine
+from .validation import PosteriorValidator, run_validation
 from .utils import push_to_huggingface, download_from_huggingface
 
 __all__ = [
@@ -22,6 +23,8 @@ __all__ = [
     'train_model',
     'train_all_models',
     'InferenceEngine',
+    'PosteriorValidator',
+    'run_validation',
     'push_to_huggingface',
     'download_from_huggingface',
 ]

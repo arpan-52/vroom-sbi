@@ -116,20 +116,65 @@ def infer_command(args):
 
 
 def validate_command(args):
-    """Validate models command."""
-    from ..config import Configuration
-    from ..utils.validation import validate_all_models
+    """Validate posteriors with publication-quality analysis."""
+    from ..validation import run_validation
     
-    config = Configuration.from_yaml(args.config)
+    # Parse noise levels
+    noise_levels = [float(x.strip()) for x in args.noise_levels.split(',')]
     
-    validate_all_models(
-        config=config,
-        models_dir=Path(args.models_dir),
-        output_dir=Path(args.output_dir),
+    # Parse missing fractions
+    missing_fractions = [float(x.strip()) for x in args.missing_fractions.split(',')]
+    
+    # Build prior overrides from CLI args
+    prior_overrides = {}
+    if args.rm_min is not None:
+        prior_overrides['rm_min'] = args.rm_min
+    if args.rm_max is not None:
+        prior_overrides['rm_max'] = args.rm_max
+    if args.amp_min is not None:
+        prior_overrides['amp_min'] = args.amp_min
+    if args.amp_max is not None:
+        prior_overrides['amp_max'] = args.amp_max
+    if args.chi0_min is not None:
+        prior_overrides['chi0_min'] = args.chi0_min
+    if args.chi0_max is not None:
+        prior_overrides['chi0_max'] = args.chi0_max
+    
+    print("\n" + "=" * 60)
+    print("VROOM-SBI VALIDATION")
+    print("=" * 60)
+    print(f"Posterior: {args.posterior}")
+    print(f"Output: {args.output_dir}")
+    print(f"Tests per condition: {args.n_tests}")
+    print(f"Noise levels: {noise_levels}")
+    print(f"Missing fractions: {missing_fractions}")
+    if prior_overrides:
+        print(f"Prior overrides: {prior_overrides}")
+    print("=" * 60 + "\n")
+    
+    # Run validation
+    validator = run_validation(
+        posterior_path=args.posterior,
+        output_dir=args.output_dir,
         n_tests=args.n_tests,
-        n_samples=args.n_samples,
+        noise_levels=noise_levels,
+        missing_fractions=missing_fractions,
+        n_posterior_samples=args.n_samples,
+        prior_overrides=prior_overrides if prior_overrides else None,
+        compare_rmtools=args.compare_rmtools,
         device=args.device,
+        seed=args.seed,
     )
+    
+    # Print summary
+    print("\n" + "=" * 60)
+    print("VALIDATION COMPLETE")
+    print("=" * 60)
+    print(f"Model: {validator.model_type} (N={validator.n_components})")
+    print(f"Test cases: {validator.metrics.n_tests}")
+    print(f"Mean inference time: {validator.metrics.mean_inference_time * 1000:.1f} ms")
+    print(f"\nResults saved to: {args.output_dir}")
+    print("=" * 60)
 
 
 def push_command(args):
@@ -194,13 +239,37 @@ def cli():
     infer_parser.set_defaults(func=infer_command)
     
     # Validate command
-    validate_parser = subparsers.add_parser('validate', help='Validate models')
-    validate_parser.add_argument('--config', type=str, default='config.yaml')
-    validate_parser.add_argument('--models-dir', type=str, default='models')
-    validate_parser.add_argument('--output-dir', type=str, default='validation_results')
-    validate_parser.add_argument('--n-tests', type=int, default=20)
-    validate_parser.add_argument('--n-samples', type=int, default=5000)
-    validate_parser.add_argument('--device', type=str, default='cuda')
+    validate_parser = subparsers.add_parser('validate', help='Validate posteriors with publication-quality analysis')
+    validate_parser.add_argument('--posterior', type=str, required=True,
+                                help='Path to posterior .pt file')
+    validate_parser.add_argument('--output-dir', type=str, default='validation_results',
+                                help='Output directory for results and plots')
+    validate_parser.add_argument('--n-tests', type=int, default=100,
+                                help='Number of test cases per noise/missing combination')
+    validate_parser.add_argument('--n-samples', type=int, default=5000,
+                                help='Number of posterior samples per test case')
+    validate_parser.add_argument('--noise-levels', type=str, default='0.01,0.05,0.1',
+                                help='Comma-separated noise levels to test')
+    validate_parser.add_argument('--missing-fractions', type=str, default='0.0,0.1,0.3',
+                                help='Comma-separated missing channel fractions')
+    validate_parser.add_argument('--rm-min', type=float, default=None,
+                                help='Override RM prior minimum')
+    validate_parser.add_argument('--rm-max', type=float, default=None,
+                                help='Override RM prior maximum')
+    validate_parser.add_argument('--amp-min', type=float, default=None,
+                                help='Override amplitude prior minimum')
+    validate_parser.add_argument('--amp-max', type=float, default=None,
+                                help='Override amplitude prior maximum')
+    validate_parser.add_argument('--chi0-min', type=float, default=None,
+                                help='Override chi0 prior minimum')
+    validate_parser.add_argument('--chi0-max', type=float, default=None,
+                                help='Override chi0 prior maximum')
+    validate_parser.add_argument('--compare-rmtools', action='store_true',
+                                help='Compare with RM-Tools QUfit')
+    validate_parser.add_argument('--device', type=str, default='auto',
+                                help='Device for inference (auto, cuda, or cpu)')
+    validate_parser.add_argument('--seed', type=int, default=42,
+                                help='Random seed for reproducibility')
     validate_parser.set_defaults(func=validate_command)
     
     # Push to HuggingFace command
