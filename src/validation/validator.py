@@ -148,7 +148,7 @@ class PosteriorValidator:
         logger.info(f"Loading posterior from {self.posterior_path}")
         
         # Load on CPU first, then move to target device
-        checkpoint = torch.load(self.posterior_path, map_location='cpu')
+        checkpoint = torch.load(self.posterior_path, map_location='cpu', weights_only=False)
         
         # Extract metadata
         self.model_type = checkpoint['model_type']
@@ -159,13 +159,28 @@ class PosteriorValidator:
         self.lambda_sq = np.array(checkpoint['lambda_sq'])
         self.prior_bounds = checkpoint['prior_bounds']
         
-        # Get the posterior object
-        self.posterior = checkpoint['posterior']
+        # Try to get the posterior object
+        self.posterior = checkpoint.get('posterior')
+        
+        # If posterior is None or doesn't work, try to rebuild it
+        if self.posterior is None:
+            logger.info("  Posterior object not found, attempting to rebuild...")
+            self._rebuild_posterior(checkpoint)
+        
+        # Verify posterior works
+        if self.posterior is None:
+            raise RuntimeError("Could not load or rebuild posterior from checkpoint")
+        
+        # Test that posterior has sample method
+        if not hasattr(self.posterior, 'sample'):
+            raise RuntimeError(f"Posterior object has no 'sample' method: {type(self.posterior)}")
         
         # Move to target device
+        # Note: SBI's DirectPosterior.to() modifies in place and may not return self
         if self.device == 'cuda' and torch.cuda.is_available():
             try:
-                self.posterior = self.posterior.to(self.device)
+                # Call .to() but don't reassign - it modifies in place
+                self.posterior.to(self.device)
                 logger.info(f"  Using device: {self.device}")
             except Exception as e:
                 logger.warning(f"Could not move posterior to {self.device}: {e}")
@@ -183,6 +198,74 @@ class PosteriorValidator:
         
         # Build parameter names
         self._build_param_names()
+    
+    def _rebuild_posterior(self, checkpoint: Dict):
+        """Rebuild posterior from saved state dicts."""
+        try:
+            from sbi.neural_nets.net_builders import build_nsf, build_maf
+            from sbi.inference.posteriors import DirectPosterior
+            from torch.distributions import Uniform
+            import torch
+            
+            # Get config
+            config_used = checkpoint.get('config_used', {})
+            sbi_model = config_used.get('sbi_model', 'nsf')
+            embedding_dim = config_used.get('embedding_dim', 64)
+            hidden_features = config_used.get('hidden_features', 256)
+            num_transforms = config_used.get('num_transforms', 15)
+            
+            # Create sample tensors for building the flow
+            theta_sample = torch.randn(100, self.n_params)
+            x_sample = torch.randn(100, 2 * self.n_freq)  # Q and U concatenated
+            
+            # Build embedding net
+            from ..training.networks import SpectralEmbedding
+            embedding_net = SpectralEmbedding(
+                input_dim=2 * self.n_freq,
+                output_dim=embedding_dim,
+            )
+            
+            # Load embedding net state if available
+            if 'embedding_net_state' in checkpoint:
+                embedding_net.load_state_dict(checkpoint['embedding_net_state'])
+            
+            # Build density estimator
+            build_kwargs = {
+                'hidden_features': hidden_features,
+                'num_transforms': num_transforms,
+                'embedding_net': embedding_net,
+            }
+            
+            if sbi_model.lower() == 'nsf':
+                build_kwargs['num_bins'] = config_used.get('num_bins', 16)
+                density_estimator = build_nsf(theta_sample, x_sample, **build_kwargs)
+            else:
+                density_estimator = build_maf(theta_sample, x_sample, **build_kwargs)
+            
+            # Load density estimator state if available
+            if 'posterior_state' in checkpoint and checkpoint['posterior_state'] is not None:
+                density_estimator.load_state_dict(checkpoint['posterior_state'])
+            
+            # Build prior
+            low = torch.tensor(self.prior_bounds['low'], dtype=torch.float32)
+            high = torch.tensor(self.prior_bounds['high'], dtype=torch.float32)
+            
+            from sbi.utils import BoxUniform
+            prior = BoxUniform(low=low, high=high)
+            
+            # Build posterior
+            self.posterior = DirectPosterior(
+                posterior_estimator=density_estimator,
+                prior=prior,
+            )
+            
+            logger.info("  Successfully rebuilt posterior from state dict")
+            
+        except Exception as e:
+            logger.error(f"Failed to rebuild posterior: {e}")
+            import traceback
+            traceback.print_exc()
+            self.posterior = None
     
     def _build_param_names(self):
         """Build parameter names based on model type."""
