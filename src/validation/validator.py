@@ -203,6 +203,10 @@ class ComprehensiveValidator:
         logger.info("\n3. Generating Plots")
         self._plot_parameter_recovery(param_results)
         self._plot_noise_analysis(noise_results)
+        self._plot_individual_cases(param_results)
+        self._plot_comparison(param_results)
+        self._plot_posteriors(param_results)
+        self._plot_spectra(param_results)
         self._plot_summary(param_results, noise_results)
         self._save_results(param_results, noise_results)
         logger.info(f"\nResults saved to: {self.output_dir}")
@@ -253,6 +257,243 @@ class ComprehensiveValidator:
         plt.tight_layout()
         plt.savefig(self.dirs['noise_analysis'] / 'noise_analysis.png')
         plt.close()
+
+    def _plot_individual_cases(self, param_results):
+        """Plot individual test cases: true spectrum, observed, posterior, comparison."""
+        for p, results in param_results.items():
+            # Select 5 representative cases
+            indices = np.linspace(0, len(results)-1, 5, dtype=int)
+            
+            fig, axes = plt.subplots(len(indices), 4, figsize=(20, 4*len(indices)))
+            
+            for i, idx in enumerate(indices):
+                r = results[idx]
+                
+                # Col 1: True spectrum
+                ax = axes[i, 0]
+                ax.plot(self.lambda_sq, r.Q_true, 'b-', lw=2, label='Q')
+                ax.plot(self.lambda_sq, r.U_true, 'r-', lw=2, label='U')
+                ax.set_xlabel('λ² (m²)')
+                ax.set_ylabel('Polarization')
+                ax.set_title(f'True: {self.param_names[p]}={r.theta_true[p]:.2f}')
+                ax.legend(loc='upper right')
+                ax.grid(True, alpha=0.3)
+                
+                # Col 2: Observed (noisy + missing)
+                ax = axes[i, 1]
+                mask = r.weights > 0
+                ax.scatter(self.lambda_sq[mask], r.Q_obs[mask], c='blue', s=10, alpha=0.6, label='Q obs')
+                ax.scatter(self.lambda_sq[mask], r.U_obs[mask], c='red', s=10, alpha=0.6, label='U obs')
+                ax.plot(self.lambda_sq, r.Q_true, 'b--', alpha=0.3, lw=1)
+                ax.plot(self.lambda_sq, r.U_true, 'r--', alpha=0.3, lw=1)
+                ax.set_xlabel('λ² (m²)')
+                ax.set_title(f'Observed (σ={r.noise_level:.2f}, {100*(1-mask.mean()):.0f}% missing)')
+                ax.legend(loc='upper right')
+                ax.grid(True, alpha=0.3)
+                
+                # Col 3: Posterior histogram for this parameter
+                ax = axes[i, 2]
+                if r.vroom_samples is not None:
+                    ax.hist(r.vroom_samples[:, p], bins=50, density=True, 
+                           color=COLORS['vroom'], alpha=0.7, edgecolor='black', linewidth=0.5)
+                    ax.axvline(r.theta_true[p], color=COLORS['true'], lw=3, label='True')
+                    ax.axvline(r.vroom_mean[p], color='black', lw=2, ls='--', label='Mean')
+                    # 90% CI
+                    ax.axvline(r.vroom_ci_90[0][p], color='gray', lw=1, ls=':')
+                    ax.axvline(r.vroom_ci_90[1][p], color='gray', lw=1, ls=':', label='90% CI')
+                ax.set_xlabel(self.param_latex[p])
+                ax.set_ylabel('Density')
+                ax.set_title('VROOM Posterior')
+                ax.legend(loc='upper right')
+                
+                # Col 4: Point estimate comparison
+                ax = axes[i, 3]
+                ax.axvline(r.theta_true[p], color=COLORS['true'], lw=4, label='True')
+                ax.errorbar(r.vroom_mean[p], 0.7, xerr=r.vroom_std[p]*2, 
+                           fmt='o', color=COLORS['vroom'], markersize=12, capsize=8, 
+                           capthick=2, label='VROOM ±2σ')
+                if r.rmtools_success and r.rmtools_estimate is not None:
+                    err = r.rmtools_uncertainty[p] if r.rmtools_uncertainty is not None else 0
+                    ax.errorbar(r.rmtools_estimate[p], 0.3, xerr=err*2,
+                               fmt='s', color=COLORS['rmtools'], markersize=12, capsize=8,
+                               capthick=2, label='RM-Tools')
+                ax.set_ylim(0, 1)
+                ax.set_yticks([])
+                ax.set_xlabel(self.param_latex[p])
+                ax.set_title('Comparison')
+                ax.legend(loc='upper right')
+                ax.grid(True, alpha=0.3, axis='x')
+            
+            plt.tight_layout()
+            plt.savefig(self.dirs['individual_cases'] / f'{self.param_names[p]}_cases.png')
+            plt.close()
+
+    def _plot_comparison(self, param_results):
+        """Side-by-side VROOM vs RM-Tools comparison."""
+        all_results = [r for results in param_results.values() for r in results]
+        
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        
+        # Row 1: Recovery scatter for each parameter
+        for p in range(min(3, self.n_params)):
+            ax = axes[0, p]
+            true_vals = [r.theta_true[p] for r in all_results]
+            vroom_vals = [r.vroom_mean[p] for r in all_results]
+            
+            ax.scatter(true_vals, vroom_vals, c=COLORS['vroom'], s=30, alpha=0.6, label='VROOM')
+            
+            # RM-Tools if available
+            rt_data = [(r.theta_true[p], r.rmtools_estimate[p]) for r in all_results 
+                      if r.rmtools_success and r.rmtools_estimate is not None]
+            if rt_data:
+                rt_true, rt_est = zip(*rt_data)
+                ax.scatter(rt_true, rt_est, c=COLORS['rmtools'], s=30, alpha=0.6, marker='s', label='RM-Tools')
+            
+            lims = [min(true_vals), max(true_vals)]
+            ax.plot(lims, lims, 'k--', lw=2)
+            ax.set_xlabel(f'True {self.param_latex[p]}')
+            ax.set_ylabel(f'Estimated')
+            ax.set_title(self.param_names[p])
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+        
+        # Row 2: Metrics comparison
+        # RMSE
+        ax = axes[1, 0]
+        rmse_v = [np.sqrt(np.mean([(r.vroom_mean[p] - r.theta_true[p])**2 for r in all_results])) 
+                 for p in range(self.n_params)]
+        rmse_rt = []
+        for p in range(self.n_params):
+            rt_errors = [(r.rmtools_estimate[p] - r.theta_true[p])**2 for r in all_results 
+                        if r.rmtools_success and r.rmtools_estimate is not None]
+            rmse_rt.append(np.sqrt(np.mean(rt_errors)) if rt_errors else 0)
+        
+        x = np.arange(self.n_params)
+        ax.bar(x - 0.2, rmse_v, 0.4, label='VROOM', color=COLORS['vroom'])
+        ax.bar(x + 0.2, rmse_rt, 0.4, label='RM-Tools', color=COLORS['rmtools'])
+        ax.set_xticks(x)
+        ax.set_xticklabels(self.param_names)
+        ax.set_ylabel('RMSE')
+        ax.set_title('RMSE Comparison')
+        ax.legend()
+        
+        # Speed
+        ax = axes[1, 1]
+        vroom_times = [r.vroom_time for r in all_results if r.vroom_time]
+        rt_times = [r.rmtools_time for r in all_results if r.rmtools_time]
+        
+        mean_v = np.mean(vroom_times) if vroom_times else 0
+        mean_rt = np.mean(rt_times) if rt_times else 0
+        
+        bars = ax.bar(['VROOM-SBI', 'RM-Tools'], [mean_v, mean_rt], 
+                      color=[COLORS['vroom'], COLORS['rmtools']])
+        ax.set_ylabel('Time (seconds)')
+        if mean_v > 0 and mean_rt > 0:
+            speedup = mean_rt / mean_v
+            ax.set_title(f'Speed: VROOM {speedup:.0f}x faster')
+        else:
+            ax.set_title('Inference Time')
+        
+        # Success rate
+        ax = axes[1, 2]
+        vroom_success = sum(1 for r in all_results if r.vroom_mean is not None) / len(all_results) * 100
+        rt_success = sum(1 for r in all_results if r.rmtools_success) / len(all_results) * 100
+        
+        ax.bar(['VROOM-SBI', 'RM-Tools'], [vroom_success, rt_success],
+               color=[COLORS['vroom'], COLORS['rmtools']])
+        ax.set_ylabel('Success Rate (%)')
+        ax.set_title('Reliability')
+        ax.set_ylim(0, 110)
+        
+        plt.tight_layout()
+        plt.savefig(self.dirs['comparison'] / 'vroom_vs_rmtools.png')
+        plt.close()
+
+    def _plot_posteriors(self, param_results):
+        """Corner-style posterior plots."""
+        try:
+            import corner
+            has_corner = True
+        except ImportError:
+            has_corner = False
+            logger.warning("corner package not installed, using simple histograms")
+        
+        for p, results in param_results.items():
+            # Select low, mid, high value cases
+            indices = [0, len(results)//2, len(results)-1]
+            
+            for idx in indices:
+                r = results[idx]
+                if r.vroom_samples is None:
+                    continue
+                
+                if has_corner:
+                    fig = corner.corner(
+                        r.vroom_samples,
+                        labels=self.param_latex,
+                        truths=r.theta_true,
+                        quantiles=[0.16, 0.5, 0.84],
+                        show_titles=True,
+                        title_fmt='.3f',
+                        truth_color=COLORS['true'],
+                    )
+                else:
+                    # Simple histogram grid
+                    fig, axes = plt.subplots(1, self.n_params, figsize=(4*self.n_params, 4))
+                    if self.n_params == 1:
+                        axes = [axes]
+                    for i, ax in enumerate(axes):
+                        ax.hist(r.vroom_samples[:, i], bins=50, density=True, 
+                               color=COLORS['vroom'], alpha=0.7)
+                        ax.axvline(r.theta_true[i], color=COLORS['true'], lw=2)
+                        ax.set_xlabel(self.param_latex[i])
+                
+                val = r.theta_true[p]
+                fig.suptitle(f'{self.param_names[p]} = {val:.2f}', y=1.02)
+                plt.savefig(self.dirs['posteriors'] / f'posterior_{self.param_names[p]}_{val:.2f}.png')
+                plt.close()
+
+    def _plot_spectra(self, param_results):
+        """Plot Q/U spectra with posterior predictive draws."""
+        for p, results in param_results.items():
+            # Select 4 representative cases
+            indices = np.linspace(0, len(results)-1, 4, dtype=int)
+            
+            fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+            axes = axes.flatten()
+            
+            for ax, idx in zip(axes, indices):
+                r = results[idx]
+                
+                # Observed data points
+                mask = r.weights > 0
+                ax.scatter(self.lambda_sq[mask], r.Q_obs[mask], c='blue', s=20, alpha=0.5, 
+                          label='Q observed', zorder=3)
+                ax.scatter(self.lambda_sq[mask], r.U_obs[mask], c='red', s=20, alpha=0.5,
+                          label='U observed', zorder=3)
+                
+                # True spectrum
+                ax.plot(self.lambda_sq, r.Q_true, 'b-', lw=2, alpha=0.8, label='Q true')
+                ax.plot(self.lambda_sq, r.U_true, 'r-', lw=2, alpha=0.8, label='U true')
+                
+                # Posterior predictive draws
+                if r.vroom_samples is not None:
+                    n_draws = min(50, len(r.vroom_samples))
+                    for i in range(n_draws):
+                        Q_pred, U_pred = self._simulate_spectrum(r.vroom_samples[i])
+                        ax.plot(self.lambda_sq, Q_pred, 'b-', alpha=0.03, lw=0.5)
+                        ax.plot(self.lambda_sq, U_pred, 'r-', alpha=0.03, lw=0.5)
+                
+                ax.set_xlabel('λ² (m²)')
+                ax.set_ylabel('Fractional Polarization')
+                ax.set_title(f'{self.param_names[p]} = {r.theta_true[p]:.2f}')
+                ax.legend(loc='upper right', fontsize=9)
+                ax.grid(True, alpha=0.3)
+            
+            plt.suptitle(f'Spectra Fits: {self.param_names[p]} Sweep', fontsize=14, fontweight='bold')
+            plt.tight_layout()
+            plt.savefig(self.dirs['spectra'] / f'spectra_{self.param_names[p]}.png')
+            plt.close()
 
     def _plot_summary(self, param_results, noise_results):
         all_results = [r for results in param_results.values() for r in results]
