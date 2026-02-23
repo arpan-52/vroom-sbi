@@ -5,15 +5,13 @@ Provides comprehensive validation with publication-quality plots.
 """
 
 from .validator import (
-    PosteriorValidator,
-    ValidationMetrics,
-    TestCase,
-    run_validation,
+    ComprehensiveValidator,
+    SingleTestResult,
+    run_comprehensive_validation,
 )
 
 __all__ = [
-    'PosteriorValidator',
-    'ValidationMetrics',
-    'TestCase',
-    'run_validation',
+    'ComprehensiveValidator',
+    'SingleTestResult',
+    'run_comprehensive_validation',
 ]
