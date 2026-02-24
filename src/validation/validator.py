@@ -69,10 +69,11 @@ class TestCase:
 
 
 class ComprehensiveValidator:
-    def __init__(self, posterior_path: Path, output_dir: Path, rmtools_model: str = "1", device: str = "auto"):
+    def __init__(self, posterior_path: Path, output_dir: Path, rmtools_model: str = "1", rmtools_env: str = None, device: str = "auto"):
         self.posterior_path = Path(posterior_path)
         self.output_dir = Path(output_dir)
         self.rmtools_model = rmtools_model
+        self.rmtools_env = rmtools_env  # Absolute path to micromamba/conda env
         self.device = "cuda" if device == "auto" and torch.cuda.is_available() else (device if device != "auto" else "cpu")
         self._create_output_dirs()
         self._load_posterior()
@@ -154,8 +155,10 @@ class ComprehensiveValidator:
         }
 
     def run_rmtools(self, Q_obs, U_obs, weights, noise_level, case_id=None):
-        """Run RM-Tools QUfit. Saves input file to output directory."""
-        import shutil
+        """Run RM-Tools QUfit using micromamba with absolute env path."""
+        
+        if self.rmtools_env is None:
+            return RMToolsResult(success=False, error_msg="rmtools_env not provided")
         
         start = datetime.now()
         
@@ -176,7 +179,8 @@ class ComprehensiveValidator:
                 if weights[i] > 0:
                     f.write(f"{freq_hz[i]:.10e} {Q_obs[i]:.10e} {U_obs[i]:.10e} {noise_level:.10e} {noise_level:.10e}\n")
         
-        cmd = ['micromamba', 'run', '-n', 'rmtool', 'qufit', str(input_file), '-m', self.rmtools_model, '-v']
+        # Use -p for absolute path to environment
+        cmd = ['micromamba', 'run', '-p', self.rmtools_env, 'qufit', str(input_file), '-m', self.rmtools_model, '-v']
         
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=rmtools_dir)
@@ -191,12 +195,15 @@ class ComprehensiveValidator:
             # Try parsing from stdout
             parsed = self._parse_rmtools_stdout(result.stdout, elapsed)
             if not parsed.success:
-                parsed.error_msg = f"No output file. Exit: {result.returncode}"
+                parsed.error_msg = f"No output file. Exit: {result.returncode}. Stderr: {result.stderr[:200] if result.stderr else 'none'}"
             return parsed
             
         except subprocess.TimeoutExpired:
             return RMToolsResult(success=False, error_msg="Timeout (300s)", time=300)
-        except FileNotFoundError:
+        except FileNotFoundError as e:
+            return RMToolsResult(success=False, error_msg=f"Command not found: {e}")
+        except Exception as e:
+            return RMToolsResult(success=False, error_msg=str(e))
             return RMToolsResult(success=False, error_msg="micromamba or qufit not found")
         except Exception as e:
             return RMToolsResult(success=False, error_msg=str(e))
@@ -644,8 +651,8 @@ class ComprehensiveValidator:
         logger.info(f"\nResults saved to: {self.output_dir}")
 
 
-def run_comprehensive_validation(posterior_path, output_dir, rmtools_model="1", n_param_points=20, noise_min=0.001, noise_max=0.5, noise_steps=10, missing_min=0.0, missing_max=0.5, missing_steps=10, n_grid_repeats=5, n_individual_cases=10, n_samples=5000, run_rmtools=True, device="auto", seed=42):
-    validator = ComprehensiveValidator(Path(posterior_path), Path(output_dir), rmtools_model, device)
+def run_comprehensive_validation(posterior_path, output_dir, rmtools_model="1", rmtools_env=None, n_param_points=20, noise_min=0.001, noise_max=0.5, noise_steps=10, missing_min=0.0, missing_max=0.5, missing_steps=10, n_grid_repeats=5, n_individual_cases=10, n_samples=5000, run_rmtools=True, device="auto", seed=42):
+    validator = ComprehensiveValidator(Path(posterior_path), Path(output_dir), rmtools_model, rmtools_env, device)
     validator.run_full_validation(n_param_points, noise_min, noise_max, noise_steps, missing_min, missing_max, missing_steps, n_grid_repeats, n_individual_cases, n_samples, run_rmtools, seed)
     return validator
 

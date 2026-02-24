@@ -119,8 +119,12 @@ def validate_command(args):
     """Comprehensive validation with publication-quality plots."""
     from ..validation.validator import run_comprehensive_validation
     
-    # Determine if we should run RM-Tools
-    run_rmtools = args.run_rmtools and not args.no_rmtools
+    # Run RM-Tools only if env path is provided and --no-rmtools not set
+    run_rmtools = (args.rmtools_env is not None) and (not args.no_rmtools)
+    
+    if run_rmtools and not args.rmtools_env:
+        print("WARNING: --rmtools-env not provided, skipping RM-Tools comparison")
+        run_rmtools = False
     
     print("\n" + "=" * 60)
     print("VROOM-SBI COMPREHENSIVE VALIDATION")
@@ -133,6 +137,7 @@ def validate_command(args):
     print(f"Grid repeats: {args.n_grid_repeats}")
     print(f"Individual cases: {args.n_cases}")
     print(f"RM-Tools model: {args.rmtools_model}")
+    print(f"RM-Tools env: {args.rmtools_env}")
     print(f"Run RM-Tools: {run_rmtools}")
     print(f"Device: {args.device}")
     print("=" * 60 + "\n")
@@ -142,6 +147,7 @@ def validate_command(args):
         posterior_path=args.posterior,
         output_dir=args.output_dir,
         rmtools_model=args.rmtools_model,
+        rmtools_env=args.rmtools_env,
         n_param_points=args.n_param_points,
         noise_min=args.noise_min,
         noise_max=args.noise_max,
@@ -260,8 +266,8 @@ def cli():
                                 help='Number of individual cases for deep dive')
     validate_parser.add_argument('--rmtools-model', type=str, default='1',
                                 help='RM-Tools model number (e.g., 1, 11, 111)')
-    validate_parser.add_argument('--run-rmtools', action='store_true',
-                                help='Run RM-Tools QUfit comparison')
+    validate_parser.add_argument('--rmtools-env', type=str, required=False,
+                                help='Path to RM-Tools micromamba/conda environment (e.g., /path/to/envs/rmtools)')
     validate_parser.add_argument('--no-rmtools', action='store_true',
                                 help='Skip RM-Tools comparison')
     validate_parser.add_argument('--device', type=str, default='auto',
