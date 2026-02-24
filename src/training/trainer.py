@@ -33,7 +33,7 @@ from ..config import Configuration
 from ..core.checkpoint import CheckpointManager, ModelCheckpoint, save_training_plots
 from ..core.result import TrainingResult, TrainingMetrics
 from ..simulator import RMSimulator, build_prior, sample_prior
-from ..simulator.augmentation import augment_weights_combined, augment_base_noise_level
+from ..simulator.augmentation import augment_weights_combined
 from .networks import SpectralEmbedding
 from .data_loader import save_simulations
 
@@ -281,7 +281,6 @@ class SBITrainer:
         
         Returns path to chunk directory.
         """
-        base_noise_level = self.config.noise.base_level
         n_freq = simulator.n_freq
         n_params = simulator.n_params
         
@@ -326,20 +325,19 @@ class SBITrainer:
                 ) for _ in range(this_chunk_size)
             ], dtype=np.float32)
             
-            # Augment noise levels
+            # Get noise percentage (with optional augmentation)
+            base_noise_percent = self.config.noise.base_percent
             if self.config.noise.augmentation_enable:
-                noise_levels = np.array([
-                    augment_base_noise_level(
-                        base_noise_level,
-                        self.config.noise.augmentation_min_factor,
-                        self.config.noise.augmentation_max_factor,
-                    ) for _ in range(this_chunk_size)
-                ], dtype=np.float32)
+                # Vary noise percentage randomly for robustness
+                noise_percent = np.random.uniform(
+                    base_noise_percent * self.config.noise.augmentation_min_factor,
+                    base_noise_percent * self.config.noise.augmentation_max_factor,
+                )
             else:
-                noise_levels = np.full(this_chunk_size, base_noise_level, dtype=np.float32)
+                noise_percent = base_noise_percent
             
-            # Simulate
-            chunk_x = simulator.simulate_batch(chunk_theta, chunk_weights, noise_levels)
+            # Simulate with percentage-based noise
+            chunk_x = simulator.simulate_batch(chunk_theta, chunk_weights, noise_percent)
             
             # Save chunk to disk
             chunk_path = chunk_dir / f"chunk_{chunk_idx:04d}.pt"
@@ -351,7 +349,7 @@ class SBITrainer:
             logger.info(f"  Saved {chunk_path.name}")
             
             # Free memory
-            del chunk_theta, chunk_weights, noise_levels, chunk_x
+            del chunk_theta, chunk_weights, chunk_x
             
             samples_generated += this_chunk_size
         

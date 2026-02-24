@@ -271,10 +271,11 @@ class RMSimulator(BaseSimulator):
     def simulate(
         self, 
         theta: np.ndarray, 
-        weights: Optional[np.ndarray] = None
+        weights: Optional[np.ndarray] = None,
+        noise_percent: float = 10.0
     ) -> np.ndarray:
         """
-        Simulate Q, U spectra from parameters.
+        Simulate Q, U spectra from parameters with percentage-based noise.
         
         Parameters
         ----------
@@ -282,6 +283,8 @@ class RMSimulator(BaseSimulator):
             Parameters of shape (batch, n_params) or (n_params,)
         weights : np.ndarray, optional
             Channel weights of shape (n_freq,). If None, uses loaded weights.
+        noise_percent : float
+            Noise as percentage of signal amplitude (default: 10 means 10%)
             
         Returns
         -------
@@ -314,19 +317,20 @@ class RMSimulator(BaseSimulator):
             )
             P = np.nan_to_num(P, nan=0.0, posinf=0.0, neginf=0.0)
         
-        # Convert to Stokes Q, U with weighted noise
+        # Percentage-based noise: sigma = noise_percent/100 * |P|
+        P_amplitude = np.abs(P)  # (batch, n_freq)
+        min_sigma = 1e-6
+        
         Q = np.zeros((batch_size, self._n_freq))
         U = np.zeros((batch_size, self._n_freq))
         
         for b in range(batch_size):
             for j in range(self._n_freq):
                 if weights[j] > 0:
-                    # Noise inversely proportional to weight
-                    sigma = self.base_noise_level / weights[j]
+                    sigma = max(noise_percent / 100.0 * P_amplitude[b, j], min_sigma)
                     Q[b, j] = P[b, j].real + np.random.normal(0, sigma)
                     U[b, j] = P[b, j].imag + np.random.normal(0, sigma)
                 else:
-                    # Missing channel - set to zero
                     Q[b, j] = 0.0
                     U[b, j] = 0.0
         
@@ -339,13 +343,13 @@ class RMSimulator(BaseSimulator):
         self,
         theta: np.ndarray,
         weights_batch: np.ndarray,
-        noise_levels: np.ndarray,
+        noise_percent: float = 10.0,
     ) -> np.ndarray:
         """
-        Simulate batch with per-sample weights and noise levels.
+        Simulate batch with per-sample weights and percentage-based noise.
         
-        This is optimized for training where each sample can have
-        different augmented weights and noise levels.
+        Noise is computed as a percentage of the signal amplitude at each channel:
+            sigma = noise_percent/100 * |P|
         
         Parameters
         ----------
@@ -353,8 +357,8 @@ class RMSimulator(BaseSimulator):
             Parameters of shape (batch, n_params)
         weights_batch : np.ndarray
             Per-sample weights of shape (batch, n_freq)
-        noise_levels : np.ndarray
-            Per-sample noise levels of shape (batch,)
+        noise_percent : float
+            Noise as percentage of signal amplitude (default: 10 means 10%)
             
         Returns
         -------
@@ -380,11 +384,13 @@ class RMSimulator(BaseSimulator):
         if np.any(~np.isfinite(P)):
             P = np.nan_to_num(P, nan=0.0, posinf=0.0, neginf=0.0)
         
-        # Vectorized Q, U computation with per-sample noise
-        # Create noise sigma array: sigma[b,j] = noise_levels[b] / weights[b,j]
-        # Avoid division by zero
-        safe_weights = np.where(weights_batch > 0, weights_batch, 1.0)
-        sigma = noise_levels[:, np.newaxis] / safe_weights  # (batch, n_freq)
+        # Percentage-based noise: sigma = noise_percent/100 * |P|
+        # |P| is the polarized intensity at each channel
+        P_amplitude = np.abs(P)  # (batch, n_freq)
+        
+        # Avoid zero sigma where signal is zero - use small floor
+        min_sigma = 1e-6
+        sigma = np.maximum(noise_percent / 100.0 * P_amplitude, min_sigma)
         
         # Generate noise
         noise_Q = np.random.normal(0, 1, (batch_size, self._n_freq)) * sigma

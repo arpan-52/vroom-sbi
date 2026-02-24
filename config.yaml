@@ -47,15 +47,15 @@ priors:
 # =============================================================================
 # NOISE CONFIGURATION
 # =============================================================================
-# Base noise level - actual noise σ = base_level / weight
-# During training, base_level is randomly varied for robustness
+# Noise as percentage of signal amplitude
+# sigma = noise_percent/100 * |P| at each channel
 
 noise:
-  base_level: 0.01
+  base_percent: 10.0      # 10% noise relative to signal amplitude
   augmentation:
     enable: true
-    min_factor: 0.5   # Minimum: 0.5 × base_level
-    max_factor: 2.0   # Maximum: 2.0 × base_level
+    min_factor: 0.5       # Minimum: 5% noise (0.5 × 10%)
+    max_factor: 2.0       # Maximum: 20% noise (2.0 × 10%)
 
 # =============================================================================
 # TRAINING SETTINGS
