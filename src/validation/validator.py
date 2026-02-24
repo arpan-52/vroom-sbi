@@ -175,14 +175,40 @@ class Validator:
                 sinc_term = np.sinc(sinc_arg / np.pi)
                 P += amp * sinc_term * np.exp(2j * (chi0 + phi_c * self.lambda_sq))
         
-        elif self.model_type in ["external_dispersion", "internal_dispersion"]:
+        elif self.model_type == "external_dispersion":
+            # External Faraday dispersion: Gaussian depolarization
+            # P = amp × exp(-2σ²λ⁴) × exp(2j(χ₀ + φλ²))
             for i in range(self.n_components):
                 phi = theta[i*ppc + 0]
                 sigma_phi = theta[i*ppc + 1]
                 amp = theta[i*ppc + 2]
                 chi0 = theta[i*ppc + 3]
-                depol = np.exp(-2 * (sigma_phi * self.lambda_sq)**2)
+                lambda_sq_squared = self.lambda_sq ** 2  # λ⁴
+                depol = np.exp(-2 * sigma_phi**2 * lambda_sq_squared)
                 P += amp * depol * np.exp(2j * (chi0 + phi * self.lambda_sq))
+        
+        elif self.model_type == "internal_dispersion":
+            # Internal Faraday dispersion (Sokoloff model):
+            # P = amp × [(1 - exp(-S)) / S] × exp(2j × χ₀)
+            # where S = 2σ²λ⁴ - 2jφλ² (complex!)
+            for i in range(self.n_components):
+                phi = theta[i*ppc + 0]
+                sigma_phi = theta[i*ppc + 1]
+                amp = theta[i*ppc + 2]
+                chi0 = theta[i*ppc + 3]
+                
+                lambda_sq_squared = self.lambda_sq ** 2  # λ⁴
+                S = 2 * sigma_phi**2 * lambda_sq_squared - 2j * phi * self.lambda_sq
+                
+                # Depolarization: (1 - exp(-S)) / S, with limit S→0 → 1
+                abs_S = np.abs(S)
+                depol = np.where(
+                    abs_S < 1e-10,
+                    np.ones_like(S),
+                    (1 - np.exp(-S)) / S
+                )
+                
+                P += amp * depol * np.exp(2j * chi0)
         
         return P.real, P.imag, np.abs(P)
     
