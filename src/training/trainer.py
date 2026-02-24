@@ -124,13 +124,11 @@ class SBITrainer:
         
         # Get all prior bounds from centralized config
         flat_priors = self.config.priors.to_flat_dict()
-        base_noise_level = self.config.noise.base_level
         
-        # Create simulator
+        # Create simulator (noise is applied per-batch, not stored in simulator)
         simulator = RMSimulator(
             freq_file=self.config.freq_file,
             n_components=n_components,
-            base_noise_level=base_noise_level,
             model_type=model_type,
         )
         

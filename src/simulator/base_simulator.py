@@ -33,14 +33,14 @@ class RMSimulator(BaseSimulator):
     The amplitude 'amp' is the intrinsic polarized intensity.
     chi0 is the intrinsic polarization angle.
     
+    Noise is percentage-based: sigma = noise_percent/100 * |P|
+    
     Parameters
     ----------
     freq_file : str
         Path to frequency file
     n_components : int
         Number of RM components
-    base_noise_level : float
-        Base noise standard deviation
     model_type : str
         Physical model type
     """
@@ -57,7 +57,6 @@ class RMSimulator(BaseSimulator):
         self,
         freq_file: str,
         n_components: int,
-        base_noise_level: float = 0.01,
         model_type: str = "faraday_thin",
     ):
         self.freq, self._weights = load_frequencies(freq_file)
@@ -65,7 +64,6 @@ class RMSimulator(BaseSimulator):
         self._n_freq = len(self.freq)
         self.n_components = n_components
         self.model_type = model_type.lower()
-        self.base_noise_level = base_noise_level
         
         # Validate model type
         if self.model_type not in self.VALID_MODEL_TYPES:
