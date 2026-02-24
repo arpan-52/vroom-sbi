@@ -13,8 +13,7 @@ def train_command(args):
     config = Configuration.from_yaml(args.config)
     if args.device:
         config.training.device = args.device
-    train_all_models(config, classifier_only=args.classifier_only, 
-                    auto_optimize=not args.no_auto_optimize)
+    train_all_models(config, classifier_only=args.classifier_only)
 
 
 def infer_command(args):
@@ -94,7 +93,6 @@ def main():
     train_p.add_argument('--config', default='config.yaml')
     train_p.add_argument('--device', default=None)
     train_p.add_argument('--classifier-only', action='store_true')
-    train_p.add_argument('--no-auto-optimize', action='store_true')
     train_p.set_defaults(func=train_command)
     
     # Infer
