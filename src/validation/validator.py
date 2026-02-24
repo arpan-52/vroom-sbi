@@ -153,28 +153,53 @@ class ComprehensiveValidator:
             'time': elapsed
         }
 
-    def run_rmtools(self, Q_obs, U_obs, weights, noise_level):
+    def run_rmtools(self, Q_obs, U_obs, weights, noise_level, case_id=None):
+        """Run RM-Tools QUfit. Saves input file to output directory."""
+        import shutil
+        
         start = datetime.now()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
-            input_file = tmpdir / "input_spectrum.dat"
-            freq_hz = 3e8 / np.sqrt(self.lambda_sq)
-            with open(input_file, 'w') as f:
-                for i in range(self.n_freq):
-                    if weights[i] > 0:
-                        f.write(f"{freq_hz[i]:.10e} {Q_obs[i]:.10e} {U_obs[i]:.10e} {noise_level:.10e} {noise_level:.10e}\n")
-            cmd = ['micromamba', 'run', '-n', 'rmtool', 'qufit', str(input_file), '-m', self.rmtools_model, '-v']
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=tmpdir)
-                elapsed = (datetime.now() - start).total_seconds()
-                dat_files = [f for f in tmpdir.glob("*.dat") if f.name != "input_spectrum.dat"]
-                if dat_files:
-                    return self._parse_rmtools_dat(dat_files[0], elapsed)
-                return self._parse_rmtools_stdout(result.stdout, elapsed)
-            except subprocess.TimeoutExpired:
-                return RMToolsResult(success=False, error_msg="Timeout", time=300)
-            except Exception as e:
-                return RMToolsResult(success=False, error_msg=str(e))
+        
+        # Create rmtools working directory in output
+        rmtools_dir = self.output_dir / "rmtools_work"
+        rmtools_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Use case_id for unique filename, or generate one
+        if case_id is None:
+            case_id = f"case_{datetime.now().strftime('%H%M%S%f')}"
+        
+        input_file = rmtools_dir / f"{case_id}.dat"
+        freq_hz = 3e8 / np.sqrt(self.lambda_sq)
+        
+        # Write input file
+        with open(input_file, 'w') as f:
+            for i in range(self.n_freq):
+                if weights[i] > 0:
+                    f.write(f"{freq_hz[i]:.10e} {Q_obs[i]:.10e} {U_obs[i]:.10e} {noise_level:.10e} {noise_level:.10e}\n")
+        
+        cmd = ['micromamba', 'run', '-n', 'rmtool', 'qufit', str(input_file), '-m', self.rmtools_model, '-v']
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=rmtools_dir)
+            elapsed = (datetime.now() - start).total_seconds()
+            
+            # RM-Tools creates: {case_id}_m{model}_dynesty.dat
+            expected_dat = rmtools_dir / f"{case_id}_m{self.rmtools_model}_dynesty.dat"
+            
+            if expected_dat.exists():
+                return self._parse_rmtools_dat(expected_dat, elapsed)
+            
+            # Try parsing from stdout
+            parsed = self._parse_rmtools_stdout(result.stdout, elapsed)
+            if not parsed.success:
+                parsed.error_msg = f"No output file. Exit: {result.returncode}"
+            return parsed
+            
+        except subprocess.TimeoutExpired:
+            return RMToolsResult(success=False, error_msg="Timeout (300s)", time=300)
+        except FileNotFoundError:
+            return RMToolsResult(success=False, error_msg="micromamba or qufit not found")
+        except Exception as e:
+            return RMToolsResult(success=False, error_msg=str(e))
 
     def _parse_rmtools_dat(self, dat_file, elapsed):
         try:
@@ -267,7 +292,7 @@ class ComprehensiveValidator:
                 tc.vroom_samples, tc.vroom_mean, tc.vroom_std = vroom['samples'], vroom['mean'], vroom['std']
                 tc.vroom_ci_90, tc.vroom_time = vroom['ci_90'], vroom['time']
                 if run_rmtools:
-                    tc.rmtools = self.run_rmtools(Q_obs, U_obs, weights, noise_level)
+                    tc.rmtools = self.run_rmtools(Q_obs, U_obs, weights, noise_level, case_id=f"sweep_{self.param_names[p]}_{len(results):03d}")
                 results.append(tc)
             self.param_sweep_results[p] = results
 
@@ -296,7 +321,8 @@ class ComprehensiveValidator:
                     tc.vroom_samples, tc.vroom_mean, tc.vroom_std = vroom['samples'], vroom['mean'], vroom['std']
                     tc.vroom_ci_90, tc.vroom_time = vroom['ci_90'], vroom['time']
                     if run_rmtools:
-                        tc.rmtools = self.run_rmtools(Q_obs, U_obs, weights, noise)
+                        grid_case_id = f"grid_n{noise:.3f}_m{missing:.2f}_{len(self.grid_results[key]):02d}"
+                        tc.rmtools = self.run_rmtools(Q_obs, U_obs, weights, noise, case_id=grid_case_id)
                     self.grid_results[key].append(tc)
                     pbar.update(1)
         pbar.close()
@@ -321,7 +347,7 @@ class ComprehensiveValidator:
             tc.vroom_samples, tc.vroom_mean, tc.vroom_std = vroom['samples'], vroom['mean'], vroom['std']
             tc.vroom_ci_90, tc.vroom_time = vroom['ci_90'], vroom['time']
             if run_rmtools:
-                tc.rmtools = self.run_rmtools(Q_obs, U_obs, weights, noise)
+                tc.rmtools = self.run_rmtools(Q_obs, U_obs, weights, noise, case_id=f"individual_{i+1:03d}")
             self.individual_cases.append(tc)
 
     def plot_parameter_sweeps(self):
@@ -622,3 +648,5 @@ def run_comprehensive_validation(posterior_path, output_dir, rmtools_model="1", 
     validator = ComprehensiveValidator(Path(posterior_path), Path(output_dir), rmtools_model, device)
     validator.run_full_validation(n_param_points, noise_min, noise_max, noise_steps, missing_min, missing_max, missing_steps, n_grid_repeats, n_individual_cases, n_samples, run_rmtools, seed)
     return validator
+
+
