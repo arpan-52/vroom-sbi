@@ -1,19 +1,4 @@
-"""
-Validation module for VROOM-SBI.
+"""Validation module."""
+from .validator import SimpleValidator, run_validation
 
-Provides comprehensive validation with publication-quality plots.
-"""
-
-from .validator import (
-    ComprehensiveValidator,
-    TestCase,
-    RMToolsResult,
-    run_comprehensive_validation,
-)
-
-__all__ = [
-    'ComprehensiveValidator',
-    'TestCase',
-    'RMToolsResult',
-    'run_comprehensive_validation',
-]
+__all__ = ['SimpleValidator', 'run_validation']
