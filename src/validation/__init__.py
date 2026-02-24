@@ -6,12 +6,14 @@ Provides comprehensive validation with publication-quality plots.
 
 from .validator import (
     ComprehensiveValidator,
-    SingleTestResult,
+    TestCase,
+    RMToolsResult,
     run_comprehensive_validation,
 )
 
 __all__ = [
     'ComprehensiveValidator',
-    'SingleTestResult',
+    'TestCase',
+    'RMToolsResult',
     'run_comprehensive_validation',
 ]
