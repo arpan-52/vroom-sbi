@@ -1,5 +1,6 @@
 """
 VROOM-SBI Validation with percentage-based noise.
+Supports reading model info from checkpoint or user-provided values.
 """
 
 import numpy as np
@@ -19,13 +20,46 @@ class Validator:
     """
     VROOM-SBI Validator with parameter sweeps and detailed case plots.
     
-    Uses percentage-based noise: sigma = noise_percent/100 * |P|
+    Priority for model info:
+    1. User-provided (--model, --n-components, --prior-low, --prior-high)
+    2. Read from posterior checkpoint
+    3. Error if both fail
     """
     
-    def __init__(self, posterior_path, output_dir, device="auto"):
+    # Parameter definitions per model type
+    PARAM_DEFS = {
+        'faraday_thin': {
+            'names': ['RM', 'amp', 'chi0'],
+            'n_params': 3,
+        },
+        'burn_slab': {
+            'names': ['phi_c', 'delta_phi', 'amp', 'chi0'],
+            'n_params': 4,
+        },
+        'external_dispersion': {
+            'names': ['phi', 'sigma_phi', 'amp', 'chi0'],
+            'n_params': 4,
+        },
+        'internal_dispersion': {
+            'names': ['phi', 'sigma_phi', 'amp', 'chi0'],
+            'n_params': 4,
+        },
+    }
+    
+    def __init__(self, posterior_path, output_dir, model_type=None, n_components=None,
+                 prior_low=None, prior_high=None, device="auto"):
         self.posterior_path = Path(posterior_path)
         self.output_dir = Path(output_dir)
         self.device = "cuda" if device == "auto" and torch.cuda.is_available() else "cpu"
+        
+        # Store user-provided values (may be None)
+        self._user_model_type = model_type
+        self._user_n_components = n_components
+        self._user_prior_low = prior_low
+        self._user_prior_high = prior_high
+        
+        # Load posterior and resolve model info
+        self._load_posterior()
         
         # Create directories
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -37,46 +71,123 @@ class Validator:
         }
         for d in self.dirs.values():
             d.mkdir(exist_ok=True)
-        
-        self._load_posterior()
     
     def _load_posterior(self):
         logger.info(f"Loading posterior from {self.posterior_path}")
         checkpoint = torch.load(self.posterior_path, map_location='cpu', weights_only=False)
         
-        self.model_type = checkpoint['model_type']
-        self.n_components = checkpoint['n_components']
-        self.n_params = checkpoint['n_params']
+        # Load posterior object and basic info
+        self.posterior = checkpoint['posterior']
         self.n_freq = checkpoint['n_freq']
         self.lambda_sq = np.array(checkpoint['lambda_sq'])
-        self.prior_bounds = checkpoint['prior_bounds']
-        self.posterior = checkpoint['posterior']
         
+        # Resolve model_type: user > checkpoint > error
+        if self._user_model_type:
+            self.model_type = self._user_model_type
+            logger.info(f"  Using user-provided model: {self.model_type}")
+        elif 'model_type' in checkpoint:
+            self.model_type = checkpoint['model_type']
+            logger.info(f"  Model from checkpoint: {self.model_type}")
+        else:
+            raise ValueError(
+                "Model type not found in checkpoint and not provided by user.\n"
+                "Please provide --model (faraday_thin, burn_slab, external_dispersion, internal_dispersion)"
+            )
+        
+        # Resolve n_components: user > checkpoint > error
+        if self._user_n_components:
+            self.n_components = self._user_n_components
+            logger.info(f"  Using user-provided n_components: {self.n_components}")
+        elif 'n_components' in checkpoint:
+            self.n_components = checkpoint['n_components']
+            logger.info(f"  N components from checkpoint: {self.n_components}")
+        else:
+            raise ValueError(
+                "Number of components not found in checkpoint and not provided by user.\n"
+                "Please provide --n-components"
+            )
+        
+        # Get parameter info from model type
+        if self.model_type not in self.PARAM_DEFS:
+            raise ValueError(f"Unknown model type: {self.model_type}. "
+                           f"Choose from: {list(self.PARAM_DEFS.keys())}")
+        
+        self.params_per_comp = self.PARAM_DEFS[self.model_type]['n_params']
+        self.n_params = self.params_per_comp * self.n_components
+        
+        # Generate parameter names
+        self.param_names = []
+        base_names = self.PARAM_DEFS[self.model_type]['names']
+        for i in range(self.n_components):
+            for name in base_names:
+                self.param_names.append(f"{name}_{i+1}")
+        
+        # Resolve prior bounds: user > checkpoint > error
+        if self._user_prior_low and self._user_prior_high:
+            if len(self._user_prior_low) != self.n_params:
+                raise ValueError(f"prior_low has {len(self._user_prior_low)} values, expected {self.n_params}")
+            if len(self._user_prior_high) != self.n_params:
+                raise ValueError(f"prior_high has {len(self._user_prior_high)} values, expected {self.n_params}")
+            self.prior_bounds = {
+                'low': self._user_prior_low,
+                'high': self._user_prior_high,
+            }
+            logger.info(f"  Using user-provided prior bounds")
+        elif 'prior_bounds' in checkpoint:
+            self.prior_bounds = checkpoint['prior_bounds']
+            logger.info(f"  Prior bounds from checkpoint")
+        else:
+            raise ValueError(
+                "Prior bounds not found in checkpoint and not provided by user.\n"
+                "Please provide --prior-low and --prior-high"
+            )
+        
+        # Move posterior to device
         if self.device == 'cuda':
             self.posterior.to(self.device)
         
-        # Parameter names
-        self.param_names = []
-        for i in range(self.n_components):
-            self.param_names.extend([f'RM_{i+1}', f'amp_{i+1}', f'chi0_{i+1}'])
-        
-        logger.info(f"  Model: {self.model_type}, N={self.n_components}")
+        # Print summary
+        logger.info(f"  Parameters ({self.n_params}): {self.param_names}")
+        logger.info(f"  Prior low: {self.prior_bounds['low']}")
+        logger.info(f"  Prior high: {self.prior_bounds['high']}")
+        logger.info(f"  Frequencies: {self.n_freq}")
         logger.info(f"  Device: {self.device}")
     
     def _simulate_spectrum(self, theta):
         """Generate Q, U, and amplitude |P| from parameters."""
         P = np.zeros(self.n_freq, dtype=complex)
-        for i in range(self.n_components):
-            rm, amp, chi0 = theta[i*3], theta[i*3+1], theta[i*3+2]
-            P += amp * np.exp(1j * 2 * (chi0 + rm * self.lambda_sq))
+        ppc = self.params_per_comp
+        
+        if self.model_type == "faraday_thin":
+            for i in range(self.n_components):
+                rm = theta[i*ppc + 0]
+                amp = theta[i*ppc + 1]
+                chi0 = theta[i*ppc + 2]
+                P += amp * np.exp(2j * (chi0 + rm * self.lambda_sq))
+        
+        elif self.model_type == "burn_slab":
+            for i in range(self.n_components):
+                phi_c = theta[i*ppc + 0]
+                delta_phi = theta[i*ppc + 1]
+                amp = theta[i*ppc + 2]
+                chi0 = theta[i*ppc + 3]
+                sinc_arg = delta_phi * self.lambda_sq
+                sinc_term = np.sinc(sinc_arg / np.pi)
+                P += amp * sinc_term * np.exp(2j * (chi0 + phi_c * self.lambda_sq))
+        
+        elif self.model_type in ["external_dispersion", "internal_dispersion"]:
+            for i in range(self.n_components):
+                phi = theta[i*ppc + 0]
+                sigma_phi = theta[i*ppc + 1]
+                amp = theta[i*ppc + 2]
+                chi0 = theta[i*ppc + 3]
+                depol = np.exp(-2 * (sigma_phi * self.lambda_sq)**2)
+                P += amp * depol * np.exp(2j * (chi0 + phi * self.lambda_sq))
+        
         return P.real, P.imag, np.abs(P)
     
     def _add_noise(self, Q, U, P_amplitude, noise_percent):
-        """
-        Add percentage-based Gaussian noise.
-        
-        sigma[i] = noise_percent/100 * |P[i]|
-        """
+        """Add percentage-based Gaussian noise."""
         min_sigma = 1e-6
         sigma = np.maximum(noise_percent / 100.0 * P_amplitude, min_sigma)
         Q_noisy = Q + np.random.normal(0, 1, self.n_freq) * sigma
@@ -93,7 +204,6 @@ class Validator:
         if n_flag == 0:
             return weights
         
-        # Mix of random + contiguous gaps
         n_random = n_flag // 2
         n_gap = n_flag - n_random
         
@@ -132,14 +242,13 @@ class Validator:
         }
     
     def _save_dat_file(self, case_id, Q_obs, U_obs, weights, sigma):
-        """Save .dat file for RM-Tools (freq_hz, Q, U, dQ, dU)."""
+        """Save .dat file for RM-Tools."""
         dat_path = self.dirs['rmtools'] / f"{case_id}.dat"
         freq_hz = 3e8 / np.sqrt(self.lambda_sq)
         
         with open(dat_path, 'w') as f:
             for i in range(self.n_freq):
                 if weights[i] > 0:
-                    # dQ = dU = sigma (noise standard deviation)
                     f.write(f"{freq_hz[i]:.10e} {Q_obs[i]:.10e} {U_obs[i]:.10e} "
                            f"{sigma[i]:.10e} {sigma[i]:.10e}\n")
         return dat_path
@@ -148,6 +257,8 @@ class Validator:
         """Save case data as JSON."""
         data = {
             'case_id': case_id,
+            'model_type': self.model_type,
+            'n_components': self.n_components,
             'param_names': self.param_names,
             'theta_true': theta_true.tolist(),
             'vroom_mean': result['mean'].tolist(),
@@ -166,12 +277,10 @@ class Validator:
         
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
         
-        # Get predicted spectrum from posterior mean
         Q_pred, U_pred, _ = self._simulate_spectrum(result['mean'])
-        
         mask = weights > 0
         
-        # Panel 1: True Q/U (clean)
+        # Panel 1: True Q/U
         ax = axes[0, 0]
         ax.plot(self.lambda_sq, Q_true, 'b-', lw=2, label='Q true')
         ax.plot(self.lambda_sq, U_true, 'r-', lw=2, label='U true')
@@ -181,7 +290,7 @@ class Validator:
         ax.legend()
         ax.grid(True, alpha=0.3)
         
-        # Panel 2: Observed Q/U (with noise + flagging)
+        # Panel 2: Observed Q/U
         ax = axes[0, 1]
         ax.scatter(self.lambda_sq[mask], Q_obs[mask], c='blue', s=15, alpha=0.6, label='Q obs')
         ax.scatter(self.lambda_sq[mask], U_obs[mask], c='red', s=15, alpha=0.6, label='U obs')
@@ -212,7 +321,6 @@ class Validator:
         ax.scatter(self.lambda_sq[mask], Q_resid[mask], c='blue', s=15, alpha=0.6, label='Q resid')
         ax.scatter(self.lambda_sq[mask], U_resid[mask], c='red', s=15, alpha=0.6, label='U resid')
         ax.axhline(0, color='black', ls='--', lw=1)
-        # Show ±1σ band (average sigma)
         avg_sigma = np.mean(sigma[mask])
         ax.axhline(avg_sigma, color='gray', ls=':', lw=1, label=f'±σ (avg={avg_sigma:.4f})')
         ax.axhline(-avg_sigma, color='gray', ls=':', lw=1)
@@ -224,23 +332,23 @@ class Validator:
         ax.legend()
         ax.grid(True, alpha=0.3)
         
-        # Add parameter comparison text
-        param_text = "Parameters:\n"
-        param_text += f"{'':12} {'True':>10} {'VROOM':>12}\n"
-        param_text += "-" * 36 + "\n"
+        # Parameter comparison text
+        param_text = f"Model: {self.model_type}, N={self.n_components}\n"
+        param_text += f"{'Parameter':15} {'True':>10} {'VROOM':>12}\n"
+        param_text += "-" * 40 + "\n"
         for i, name in enumerate(self.param_names):
-            param_text += f"{name:12} {theta_true[i]:>10.4f} {result['mean'][i]:>8.4f}±{result['std'][i]:.4f}\n"
+            param_text += f"{name:15} {theta_true[i]:>10.4f} {result['mean'][i]:>8.4f}±{result['std'][i]:.4f}\n"
         
         fig.text(0.02, 0.02, param_text, fontsize=9, family='monospace',
                 verticalalignment='bottom', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
         plt.suptitle(f'{case_id}', fontsize=14, fontweight='bold')
-        plt.tight_layout(rect=[0, 0.12, 1, 0.96])
+        plt.tight_layout(rect=[0, 0.15, 1, 0.96])
         plt.savefig(self.dirs['cases'] / f'{case_id}.png', dpi=150)
         plt.close()
     
     def run_parameter_sweeps(self, n_points=20, noise_percent=10.0, missing_fraction=0.1, n_samples=5000):
-        """Run parameter sweeps for RM, amp, chi0."""
+        """Run parameter sweeps."""
         logger.info("Running parameter sweeps...")
         
         low = np.array(self.prior_bounds['low'])
@@ -260,12 +368,10 @@ class Validator:
                 theta = mid.copy()
                 theta[p] = val
                 
-                # Simulate
                 Q_true, U_true, P_amp = self._simulate_spectrum(theta)
                 Q_obs, U_obs, sigma = self._add_noise(Q_true, U_true, P_amp, noise_percent)
                 weights = self._apply_flagging(self.n_freq, missing_fraction)
                 
-                # Infer
                 result = self._run_inference(Q_obs, U_obs, weights, n_samples)
                 
                 true_vals.append(val)
@@ -278,34 +384,39 @@ class Validator:
                 'std': np.array(est_stds),
             }
         
-        # Plot sweeps
         self._plot_sweeps(sweep_results, noise_percent, missing_fraction)
-        
         return sweep_results
     
     def _plot_sweeps(self, sweep_results, noise_percent, missing_fraction):
         """Plot parameter sweep results."""
         n_params = len(sweep_results)
-        fig, axes = plt.subplots(1, n_params, figsize=(5*n_params, 5))
-        if n_params == 1:
-            axes = [axes]
+        n_cols = min(3, n_params)
+        n_rows = (n_params + n_cols - 1) // n_cols
         
-        for ax, (param_name, data) in zip(axes, sweep_results.items()):
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 5*n_rows))
+        axes = np.atleast_1d(axes).flatten()
+        
+        for idx, (param_name, data) in enumerate(sweep_results.items()):
+            ax = axes[idx]
             true = data['true']
             est = data['est']
             std = data['std']
             
             ax.errorbar(true, est, yerr=std, fmt='o', capsize=3, alpha=0.7, markersize=5)
-            ax.plot([true.min(), true.max()], [true.min(), true.max()], 'k--', lw=2, label='Perfect')
+            ax.plot([true.min(), true.max()], [true.min(), true.max()], 'k--', lw=2)
             
             rmse = np.sqrt(np.mean((est - true)**2))
             ax.set_xlabel(f'True {param_name}')
             ax.set_ylabel(f'Estimated {param_name}')
-            ax.set_title(f'{param_name} Recovery (RMSE={rmse:.4f})')
-            ax.legend()
+            ax.set_title(f'{param_name} (RMSE={rmse:.4f})')
             ax.grid(True, alpha=0.3)
         
-        plt.suptitle(f'Parameter Sweeps ({noise_percent:.0f}% noise, {missing_fraction*100:.0f}% flagged)', 
+        # Hide unused axes
+        for idx in range(len(sweep_results), len(axes)):
+            axes[idx].set_visible(False)
+        
+        plt.suptitle(f'Parameter Sweeps ({noise_percent:.0f}% noise, {missing_fraction*100:.0f}% flagged)\n'
+                    f'Model: {self.model_type}, N={self.n_components}', 
                     fontsize=12, fontweight='bold')
         plt.tight_layout()
         plt.savefig(self.dirs['sweeps'] / 'parameter_sweeps.png', dpi=150)
@@ -323,24 +434,16 @@ class Validator:
         for i in tqdm(range(n_cases), desc="Cases"):
             case_id = f"case_{i+1:03d}"
             
-            # Random parameters from prior
             theta = np.random.uniform(low, high)
             
-            # Simulate
             Q_true, U_true, P_amp = self._simulate_spectrum(theta)
             Q_obs, U_obs, sigma = self._add_noise(Q_true, U_true, P_amp, noise_percent)
             weights = self._apply_flagging(self.n_freq, missing_fraction)
             
-            # Infer
             result = self._run_inference(Q_obs, U_obs, weights, n_samples)
             
-            # Save .dat file for RM-Tools
             self._save_dat_file(case_id, Q_obs, U_obs, weights, sigma)
-            
-            # Save case data
             self._save_case_data(case_id, theta, result, noise_percent, missing_fraction)
-            
-            # Plot
             self._plot_case(case_id, theta, Q_true, U_true, Q_obs, U_obs, 
                            weights, result, noise_percent, missing_fraction, sigma)
             
@@ -352,19 +455,20 @@ class Validator:
                 'time': result['time'],
             })
         
-        # Summary plot
         self._plot_summary(all_results, noise_percent, missing_fraction)
-        
         return all_results
     
     def _plot_summary(self, results, noise_percent, missing_fraction):
         """Plot summary of all cases."""
         n_params = self.n_params
-        fig, axes = plt.subplots(1, n_params, figsize=(5*n_params, 5))
-        if n_params == 1:
-            axes = [axes]
+        n_cols = min(3, n_params)
+        n_rows = (n_params + n_cols - 1) // n_cols
         
-        for p, ax in enumerate(axes):
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 5*n_rows))
+        axes = np.atleast_1d(axes).flatten()
+        
+        for p in range(n_params):
+            ax = axes[p]
             true_vals = [r['theta_true'][p] for r in results]
             est_vals = [r['vroom_mean'][p] for r in results]
             est_stds = [r['vroom_std'][p] for r in results]
@@ -379,7 +483,11 @@ class Validator:
             ax.set_title(f'{self.param_names[p]} (RMSE={rmse:.4f})')
             ax.grid(True, alpha=0.3)
         
-        plt.suptitle(f'Individual Cases ({noise_percent:.0f}% noise, {missing_fraction*100:.0f}% flagged)', 
+        for idx in range(n_params, len(axes)):
+            axes[idx].set_visible(False)
+        
+        plt.suptitle(f'Individual Cases ({noise_percent:.0f}% noise, {missing_fraction*100:.0f}% flagged)\n'
+                    f'Model: {self.model_type}, N={self.n_components}', 
                     fontsize=12, fontweight='bold')
         plt.tight_layout()
         plt.savefig(self.dirs['cases'] / 'summary.png', dpi=150)
@@ -399,33 +507,21 @@ class Validator:
     
     def run_validation(self, n_sweep_points=20, n_cases=10, noise_percent=10.0, 
                        missing_fraction=0.1, n_samples=5000, seed=42):
-        """
-        Run full validation.
-        
-        Args:
-            n_sweep_points: Points per parameter sweep
-            n_cases: Number of individual test cases
-            noise_percent: Noise as percentage of signal (e.g., 10 = 10%)
-            missing_fraction: Fraction of channels to flag
-            n_samples: Posterior samples per inference
-            seed: Random seed
-        """
+        """Run full validation."""
         np.random.seed(seed)
         
         logger.info("=" * 50)
         logger.info("VROOM-SBI Validation")
         logger.info("=" * 50)
-        logger.info(f"Noise: {noise_percent}% of signal amplitude")
-        logger.info(f"Missing: {missing_fraction*100:.0f}% flagged channels")
-        logger.info(f"Sweep points: {n_sweep_points}")
-        logger.info(f"Individual cases: {n_cases}")
+        logger.info(f"Model: {self.model_type}, N={self.n_components}")
+        logger.info(f"Parameters: {self.param_names}")
+        logger.info(f"Noise: {noise_percent}% of signal")
+        logger.info(f"Missing: {missing_fraction*100:.0f}% flagged")
         logger.info("=" * 50)
         
-        # Parameter sweeps
         logger.info("\n[1/2] Parameter sweeps...")
         self.run_parameter_sweeps(n_sweep_points, noise_percent, missing_fraction, n_samples)
         
-        # Individual cases
         logger.info("\n[2/2] Individual cases...")
         self.run_individual_cases(n_cases, noise_percent, missing_fraction, n_samples)
         
@@ -438,10 +534,13 @@ class Validator:
         logger.info(f"  RM-Tools .dat: {self.dirs['rmtools']}")
 
 
-def run_validation(posterior_path, output_dir, n_sweep_points=20, n_cases=10,
+def run_validation(posterior_path, output_dir, model_type=None, n_components=None,
+                   prior_low=None, prior_high=None,
+                   n_sweep_points=20, n_cases=10,
                    noise_percent=10.0, missing_fraction=0.1, n_samples=5000, 
                    device="auto", seed=42):
     """Run validation."""
-    validator = Validator(posterior_path, output_dir, device)
+    validator = Validator(posterior_path, output_dir, model_type, n_components,
+                         prior_low, prior_high, device)
     validator.run_validation(n_sweep_points, n_cases, noise_percent, missing_fraction, n_samples, seed)
     return validator

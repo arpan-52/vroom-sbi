@@ -33,21 +33,42 @@ def infer_command(args):
 def validate_command(args):
     from ..validation.validator import run_validation
     
+    # Parse prior bounds if provided
+    prior_low = None
+    prior_high = None
+    if args.prior_low:
+        prior_low = [float(x) for x in args.prior_low.split(',')]
+    if args.prior_high:
+        prior_high = [float(x) for x in args.prior_high.split(',')]
+    
     print("\n" + "=" * 50)
     print("VROOM-SBI Validation")
     print("=" * 50)
     print(f"Posterior: {args.posterior}")
+    if args.model:
+        print(f"Model: {args.model} (user provided)")
+    else:
+        print(f"Model: (will read from checkpoint)")
+    if args.n_components:
+        print(f"N components: {args.n_components} (user provided)")
+    else:
+        print(f"N components: (will read from checkpoint)")
+    if prior_low and prior_high:
+        print(f"Prior low: {prior_low}")
+        print(f"Prior high: {prior_high}")
     print(f"Output: {args.output_dir}")
     print(f"Noise: {args.noise_percent}% of signal")
     print(f"Missing: {args.missing_fraction*100:.0f}% flagged")
-    print(f"Sweep points: {args.n_sweep_points}")
-    print(f"Individual cases: {args.n_cases}")
     print(f"Device: {args.device}")
     print("=" * 50 + "\n")
     
     run_validation(
         posterior_path=args.posterior,
         output_dir=args.output_dir,
+        model_type=args.model,
+        n_components=args.n_components,
+        prior_low=prior_low,
+        prior_high=prior_high,
         n_sweep_points=args.n_sweep_points,
         n_cases=args.n_cases,
         noise_percent=args.noise_percent,
@@ -89,9 +110,66 @@ def main():
     infer_p.set_defaults(func=infer_command)
     
     # Validate
-    val_p = subparsers.add_parser('validate', help='Run validation with parameter sweeps and case plots')
+    val_p = subparsers.add_parser('validate', help='Run validation with parameter sweeps and case plots',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Model Types and Parameter Order:
+================================
+Each model type has specific parameters PER COMPONENT:
+
+  faraday_thin (3 params per component):
+    [RM, amp, chi0]
+    - RM: Faraday depth (rad/m²)
+    - amp: Polarized amplitude
+    - chi0: Intrinsic polarization angle (rad)
+
+  burn_slab (4 params per component):
+    [phi_c, delta_phi, amp, chi0]
+    - phi_c: Central Faraday depth (rad/m²)
+    - delta_phi: Faraday depth extent (rad/m²)
+    - amp: Polarized amplitude
+    - chi0: Intrinsic polarization angle (rad)
+
+  external_dispersion / internal_dispersion (4 params per component):
+    [phi, sigma_phi, amp, chi0]
+    - phi: Mean Faraday depth (rad/m²)
+    - sigma_phi: Faraday dispersion (rad/m²)
+    - amp: Polarized amplitude
+    - chi0: Intrinsic polarization angle (rad)
+
+For N components, parameters are concatenated:
+  N=1: [p1, p2, p3, ...]
+  N=2: [p1_1, p2_1, p3_1, ..., p1_2, p2_2, p3_2, ...]
+
+Priority:
+=========
+1. If --model and --n-components provided, use them
+2. Else, try to read from posterior checkpoint
+3. If both fail, error with message
+
+Examples:
+=========
+# Let validator read model info from checkpoint (recommended for new posteriors)
+vroom-sbi validate --posterior model.pt --output-dir val_results
+
+# Override with explicit model info (for old posteriors)
+vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1
+
+# With custom prior ranges
+vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
+    --prior-low "-100,0.001,-3.14" --prior-high "100,1.0,3.14"
+""")
     val_p.add_argument('--posterior', required=True, help='Path to posterior .pt file')
     val_p.add_argument('--output-dir', default='validation_results', help='Output directory')
+    val_p.add_argument('--model', type=str, default=None,
+                      choices=['faraday_thin', 'burn_slab', 'external_dispersion', 'internal_dispersion'],
+                      help='Model type (optional, reads from checkpoint if not provided)')
+    val_p.add_argument('--n-components', type=int, default=None,
+                      help='Number of Faraday components (optional, reads from checkpoint)')
+    val_p.add_argument('--prior-low', type=str, default=None,
+                      help='Comma-separated lower bounds for each parameter (optional)')
+    val_p.add_argument('--prior-high', type=str, default=None,
+                      help='Comma-separated upper bounds for each parameter (optional)')
     val_p.add_argument('--noise-percent', type=float, default=10.0, 
                       help='Noise as %% of signal amplitude (default: 10)')
     val_p.add_argument('--missing-fraction', type=float, default=0.1,

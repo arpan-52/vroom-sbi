@@ -583,6 +583,7 @@ class SBITrainer:
             'n_params': simulator.n_params,
             'n_freq': simulator.n_freq,
             'params_per_comp': simulator.params_per_comp,
+            'param_names': simulator.get_param_names(),  # Save parameter names
             
             # Network states
             'posterior_state': posterior.state_dict() if hasattr(posterior, 'state_dict') else None,
