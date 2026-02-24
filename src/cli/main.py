@@ -119,9 +119,6 @@ def validate_command(args):
     """Comprehensive validation with publication-quality plots."""
     from ..validation.validator import run_comprehensive_validation
     
-    # Parse noise levels
-    noise_levels = [float(x.strip()) for x in args.noise_levels.split(',')]
-    
     # Determine if we should run RM-Tools
     run_rmtools = args.run_rmtools and not args.no_rmtools
     
@@ -131,10 +128,11 @@ def validate_command(args):
     print(f"Posterior: {args.posterior}")
     print(f"Output: {args.output_dir}")
     print(f"Parameter sweep points: {args.n_param_points}")
-    print(f"Noise levels: {noise_levels}")
-    print(f"Noise repeats: {args.n_noise_repeats}")
-    print(f"Missing fraction: {args.missing_fraction}")
-    print(f"RM-Tools env: {args.rmtools_env}")
+    print(f"Noise: {args.noise_min} to {args.noise_max} ({args.noise_steps} steps)")
+    print(f"Missing: {args.missing_min} to {args.missing_max} ({args.missing_steps} steps)")
+    print(f"Grid repeats: {args.n_grid_repeats}")
+    print(f"Individual cases: {args.n_cases}")
+    print(f"RM-Tools model: {args.rmtools_model}")
     print(f"Run RM-Tools: {run_rmtools}")
     print(f"Device: {args.device}")
     print("=" * 60 + "\n")
@@ -143,11 +141,16 @@ def validate_command(args):
     validator = run_comprehensive_validation(
         posterior_path=args.posterior,
         output_dir=args.output_dir,
-        rmtools_env=args.rmtools_env,
+        rmtools_model=args.rmtools_model,
         n_param_points=args.n_param_points,
-        noise_levels=noise_levels,
-        n_noise_repeats=args.n_noise_repeats,
-        missing_fraction=args.missing_fraction,
+        noise_min=args.noise_min,
+        noise_max=args.noise_max,
+        noise_steps=args.noise_steps,
+        missing_min=args.missing_min,
+        missing_max=args.missing_max,
+        missing_steps=args.missing_steps,
+        n_grid_repeats=args.n_grid_repeats,
+        n_individual_cases=args.n_cases,
         n_samples=args.n_samples,
         run_rmtools=run_rmtools,
         device=args.device,
@@ -159,14 +162,12 @@ def validate_command(args):
     print("=" * 60)
     print(f"Results saved to: {args.output_dir}")
     print("\nOutput folders:")
-    print("  01_parameter_recovery/ - Parameter sweep recovery plots")
-    print("  02_noise_analysis/     - Performance vs noise level")
-    print("  03_individual_cases/   - Individual test case details")
-    print("  04_vroom_vs_rmtools/   - Side-by-side comparison")
-    print("  05_posterior_plots/    - Corner plots")
-    print("  06_spectra_fits/       - Q/U spectra with fits")
-    print("  07_summary/            - Summary dashboard")
-    print("  08_raw_data/           - Raw results JSON")
+    print("  parameter_sweeps/      - Parameter recovery plots")
+    print("  noise_missing_analysis/ - RMSE heatmaps")
+    print("  individual_cases/      - Detailed case studies")
+    print("  posteriors/            - Corner plots")
+    print("  timing/                - Speed comparison")
+    print("  data/                  - Raw results JSON")
     print("=" * 60)
 
 
@@ -241,14 +242,24 @@ def cli():
                                 help='Number of points for parameter sweeps')
     validate_parser.add_argument('--n-samples', type=int, default=5000,
                                 help='Number of posterior samples per test case')
-    validate_parser.add_argument('--noise-levels', type=str, default='0.01,0.03,0.05,0.1',
-                                help='Comma-separated noise levels to test')
-    validate_parser.add_argument('--n-noise-repeats', type=int, default=20,
-                                help='Repeats per noise level')
-    validate_parser.add_argument('--missing-fraction', type=float, default=0.1,
-                                help='Fraction of missing channels')
-    validate_parser.add_argument('--rmtools-env', type=str, default='rmtools',
-                                help='Conda environment name with RM-Tools installed')
+    validate_parser.add_argument('--noise-min', type=float, default=0.001,
+                                help='Minimum noise level')
+    validate_parser.add_argument('--noise-max', type=float, default=0.5,
+                                help='Maximum noise level')
+    validate_parser.add_argument('--noise-steps', type=int, default=10,
+                                help='Number of noise levels')
+    validate_parser.add_argument('--missing-min', type=float, default=0.0,
+                                help='Minimum missing fraction')
+    validate_parser.add_argument('--missing-max', type=float, default=0.5,
+                                help='Maximum missing fraction')
+    validate_parser.add_argument('--missing-steps', type=int, default=10,
+                                help='Number of missing fraction levels')
+    validate_parser.add_argument('--n-grid-repeats', type=int, default=5,
+                                help='Repeats per grid cell')
+    validate_parser.add_argument('--n-cases', type=int, default=10,
+                                help='Number of individual cases for deep dive')
+    validate_parser.add_argument('--rmtools-model', type=str, default='1',
+                                help='RM-Tools model number (e.g., 1, 11, 111)')
     validate_parser.add_argument('--run-rmtools', action='store_true',
                                 help='Run RM-Tools QUfit comparison')
     validate_parser.add_argument('--no-rmtools', action='store_true',
