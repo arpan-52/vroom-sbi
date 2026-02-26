@@ -98,8 +98,8 @@ class PriorConfig:
 
 @dataclass
 class NoiseConfig:
-    """Noise configuration for simulations."""
-    base_level: float = 0.01
+    """Noise configuration for simulations (percentage-based)."""
+    base_percent: float = 10.0  # 10% of signal amplitude
     augmentation_enable: bool = True
     augmentation_min_factor: float = 0.5
     augmentation_max_factor: float = 2.0
@@ -289,7 +289,7 @@ class Configuration:
         noise_raw = raw.get("noise", {})
         aug_raw = noise_raw.get("augmentation", {})
         noise = NoiseConfig(
-            base_level=float(noise_raw.get("base_level", 0.01)),
+            base_percent=float(noise_raw.get("base_percent", 10.0)),
             augmentation_enable=bool(aug_raw.get("enable", True)),
             augmentation_min_factor=float(aug_raw.get("min_factor", 0.5)),
             augmentation_max_factor=float(aug_raw.get("max_factor", 2.0)),
@@ -425,7 +425,7 @@ class Configuration:
                 "delta_phi": {"min": self.priors.delta_phi_min, "max": self.priors.delta_phi_max},
             },
             "noise": {
-                "base_level": self.noise.base_level,
+                "base_percent": self.noise.base_percent,
                 "augmentation": {
                     "enable": self.noise.augmentation_enable,
                     "min_factor": self.noise.augmentation_min_factor,
