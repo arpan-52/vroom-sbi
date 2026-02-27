@@ -15,19 +15,19 @@ spectral_cube = pytest.importorskip(
     reason="spectral_cube not installed; run: pip install 'vroom-sbi[io]'",
 )
 
-from src.io.cube_io import (
+from src.io.cube_io import (  # noqa: E402
+    compute_weights,
+    normalize_qu_by_i,
     read_iquv_cube,
     read_qu_cubes,
-    normalize_qu_by_i,
-    compute_weights,
     write_results_maps,
 )
-from tests.conftest import N_FREQ, N_DEC, N_RA, GT_RM, GT_AMP, GT_CHI0
-
+from tests.conftest import N_DEC, N_FREQ, N_RA  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 1. read_iquv_cube — standard StokesSpectralCube path
 # ---------------------------------------------------------------------------
+
 
 def test_read_iquv_cube_stokes_format(fits_iquv_path, frequencies):
     q_data, u_data, freqs, wcs_2d, i_data = read_iquv_cube(fits_iquv_path)
@@ -44,6 +44,7 @@ def test_read_iquv_cube_stokes_format(fits_iquv_path, frequencies):
 # 2. read_iquv_cube — fallback for non-standard header
 # ---------------------------------------------------------------------------
 
+
 def test_read_iquv_cube_fallback(fits_iquv_nonstandard_path):
     """Non-standard header triggers astropy fallback; shapes still correct."""
     q_data, u_data, freqs, wcs_2d, i_data = read_iquv_cube(fits_iquv_nonstandard_path)
@@ -58,6 +59,7 @@ def test_read_iquv_cube_fallback(fits_iquv_nonstandard_path):
 # ---------------------------------------------------------------------------
 # 3. read_qu_cubes — separate Q and U cubes
 # ---------------------------------------------------------------------------
+
 
 def test_read_qu_cubes_separate(fits_q_path, fits_u_path, frequencies):
     with pytest.warns(UserWarning, match="spectrally normalised"):
@@ -74,6 +76,7 @@ def test_read_qu_cubes_separate(fits_q_path, fits_u_path, frequencies):
 # 4. normalize_qu_by_i
 # ---------------------------------------------------------------------------
 
+
 def test_normalize_qu_by_i_correct_ratio():
     q = np.ones((10, 4, 5)) * 0.4
     u = np.ones((10, 4, 5)) * 0.3
@@ -89,7 +92,7 @@ def test_normalize_qu_by_i_zero_i_becomes_nan():
     q = np.ones((4, 2, 2))
     u = np.ones((4, 2, 2))
     i = np.ones((4, 2, 2))
-    i[:, 0, 0] = 0.0   # one pixel has I=0 in all channels
+    i[:, 0, 0] = 0.0  # one pixel has I=0 in all channels
 
     q_n, u_n = normalize_qu_by_i(q, u, i)
 
@@ -101,6 +104,7 @@ def test_normalize_qu_by_i_zero_i_becomes_nan():
 # 5. compute_weights — auto estimation from Q cube
 # ---------------------------------------------------------------------------
 
+
 def test_compute_weights_auto(q_cube, u_cube):
     weights = compute_weights(q_cube, u_cube)
 
@@ -111,7 +115,7 @@ def test_compute_weights_auto(q_cube, u_cube):
 
 def test_compute_weights_auto_nan_channel(q_cube, u_cube):
     q_nan = q_cube.copy()
-    q_nan[0, :, :] = np.nan   # flag first channel
+    q_nan[0, :, :] = np.nan  # flag first channel
 
     weights = compute_weights(q_nan, u_cube)
 
@@ -122,8 +126,10 @@ def test_compute_weights_auto_nan_channel(q_cube, u_cube):
 # 6. compute_weights — from provided noise cube
 # ---------------------------------------------------------------------------
 
+
 def test_compute_weights_from_noise_cube(fits_noise_path, q_cube, u_cube):
     from astropy.io import fits as afits
+
     noise_cube = afits.getdata(fits_noise_path).astype(np.float64)
 
     weights = compute_weights(q_cube, u_cube, noise_cube=noise_cube)
@@ -136,7 +142,7 @@ def test_compute_weights_from_noise_cube(fits_noise_path, q_cube, u_cube):
 
 def test_compute_weights_zero_noise_flagged(q_cube, u_cube):
     noise = np.full((N_FREQ,), 0.1)
-    noise[5] = 0.0   # one flagged channel
+    noise[5] = 0.0  # one flagged channel
 
     weights = compute_weights(q_cube, u_cube, noise_cube=noise)
 
@@ -148,22 +154,23 @@ def test_compute_weights_zero_noise_flagged(q_cube, u_cube):
 # 7. write_results_maps — FITS output with correct WCS
 # ---------------------------------------------------------------------------
 
+
 def test_write_results_maps_fits(tmp_path, fits_q_path):
     from astropy.io import fits as afits
-    from astropy.wcs import WCS
 
-    wcs_2d = read_qu_cubes.__module__   # import gymnastics not needed; just build a wcs
+    wcs_2d = read_qu_cubes.__module__  # import gymnastics not needed; just build a wcs
     # Build a 2D WCS directly
     from astropy.wcs import WCS as AWcs
+
     wcs_2d = AWcs(naxis=2)
-    wcs_2d.wcs.ctype = ['RA---SIN', 'DEC--SIN']
+    wcs_2d.wcs.ctype = ["RA---SIN", "DEC--SIN"]
     wcs_2d.wcs.crpix = [N_RA // 2 + 1, N_DEC // 2 + 1]
     wcs_2d.wcs.crval = [150.0, -30.0]
     wcs_2d.wcs.cdelt = [-1.0 / 3600.0, 1.0 / 3600.0]
 
     results = {
-        'rm_mean_comp1': np.full((N_DEC, N_RA), 50.0, dtype=np.float32),
-        'rm_std_comp1': np.full((N_DEC, N_RA), 5.0, dtype=np.float32),
+        "rm_mean_comp1": np.full((N_DEC, N_RA), 50.0, dtype=np.float32),
+        "rm_std_comp1": np.full((N_DEC, N_RA), 5.0, dtype=np.float32),
     }
     write_results_maps(results, wcs_2d, str(tmp_path / "out"))
 
@@ -180,18 +187,19 @@ def test_write_results_maps_fits(tmp_path, fits_q_path):
 # 8. write_results_maps — NPZ archive
 # ---------------------------------------------------------------------------
 
+
 def test_write_results_maps_npz(tmp_path):
     from astropy.wcs import WCS as AWcs
 
     wcs_2d = AWcs(naxis=2)
-    wcs_2d.wcs.ctype = ['RA---SIN', 'DEC--SIN']
+    wcs_2d.wcs.ctype = ["RA---SIN", "DEC--SIN"]
     wcs_2d.wcs.crpix = [1, 1]
     wcs_2d.wcs.crval = [0.0, 0.0]
     wcs_2d.wcs.cdelt = [1.0, 1.0]
 
     results = {
-        'rm_mean_comp1': np.ones((N_DEC, N_RA)),
-        'log_evidence': np.zeros((N_DEC, N_RA)),
+        "rm_mean_comp1": np.ones((N_DEC, N_RA)),
+        "log_evidence": np.zeros((N_DEC, N_RA)),
     }
     write_results_maps(results, wcs_2d, str(tmp_path / "npz_out"))
 
@@ -199,4 +207,4 @@ def test_write_results_maps_npz(tmp_path):
     assert npz_path.exists()
     loaded = np.load(str(npz_path))
     assert set(loaded.keys()) == set(results.keys())
-    np.testing.assert_array_equal(loaded['rm_mean_comp1'], results['rm_mean_comp1'])
+    np.testing.assert_array_equal(loaded["rm_mean_comp1"], results["rm_mean_comp1"])

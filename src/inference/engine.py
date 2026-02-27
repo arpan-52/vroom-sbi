@@ -4,89 +4,91 @@ Inference engine for VROOM-SBI.
 Handles model loading and posterior inference with memory management.
 """
 
-import torch
-import numpy as np
-from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime
 import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
 
 from ..config import Configuration, MemoryConfig
-from ..core.result import InferenceResult, ComponentResult, ClassifierResult
 from ..core.base_classes import InferenceEngineInterface
-from ..simulator.prior import sort_posterior_samples, get_params_per_component
+from ..core.result import ClassifierResult, ComponentResult, InferenceResult
+from ..simulator.prior import get_params_per_component, sort_posterior_samples
 
 logger = logging.getLogger(__name__)
 
 
-def load_posterior(model_path: Path, device: str = 'cpu') -> Tuple[Any, Dict[str, Any]]:
+def load_posterior(model_path: Path, device: str = "cpu") -> tuple[Any, dict[str, Any]]:
     """
     Load a trained posterior from disk and move to device.
-    
+
     CRITICAL: For SBI posteriors with rejection sampling, we need to move:
-    1. The posterior's neural network  
+    1. The posterior's neural network
     2. The prior's bounds (used for rejection sampling support check)
     """
     model_path = Path(model_path)
-    
+
     # Always load to CPU first, then move
-    if model_path.suffix == '.pt':
-        data = torch.load(model_path, map_location='cpu', weights_only=False)
-        posterior = data.get('posterior') or data.get('posterior_object')
+    if model_path.suffix == ".pt":
+        data = torch.load(model_path, map_location="cpu", weights_only=False)
+        posterior = data.get("posterior") or data.get("posterior_object")
         if posterior is None:
             raise ValueError(f"No posterior object found in {model_path}")
     else:
         import pickle
-        with open(model_path, 'rb') as f:
+
+        with open(model_path, "rb") as f:
             data = pickle.load(f)
-        posterior = data['posterior']
-    
+        posterior = data["posterior"]
+
     # Move everything to device
-    if device != 'cpu':
+    if device != "cpu":
         # 1. Move neural network
-        if hasattr(posterior, 'posterior_estimator'):
+        if hasattr(posterior, "posterior_estimator"):
             posterior.posterior_estimator = posterior.posterior_estimator.to(device)
-        if hasattr(posterior, '_neural_net'):
+        if hasattr(posterior, "_neural_net"):
             posterior._neural_net = posterior._neural_net.to(device)
-        
+
         # 2. Move prior bounds (CRITICAL for rejection sampling)
         def move_prior_to_device(prior, dev):
             if prior is None:
                 return
-            if hasattr(prior, 'base_dist'):
+            if hasattr(prior, "base_dist"):
                 bd = prior.base_dist
-                if hasattr(bd, 'low') and hasattr(bd, 'high'):
+                if hasattr(bd, "low") and hasattr(bd, "high"):
                     bd.low = bd.low.to(dev)
                     bd.high = bd.high.to(dev)
-            elif hasattr(prior, 'low') and hasattr(prior, 'high'):
+            elif hasattr(prior, "low") and hasattr(prior, "high"):
                 prior.low = prior.low.to(dev)
                 prior.high = prior.high.to(dev)
-        
-        if hasattr(posterior, '_prior'):
+
+        if hasattr(posterior, "_prior"):
             move_prior_to_device(posterior._prior, device)
-        if hasattr(posterior, 'prior'):
+        if hasattr(posterior, "prior"):
             move_prior_to_device(posterior.prior, device)
-        
+
         # 3. Set device attribute
-        if hasattr(posterior, '_device'):
+        if hasattr(posterior, "_device"):
             posterior._device = device
-        
+
         # 4. Try generic .to() - BUT DON'T reassign if it returns None!
-        if hasattr(posterior, 'to'):
+        if hasattr(posterior, "to"):
             try:
                 result = posterior.to(device)
                 if result is not None:
                     posterior = result
-            except:
+            except Exception:
                 pass
-    
+
     return posterior, data
 
 
-def load_classifier(model_path: Path, device: str = 'cpu') -> Any:
+def load_classifier(model_path: Path, device: str = "cpu") -> Any:
     """Load a trained classifier."""
     from ..training.classifier_trainer import ClassifierTrainer
-    
+
     trainer = ClassifierTrainer(n_freq=1, n_classes=1, device=device)
     trainer.load(str(model_path))
     return trainer
@@ -94,40 +96,44 @@ def load_classifier(model_path: Path, device: str = 'cpu') -> Any:
 
 class InferenceEngine(InferenceEngineInterface):
     """Main inference engine for VROOM-SBI."""
-    
+
     def __init__(
         self,
-        config: Optional[Configuration] = None,
+        config: Configuration | None = None,
         model_dir: str = "models",
         device: str = "cuda",
     ):
         self.config = config
         self.model_dir = Path(model_dir)
         self.device = device
-        
+
         if device == "cuda" and not torch.cuda.is_available():
             logger.warning("CUDA not available, using CPU")
             self.device = "cpu"
-        
-        self.posteriors: Dict[str, Any] = {}
-        self.posterior_metadata: Dict[str, Dict] = {}
+
+        self.posteriors: dict[str, Any] = {}
+        self.posterior_metadata: dict[str, dict] = {}
         self.classifier = None
         self.memory_config = config.memory if config else MemoryConfig()
-        self._models_on_device: Dict[str, str] = {}
-    
-    def load_models(self, max_components: int = 5, model_types: Optional[List[str]] = None):
+        self._models_on_device: dict[str, str] = {}
+
+    def load_models(
+        self, max_components: int = 5, model_types: list[str] | None = None
+    ):
         """Load trained posterior models."""
         if model_types is None:
-            model_types = self.config.physics.model_types if self.config else ["faraday_thin"]
-        
+            model_types = (
+                self.config.physics.model_types if self.config else ["faraday_thin"]
+            )
+
         logger.info(f"Loading models from {self.model_dir}")
-        
+
         for model_type in model_types:
             for n in range(1, max_components + 1):
                 model_path = self.model_dir / f"posterior_{model_type}_n{n}.pt"
                 if not model_path.exists():
                     model_path = self.model_dir / f"posterior_{model_type}_n{n}.pkl"
-                
+
                 if model_path.exists():
                     try:
                         posterior, metadata = load_posterior(model_path, self.device)
@@ -138,9 +144,9 @@ class InferenceEngine(InferenceEngineInterface):
                         logger.info(f"  Loaded {key}")
                     except Exception as e:
                         logger.warning(f"  Failed to load {model_path}: {e}")
-        
+
         # Load classifier
-        for ext in ['.pt', '.pkl']:
+        for ext in [".pt", ".pkl"]:
             classifier_path = self.model_dir / f"classifier{ext}"
             if classifier_path.exists():
                 try:
@@ -149,58 +155,68 @@ class InferenceEngine(InferenceEngineInterface):
                     break
                 except Exception as e:
                     logger.warning(f"  Failed to load classifier: {e}")
-        
+
         logger.info(f"Loaded {len(self.posteriors)} posterior models")
-    
-    def get_model_for_n(self, n_components: int, model_type: str = "faraday_thin") -> Optional[Any]:
+
+    def get_model_for_n(
+        self, n_components: int, model_type: str = "faraday_thin"
+    ) -> Any | None:
         """Get posterior for given configuration."""
         return self.posteriors.get(f"{model_type}_n{n_components}")
-    
+
     def run_inference(
         self,
         qu_obs: np.ndarray,
-        weights: Optional[np.ndarray] = None,
+        weights: np.ndarray | None = None,
         n_samples: int = 10000,
         use_classifier: bool = True,
-        model_type: Optional[str] = None,
-    ) -> Tuple[Dict[str, InferenceResult], str]:
+        model_type: str | None = None,
+    ) -> tuple[dict[str, InferenceResult], str]:
         """Run inference on observed spectrum."""
         start_time = datetime.now()
         qu_obs_t = torch.tensor(qu_obs, dtype=torch.float32, device=self.device)
-        
+
         if use_classifier and self.classifier is not None:
             classifier_result = self._run_classifier(qu_obs, weights)
             best_n = classifier_result.predicted_n_components
-            best_model_type = classifier_result.predicted_model_type or model_type or "faraday_thin"
+            best_model_type = (
+                classifier_result.predicted_model_type or model_type or "faraday_thin"
+            )
             selected_keys = [f"{best_model_type}_n{best_n}"]
             logger.info(f"Classifier selected: {best_model_type} N={best_n}")
         else:
             selected_keys = list(self.posteriors.keys())
             if model_type:
                 selected_keys = [k for k in selected_keys if k.startswith(model_type)]
-        
+
         results = {}
         for key in selected_keys:
             if key not in self.posteriors:
                 continue
-            
+
             posterior = self.posteriors[key]
-            model_type_key = key.rsplit('_n', 1)[0]
-            n_components = int(key.rsplit('_n', 1)[1])
-            
+            model_type_key = key.rsplit("_n", 1)[0]
+            n_components = int(key.rsplit("_n", 1)[1])
+
             logger.info(f"Running inference for {key}...")
-            
+
             samples = posterior.sample((n_samples,), x=qu_obs_t)
             samples_np = samples.cpu().numpy()
-            
+
             params_per_comp = get_params_per_component(model_type_key)
-            samples_np = sort_posterior_samples(samples_np, n_components, params_per_comp)
-            
+            samples_np = sort_posterior_samples(
+                samples_np, n_components, params_per_comp
+            )
+
             log_probs = posterior.log_prob(samples, x=qu_obs_t)
-            log_evidence = (torch.logsumexp(log_probs, dim=0) - np.log(n_samples)).cpu().item()
-            
-            components = self._parse_components(samples_np, n_components, model_type_key)
-            
+            log_evidence = (
+                (torch.logsumexp(log_probs, dim=0) - np.log(n_samples)).cpu().item()
+            )
+
+            components = self._parse_components(
+                samples_np, n_components, model_type_key
+            )
+
             results[key] = InferenceResult(
                 n_components=n_components,
                 model_type=model_type_key,
@@ -210,48 +226,62 @@ class InferenceEngine(InferenceEngineInterface):
                 n_posterior_samples=n_samples,
                 inference_time_seconds=(datetime.now() - start_time).total_seconds(),
             )
-        
-        best_key = max(results.keys(), key=lambda k: results[k].log_evidence) if results else None
+
+        best_key = (
+            max(results.keys(), key=lambda k: results[k].log_evidence)
+            if results
+            else None
+        )
         return results, best_key
-    
-    def _run_classifier(self, qu_obs: np.ndarray, weights: Optional[np.ndarray] = None) -> ClassifierResult:
+
+    def _run_classifier(
+        self, qu_obs: np.ndarray, weights: np.ndarray | None = None
+    ) -> ClassifierResult:
         """Run classifier on spectrum."""
         n_freq = len(qu_obs) // 2
         if weights is None:
             weights = np.ones(n_freq)
-        
+
         classifier_input = np.concatenate([qu_obs, weights])
-        classifier_input_t = torch.tensor(classifier_input, dtype=torch.float32, device=self.device)
+        classifier_input_t = torch.tensor(
+            classifier_input, dtype=torch.float32, device=self.device
+        )
         n_comp, prob_dict = self.classifier.predict(classifier_input_t)
-        
+
         return ClassifierResult(
             predicted_n_components=n_comp,
             predicted_model_type=None,
             probabilities={str(k): v for k, v in prob_dict.items()},
             confidence=max(prob_dict.values()),
         )
-    
-    def _parse_components(self, samples: np.ndarray, n_components: int, model_type: str) -> List[ComponentResult]:
+
+    def _parse_components(
+        self, samples: np.ndarray, n_components: int, model_type: str
+    ) -> list[ComponentResult]:
         """Parse posterior samples into component results."""
         params_per_comp = get_params_per_component(model_type)
         components = []
-        
+
         for i in range(n_components):
             base_idx = i * params_per_comp
             rm_samples = samples[:, base_idx]
-            
+
             if model_type == "faraday_thin":
                 amp_samples = samples[:, base_idx + 1]
                 chi0_samples = samples[:, base_idx + 2]
                 q_samples = amp_samples * np.cos(2 * chi0_samples)
                 u_samples = amp_samples * np.sin(2 * chi0_samples)
-                
+
                 component = ComponentResult(
-                    rm_mean=np.mean(rm_samples), rm_std=np.std(rm_samples),
-                    q_mean=np.mean(q_samples), q_std=np.std(q_samples),
-                    u_mean=np.mean(u_samples), u_std=np.std(u_samples),
+                    rm_mean=np.mean(rm_samples),
+                    rm_std=np.std(rm_samples),
+                    q_mean=np.mean(q_samples),
+                    q_std=np.std(q_samples),
+                    u_mean=np.mean(u_samples),
+                    u_std=np.std(u_samples),
                     samples=np.column_stack([rm_samples, amp_samples, chi0_samples]),
-                    chi0_mean=np.mean(chi0_samples), chi0_std=np.std(chi0_samples),
+                    chi0_mean=np.mean(chi0_samples),
+                    chi0_std=np.std(chi0_samples),
                 )
             else:
                 second_param = samples[:, base_idx + 1]
@@ -259,29 +289,42 @@ class InferenceEngine(InferenceEngineInterface):
                 chi0_samples = samples[:, base_idx + 3]
                 q_samples = amp_samples * np.cos(2 * chi0_samples)
                 u_samples = amp_samples * np.sin(2 * chi0_samples)
-                
+
                 component = ComponentResult(
-                    rm_mean=np.mean(rm_samples), rm_std=np.std(rm_samples),
-                    q_mean=np.mean(q_samples), q_std=np.std(q_samples),
-                    u_mean=np.mean(u_samples), u_std=np.std(u_samples),
-                    samples=np.column_stack([rm_samples, second_param, amp_samples, chi0_samples]),
-                    chi0_mean=np.mean(chi0_samples), chi0_std=np.std(chi0_samples),
+                    rm_mean=np.mean(rm_samples),
+                    rm_std=np.std(rm_samples),
+                    q_mean=np.mean(q_samples),
+                    q_std=np.std(q_samples),
+                    u_mean=np.mean(u_samples),
+                    u_std=np.std(u_samples),
+                    samples=np.column_stack(
+                        [rm_samples, second_param, amp_samples, chi0_samples]
+                    ),
+                    chi0_mean=np.mean(chi0_samples),
+                    chi0_std=np.std(chi0_samples),
                 )
-                
+
                 if model_type == "burn_slab":
                     component.delta_phi_mean = np.mean(second_param)
                     component.delta_phi_std = np.std(second_param)
                 else:
                     component.sigma_phi_mean = np.mean(second_param)
                     component.sigma_phi_std = np.std(second_param)
-            
+
             components.append(component)
-        
+
         return components
-    
-    def infer(self, qu_obs: np.ndarray, weights: Optional[np.ndarray] = None, n_samples: int = 10000):
+
+    def infer(
+        self,
+        qu_obs: np.ndarray,
+        weights: np.ndarray | None = None,
+        n_samples: int = 10000,
+    ):
         """Convenience method - run inference and return best result."""
-        results, best_key = self.run_inference(qu_obs, weights=weights, n_samples=n_samples)
+        results, best_key = self.run_inference(
+            qu_obs, weights=weights, n_samples=n_samples
+        )
         if best_key is None:
             raise ValueError("No models available for inference")
         return results[best_key], results
@@ -290,13 +333,13 @@ class InferenceEngine(InferenceEngineInterface):
         self,
         q_data: np.ndarray,
         u_data: np.ndarray,
-        weights: Optional[np.ndarray] = None,
+        weights: np.ndarray | None = None,
         n_samples: int = 1000,
         batch_size: int = 1,
-        mask: Optional[np.ndarray] = None,
-        snr_threshold: Optional[float] = None,
+        mask: np.ndarray | None = None,
+        snr_threshold: float | None = None,
         **infer_kwargs,
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """
         Run inference over all valid spatial pixels of a spectral cube.
 
@@ -346,31 +389,31 @@ class InferenceEngine(InferenceEngineInterface):
         # Determine maximum number of components across loaded models
         # ------------------------------------------------------------------
         if self.posteriors:
-            max_n = max(
-                int(k.rsplit('_n', 1)[1]) for k in self.posteriors.keys()
-            )
+            max_n = max(int(k.rsplit("_n", 1)[1]) for k in self.posteriors.keys())
         else:
             raise ValueError("No posterior models loaded. Call load_models() first.")
 
         # ------------------------------------------------------------------
         # Pre-allocate output arrays (NaN = not processed / masked)
         # ------------------------------------------------------------------
-        results: Dict[str, np.ndarray] = {}
+        results: dict[str, np.ndarray] = {}
         shape2d = (n_dec, n_ra)
-        _nan = lambda: np.full(shape2d, np.nan, dtype=np.float32)
+
+        def _nan():
+            return np.full(shape2d, np.nan, dtype=np.float32)
 
         for comp in range(1, max_n + 1):
             tag = f"comp{comp}"
-            for stat in ('mean', 'std', 'p16', 'p84'):
-                results[f'rm_{stat}_{tag}'] = _nan()
-                results[f'amp_{stat}_{tag}'] = _nan()
-                results[f'chi0_{stat}_{tag}'] = _nan()
+            for stat in ("mean", "std", "p16", "p84"):
+                results[f"rm_{stat}_{tag}"] = _nan()
+                results[f"amp_{stat}_{tag}"] = _nan()
+                results[f"chi0_{stat}_{tag}"] = _nan()
                 # Extended-model params (NaN for faraday_thin)
-                results[f'sigma_phi_{stat}_{tag}'] = _nan()
-                results[f'delta_phi_{stat}_{tag}'] = _nan()
+                results[f"sigma_phi_{stat}_{tag}"] = _nan()
+                results[f"delta_phi_{stat}_{tag}"] = _nan()
 
-        results['log_evidence'] = _nan()
-        results['n_components'] = _nan()
+        results["log_evidence"] = _nan()
+        results["n_components"] = _nan()
 
         # ------------------------------------------------------------------
         # Build combined pixel mask
@@ -388,15 +431,13 @@ class InferenceEngine(InferenceEngineInterface):
 
         # Layer 3: SNR threshold
         if snr_threshold is not None:
-            p_mean = np.nanmean(
-                np.sqrt(q_data**2 + u_data**2), axis=0
-            )
+            p_mean = np.nanmean(np.sqrt(q_data**2 + u_data**2), axis=0)
             noise_est = np.nanstd(q_data, axis=0)
-            with np.errstate(divide='ignore', invalid='ignore'):
+            with np.errstate(divide="ignore", invalid="ignore"):
                 snr_map = np.where(noise_est > 0, p_mean / noise_est, 0.0)
             valid = valid & (snr_map >= snr_threshold)
 
-        pixel_list = np.argwhere(valid)   # shape (N_valid, 2)
+        pixel_list = np.argwhere(valid)  # shape (N_valid, 2)
         n_valid = len(pixel_list)
         n_total = n_dec * n_ra
         logger.info(
@@ -408,8 +449,8 @@ class InferenceEngine(InferenceEngineInterface):
         # Pixel loop
         # ------------------------------------------------------------------
         for chunk_start in range(0, n_valid, max(1, batch_size)):
-            chunk = pixel_list[chunk_start: chunk_start + max(1, batch_size)]
-            for (dec_idx, ra_idx) in tqdm(
+            chunk = pixel_list[chunk_start : chunk_start + max(1, batch_size)]
+            for dec_idx, ra_idx in tqdm(
                 chunk,
                 desc=f"Pixels {chunk_start}–{chunk_start + len(chunk) - 1}",
                 leave=False,
@@ -432,52 +473,70 @@ class InferenceEngine(InferenceEngineInterface):
                         **infer_kwargs,
                     )
                 except Exception as exc:
-                    logger.warning(
-                        f"Pixel ({dec_idx}, {ra_idx}) failed: {exc}"
-                    )
+                    logger.warning(f"Pixel ({dec_idx}, {ra_idx}) failed: {exc}")
                     continue
 
-                results['log_evidence'][dec_idx, ra_idx] = best_result.log_evidence
-                results['n_components'][dec_idx, ra_idx] = best_result.n_components
+                results["log_evidence"][dec_idx, ra_idx] = best_result.log_evidence
+                results["n_components"][dec_idx, ra_idx] = best_result.n_components
 
                 for comp_i, comp in enumerate(best_result.components):
                     tag = f"comp{comp_i + 1}"
 
                     # RM
                     rm_samp = comp.samples[:, 0]
-                    results[f'rm_mean_{tag}'][dec_idx, ra_idx] = np.mean(rm_samp)
-                    results[f'rm_std_{tag}'][dec_idx, ra_idx] = np.std(rm_samp)
-                    results[f'rm_p16_{tag}'][dec_idx, ra_idx] = np.percentile(rm_samp, 16)
-                    results[f'rm_p84_{tag}'][dec_idx, ra_idx] = np.percentile(rm_samp, 84)
+                    results[f"rm_mean_{tag}"][dec_idx, ra_idx] = np.mean(rm_samp)
+                    results[f"rm_std_{tag}"][dec_idx, ra_idx] = np.std(rm_samp)
+                    results[f"rm_p16_{tag}"][dec_idx, ra_idx] = np.percentile(
+                        rm_samp, 16
+                    )
+                    results[f"rm_p84_{tag}"][dec_idx, ra_idx] = np.percentile(
+                        rm_samp, 84
+                    )
 
                     # Amplitude (second-to-last column in samples)
                     amp_col = comp.samples.shape[1] - 2
                     amp_samp = comp.samples[:, amp_col]
-                    results[f'amp_mean_{tag}'][dec_idx, ra_idx] = np.mean(amp_samp)
-                    results[f'amp_std_{tag}'][dec_idx, ra_idx] = np.std(amp_samp)
-                    results[f'amp_p16_{tag}'][dec_idx, ra_idx] = np.percentile(amp_samp, 16)
-                    results[f'amp_p84_{tag}'][dec_idx, ra_idx] = np.percentile(amp_samp, 84)
+                    results[f"amp_mean_{tag}"][dec_idx, ra_idx] = np.mean(amp_samp)
+                    results[f"amp_std_{tag}"][dec_idx, ra_idx] = np.std(amp_samp)
+                    results[f"amp_p16_{tag}"][dec_idx, ra_idx] = np.percentile(
+                        amp_samp, 16
+                    )
+                    results[f"amp_p84_{tag}"][dec_idx, ra_idx] = np.percentile(
+                        amp_samp, 84
+                    )
 
                     # chi0 (last column)
                     chi0_samp = comp.samples[:, -1]
-                    results[f'chi0_mean_{tag}'][dec_idx, ra_idx] = np.mean(chi0_samp)
-                    results[f'chi0_std_{tag}'][dec_idx, ra_idx] = np.std(chi0_samp)
-                    results[f'chi0_p16_{tag}'][dec_idx, ra_idx] = np.percentile(chi0_samp, 16)
-                    results[f'chi0_p84_{tag}'][dec_idx, ra_idx] = np.percentile(chi0_samp, 84)
+                    results[f"chi0_mean_{tag}"][dec_idx, ra_idx] = np.mean(chi0_samp)
+                    results[f"chi0_std_{tag}"][dec_idx, ra_idx] = np.std(chi0_samp)
+                    results[f"chi0_p16_{tag}"][dec_idx, ra_idx] = np.percentile(
+                        chi0_samp, 16
+                    )
+                    results[f"chi0_p84_{tag}"][dec_idx, ra_idx] = np.percentile(
+                        chi0_samp, 84
+                    )
 
                     # Extended-model second parameter (column 1 when ndim >= 4)
                     if comp.samples.shape[1] >= 4:
                         sec_samp = comp.samples[:, 1]
                         if comp.sigma_phi_mean is not None:
-                            prefix = 'sigma_phi'
+                            prefix = "sigma_phi"
                         elif comp.delta_phi_mean is not None:
-                            prefix = 'delta_phi'
+                            prefix = "delta_phi"
                         else:
-                            prefix = 'sigma_phi'  # safe fallback
-                        results[f'{prefix}_mean_{tag}'][dec_idx, ra_idx] = np.mean(sec_samp)
-                        results[f'{prefix}_std_{tag}'][dec_idx, ra_idx] = np.std(sec_samp)
-                        results[f'{prefix}_p16_{tag}'][dec_idx, ra_idx] = np.percentile(sec_samp, 16)
-                        results[f'{prefix}_p84_{tag}'][dec_idx, ra_idx] = np.percentile(sec_samp, 84)
+                            prefix = "sigma_phi"  # safe fallback
+                        results[f"{prefix}_mean_{tag}"][dec_idx, ra_idx] = np.mean(
+                            sec_samp
+                        )
+                        results[f"{prefix}_std_{tag}"][dec_idx, ra_idx] = np.std(
+                            sec_samp
+                        )
+                        results[f"{prefix}_p16_{tag}"][dec_idx, ra_idx] = np.percentile(
+                            sec_samp, 16
+                        )
+                        results[f"{prefix}_p84_{tag}"][dec_idx, ra_idx] = np.percentile(
+                            sec_samp, 84
+                        )
 
         logger.info("Cube inference complete.")
         return results

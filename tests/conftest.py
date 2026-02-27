@@ -10,7 +10,6 @@ import pytest
 from astropy.io import fits
 from astropy.wcs import WCS
 
-
 # ---------------------------------------------------------------------------
 # Cube dimensions
 # ---------------------------------------------------------------------------
@@ -18,8 +17,8 @@ from astropy.wcs import WCS
 N_FREQ = 32
 N_DEC = 4
 N_RA = 5
-FREQ_START = 1.0e9   # Hz
-FREQ_STEP = 30.0e6   # Hz (30 MHz per channel)
+FREQ_START = 1.0e9  # Hz
+FREQ_STEP = 30.0e6  # Hz (30 MHz per channel)
 
 
 @pytest.fixture(scope="session")
@@ -53,9 +52,9 @@ def lambda_sq(frequencies):
 # ---------------------------------------------------------------------------
 
 # Ground-truth parameters for the synthetic cubes
-GT_RM = 50.0      # rad/m²
-GT_AMP = 0.5      # fractional polarisation
-GT_CHI0 = 0.3     # rad
+GT_RM = 50.0  # rad/m²
+GT_AMP = 0.5  # fractional polarisation
+GT_CHI0 = 0.3  # rad
 
 
 @pytest.fixture(scope="session")
@@ -99,25 +98,26 @@ def i_cube(i_arr):
 # WCS helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_wcs_3d() -> WCS:
     """Minimal 3D WCS (RA, Dec, Freq) for tests."""
     wcs = WCS(naxis=3)
-    wcs.wcs.ctype = ['RA---SIN', 'DEC--SIN', 'FREQ']
+    wcs.wcs.ctype = ["RA---SIN", "DEC--SIN", "FREQ"]
     wcs.wcs.crpix = [N_RA // 2 + 1, N_DEC // 2 + 1, N_FREQ // 2 + 1]
     wcs.wcs.crval = [150.0, -30.0, FREQ_START + (N_FREQ // 2) * FREQ_STEP]
     wcs.wcs.cdelt = [-1.0 / 3600.0, 1.0 / 3600.0, FREQ_STEP]
-    wcs.wcs.cunit = ['deg', 'deg', 'Hz']
+    wcs.wcs.cunit = ["deg", "deg", "Hz"]
     return wcs
 
 
 def _make_wcs_4d() -> WCS:
     """4D WCS (RA, Dec, Freq, Stokes) for IQUV cubes."""
     wcs = WCS(naxis=4)
-    wcs.wcs.ctype = ['RA---SIN', 'DEC--SIN', 'FREQ', 'STOKES']
+    wcs.wcs.ctype = ["RA---SIN", "DEC--SIN", "FREQ", "STOKES"]
     wcs.wcs.crpix = [N_RA // 2 + 1, N_DEC // 2 + 1, N_FREQ // 2 + 1, 1.0]
     wcs.wcs.crval = [150.0, -30.0, FREQ_START + (N_FREQ // 2) * FREQ_STEP, 1.0]
     wcs.wcs.cdelt = [-1.0 / 3600.0, 1.0 / 3600.0, FREQ_STEP, 1.0]
-    wcs.wcs.cunit = ['deg', 'deg', 'Hz', '']
+    wcs.wcs.cunit = ["deg", "deg", "Hz", ""]
     return wcs
 
 
@@ -125,15 +125,16 @@ def _make_wcs_4d() -> WCS:
 # FITS file fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def fits_q_path(tmp_path, q_cube):
     """3D Q FITS cube on disk."""
     wcs = _make_wcs_3d()
     hdr = wcs.to_header()
-    hdr['NAXIS'] = 3
-    hdr['NAXIS1'] = N_RA
-    hdr['NAXIS2'] = N_DEC
-    hdr['NAXIS3'] = N_FREQ
+    hdr["NAXIS"] = 3
+    hdr["NAXIS1"] = N_RA
+    hdr["NAXIS2"] = N_DEC
+    hdr["NAXIS3"] = N_FREQ
     hdu = fits.PrimaryHDU(data=q_cube.astype(np.float32), header=hdr)
     path = tmp_path / "Q_cube.fits"
     hdu.writeto(str(path))
@@ -145,10 +146,10 @@ def fits_u_path(tmp_path, u_cube):
     """3D U FITS cube on disk."""
     wcs = _make_wcs_3d()
     hdr = wcs.to_header()
-    hdr['NAXIS'] = 3
-    hdr['NAXIS1'] = N_RA
-    hdr['NAXIS2'] = N_DEC
-    hdr['NAXIS3'] = N_FREQ
+    hdr["NAXIS"] = 3
+    hdr["NAXIS1"] = N_RA
+    hdr["NAXIS2"] = N_DEC
+    hdr["NAXIS3"] = N_FREQ
     hdu = fits.PrimaryHDU(data=u_cube.astype(np.float32), header=hdr)
     path = tmp_path / "U_cube.fits"
     hdu.writeto(str(path))
@@ -170,11 +171,11 @@ def fits_iquv_path(tmp_path, q_cube, u_cube, i_cube):
     iquv = np.stack([i_cube, q_cube, u_cube, v_cube], axis=0).astype(np.float32)
 
     hdr = wcs.to_header()
-    hdr['NAXIS'] = 4
-    hdr['NAXIS1'] = N_RA
-    hdr['NAXIS2'] = N_DEC
-    hdr['NAXIS3'] = N_FREQ
-    hdr['NAXIS4'] = 4
+    hdr["NAXIS"] = 4
+    hdr["NAXIS1"] = N_RA
+    hdr["NAXIS2"] = N_DEC
+    hdr["NAXIS3"] = N_FREQ
+    hdr["NAXIS4"] = 4
     hdu = fits.PrimaryHDU(data=iquv, header=hdr)
     path = tmp_path / "IQUV_cube.fits"
     hdu.writeto(str(path))
@@ -195,28 +196,28 @@ def fits_iquv_nonstandard_path(tmp_path, q_cube, u_cube, i_cube):
     iquv = np.stack([i_cube, q_cube, u_cube, v_cube], axis=0).astype(np.float32)
 
     hdr = fits.Header()
-    hdr['NAXIS'] = 4
-    hdr['NAXIS1'] = N_RA
-    hdr['NAXIS2'] = N_DEC
-    hdr['NAXIS3'] = N_FREQ
-    hdr['NAXIS4'] = 4
+    hdr["NAXIS"] = 4
+    hdr["NAXIS1"] = N_RA
+    hdr["NAXIS2"] = N_DEC
+    hdr["NAXIS3"] = N_FREQ
+    hdr["NAXIS4"] = 4
     # Minimal WCS without SPECSYS / full Stokes metadata to trip up StokesSpectralCube
-    hdr['CTYPE1'] = 'RA---SIN'
-    hdr['CTYPE2'] = 'DEC--SIN'
-    hdr['CTYPE3'] = 'FREQ'
-    hdr['CTYPE4'] = 'STOKES'
-    hdr['CRPIX1'] = N_RA // 2 + 1
-    hdr['CRPIX2'] = N_DEC // 2 + 1
-    hdr['CRPIX3'] = N_FREQ // 2 + 1
-    hdr['CRPIX4'] = 1.0
-    hdr['CRVAL1'] = 150.0
-    hdr['CRVAL2'] = -30.0
-    hdr['CRVAL3'] = FREQ_START + (N_FREQ // 2) * FREQ_STEP
-    hdr['CRVAL4'] = 1.0      # I=1 at reference pixel
-    hdr['CDELT1'] = -1.0 / 3600.0
-    hdr['CDELT2'] = 1.0 / 3600.0
-    hdr['CDELT3'] = FREQ_STEP
-    hdr['CDELT4'] = 1.0
+    hdr["CTYPE1"] = "RA---SIN"
+    hdr["CTYPE2"] = "DEC--SIN"
+    hdr["CTYPE3"] = "FREQ"
+    hdr["CTYPE4"] = "STOKES"
+    hdr["CRPIX1"] = N_RA // 2 + 1
+    hdr["CRPIX2"] = N_DEC // 2 + 1
+    hdr["CRPIX3"] = N_FREQ // 2 + 1
+    hdr["CRPIX4"] = 1.0
+    hdr["CRVAL1"] = 150.0
+    hdr["CRVAL2"] = -30.0
+    hdr["CRVAL3"] = FREQ_START + (N_FREQ // 2) * FREQ_STEP
+    hdr["CRVAL4"] = 1.0  # I=1 at reference pixel
+    hdr["CDELT1"] = -1.0 / 3600.0
+    hdr["CDELT2"] = 1.0 / 3600.0
+    hdr["CDELT3"] = FREQ_STEP
+    hdr["CDELT4"] = 1.0
     hdu = fits.PrimaryHDU(data=iquv, header=hdr)
     path = tmp_path / "IQUV_nonstandard.fits"
     hdu.writeto(str(path))
@@ -228,10 +229,10 @@ def fits_noise_path(tmp_path):
     """3D noise cube (n_freq, n_dec, n_ra) with uniform noise = 0.1."""
     wcs = _make_wcs_3d()
     hdr = wcs.to_header()
-    hdr['NAXIS'] = 3
-    hdr['NAXIS1'] = N_RA
-    hdr['NAXIS2'] = N_DEC
-    hdr['NAXIS3'] = N_FREQ
+    hdr["NAXIS"] = 3
+    hdr["NAXIS1"] = N_RA
+    hdr["NAXIS2"] = N_DEC
+    hdr["NAXIS3"] = N_FREQ
     noise = np.full((N_FREQ, N_DEC, N_RA), 0.1, dtype=np.float32)
     hdu = fits.PrimaryHDU(data=noise, header=hdr)
     path = tmp_path / "noise_cube.fits"
@@ -243,12 +244,12 @@ def fits_noise_path(tmp_path):
 def fits_mask_path(tmp_path):
     """2D spatial mask (n_dec, n_ra): right half of pixels = 1, left half = 0."""
     mask = np.zeros((N_DEC, N_RA), dtype=np.int16)
-    mask[:, N_RA // 2:] = 1   # right half valid
+    mask[:, N_RA // 2 :] = 1  # right half valid
     wcs2d = _make_wcs_3d().celestial
     hdr = wcs2d.to_header()
-    hdr['NAXIS'] = 2
-    hdr['NAXIS1'] = N_RA
-    hdr['NAXIS2'] = N_DEC
+    hdr["NAXIS"] = 2
+    hdr["NAXIS1"] = N_RA
+    hdr["NAXIS2"] = N_DEC
     hdu = fits.PrimaryHDU(data=mask, header=hdr)
     path = tmp_path / "mask.fits"
     hdu.writeto(str(path))
@@ -259,9 +260,10 @@ def fits_mask_path(tmp_path):
 # Fake InferenceResult for engine mocking
 # ---------------------------------------------------------------------------
 
+
 def make_fake_inference_result(rm_true=GT_RM, n_samples=50):
     """Return an InferenceResult with known RM for testing cube aggregation."""
-    from src.core.result import InferenceResult, ComponentResult
+    from src.core.result import ComponentResult, InferenceResult
 
     rng = np.random.default_rng(42)
     rm_samp = rng.normal(rm_true, 3.0, n_samples)
@@ -281,7 +283,7 @@ def make_fake_inference_result(rm_true=GT_RM, n_samples=50):
     )
     return InferenceResult(
         n_components=1,
-        model_type='faraday_thin',
+        model_type="faraday_thin",
         log_evidence=-10.0,
         components=[comp],
         all_samples=comp.samples,

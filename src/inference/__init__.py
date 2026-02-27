@@ -6,12 +6,12 @@ Contains inference engine and model loading utilities.
 
 from .engine import (
     InferenceEngine,
-    load_posterior,
     load_classifier,
+    load_posterior,
 )
 
 __all__ = [
-    'InferenceEngine',
-    'load_posterior',
-    'load_classifier',
+    "InferenceEngine",
+    "load_posterior",
+    "load_classifier",
 ]

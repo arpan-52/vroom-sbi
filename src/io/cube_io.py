@@ -10,13 +10,12 @@ Handles writing of:
   - NPZ archive of all result arrays
 """
 
-import warnings
 import logging
+import warnings
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
-import numpy as np
 import astropy.units as u
+import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
 
@@ -27,6 +26,7 @@ def _get_spectral_cube():
     """Lazy import of spectral_cube with a helpful error message."""
     try:
         import spectral_cube
+
         return spectral_cube
     except ImportError:
         raise ImportError(
@@ -40,9 +40,10 @@ def _get_spectral_cube():
 # Reading
 # ---------------------------------------------------------------------------
 
+
 def read_iquv_cube(
     fits_path: str,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, WCS, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, WCS, np.ndarray]:
     """
     Read a 4D IQUV FITS cube and return Q, U, I data arrays.
 
@@ -74,9 +75,9 @@ def read_iquv_cube(
             warnings.simplefilter("ignore")
             sc = sc_mod.StokesSpectralCube.read(fits_path)
 
-        q_cube = sc['Q']
-        u_cube = sc['U']
-        i_cube = sc['I']
+        q_cube = sc["Q"]
+        u_cube = sc["U"]
+        i_cube = sc["I"]
 
         q_data = q_cube.unmasked_data[:, :, :].value
         u_data = u_cube.unmasked_data[:, :, :].value
@@ -100,7 +101,7 @@ def read_iquv_cube(
 
 def _read_iquv_fallback(
     fits_path: str, sc_mod
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, WCS, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, WCS, np.ndarray]:
     """
     Fallback reader for IQUV cubes with non-standard headers.
 
@@ -111,12 +112,12 @@ def _read_iquv_fallback(
         data = hdul[0].data.astype(np.float64)
         header = hdul[0].header
 
-    naxis = header['NAXIS']
+    naxis = header["NAXIS"]
 
     # Find Stokes axis (1-based FITS axis numbering)
     stokes_fits_ax = None
     for ax in range(1, naxis + 1):
-        if 'STOKES' in header.get(f'CTYPE{ax}', '').upper():
+        if "STOKES" in header.get(f"CTYPE{ax}", "").upper():
             stokes_fits_ax = ax
             break
 
@@ -130,9 +131,9 @@ def _read_iquv_fallback(
     numpy_stokes_ax = naxis - stokes_fits_ax
 
     # Compute Stokes value at each pixel along that axis
-    crpix = float(header.get(f'CRPIX{stokes_fits_ax}', 1))
-    crval = float(header.get(f'CRVAL{stokes_fits_ax}', 1))
-    cdelt = float(header.get(f'CDELT{stokes_fits_ax}', 1))
+    crpix = float(header.get(f"CRPIX{stokes_fits_ax}", 1))
+    crval = float(header.get(f"CRVAL{stokes_fits_ax}", 1))
+    cdelt = float(header.get(f"CDELT{stokes_fits_ax}", 1))
     n_stokes = data.shape[numpy_stokes_ax]
     stokes_vals = crval + (np.arange(1, n_stokes + 1) - crpix) * cdelt
 
@@ -178,7 +179,7 @@ def _read_iquv_fallback(
 
 def read_qu_cubes(
     q_path: str, u_path: str
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, WCS]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, WCS]:
     """
     Read separate Q and U 3D spectral cubes.
 
@@ -217,16 +218,13 @@ def read_qu_cubes(
 
     if q_data.shape != u_data.shape:
         raise ValueError(
-            f"Q and U cubes have incompatible shapes: "
-            f"{q_data.shape} vs {u_data.shape}"
+            f"Q and U cubes have incompatible shapes: {q_data.shape} vs {u_data.shape}"
         )
 
     frequencies_hz = q_cube.spectral_axis.to(u.Hz).value
     wcs_2d = q_cube.wcs.celestial
 
-    logger.info(
-        f"Read Q/U cubes: shape {q_data.shape}, {len(frequencies_hz)} channels"
-    )
+    logger.info(f"Read Q/U cubes: shape {q_data.shape}, {len(frequencies_hz)} channels")
     return q_data, u_data, frequencies_hz, wcs_2d
 
 
@@ -234,11 +232,12 @@ def read_qu_cubes(
 # Normalisation
 # ---------------------------------------------------------------------------
 
+
 def normalize_qu_by_i(
     q_data: np.ndarray,
     u_data: np.ndarray,
     i_data: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """
     Normalise Q and U by Stokes I to obtain fractional polarisation.
 
@@ -257,15 +256,13 @@ def normalize_qu_by_i(
     """
     valid_i = (i_data > 0) & np.isfinite(i_data)
 
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         q_norm = np.where(valid_i, q_data / i_data, np.nan)
         u_norm = np.where(valid_i, u_data / i_data, np.nan)
 
     n_bad = int(np.sum(~valid_i))
     if n_bad > 0:
-        logger.info(
-            f"normalize_qu_by_i: {n_bad} voxels with I <= 0 or NaN set to NaN"
-        )
+        logger.info(f"normalize_qu_by_i: {n_bad} voxels with I <= 0 or NaN set to NaN")
     return q_norm, u_norm
 
 
@@ -273,10 +270,11 @@ def normalize_qu_by_i(
 # Weights
 # ---------------------------------------------------------------------------
 
+
 def compute_weights(
     q_data: np.ndarray,
     u_data: np.ndarray,
-    noise_cube: Optional[np.ndarray] = None,
+    noise_cube: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Compute per-channel inverse-variance weights.
@@ -304,15 +302,11 @@ def compute_weights(
         logger.info(f"Using provided noise cube, shape {noise.shape}")
     else:
         # Estimate per-channel noise from the spatial std of Q
-        noise = np.nanstd(q_data, axis=(1, 2))   # shape (n_freq,)
-        logger.info(
-            "Estimating per-channel noise from spatial std of Q cube"
-        )
+        noise = np.nanstd(q_data, axis=(1, 2))  # shape (n_freq,)
+        logger.info("Estimating per-channel noise from spatial std of Q cube")
 
-    with np.errstate(divide='ignore', invalid='ignore'):
-        weights = np.where(
-            (noise > 0) & np.isfinite(noise), 1.0 / noise**2, 0.0
-        )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        weights = np.where((noise > 0) & np.isfinite(noise), 1.0 / noise**2, 0.0)
 
     w_max = float(np.nanmax(weights))
     if w_max > 0:
@@ -328,8 +322,9 @@ def compute_weights(
 # Writing
 # ---------------------------------------------------------------------------
 
+
 def write_results_maps(
-    results_dict: Dict[str, np.ndarray],
+    results_dict: dict[str, np.ndarray],
     wcs_2d: WCS,
     output_dir: str,
     overwrite: bool = True,

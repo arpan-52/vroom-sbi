@@ -8,50 +8,51 @@ ALL PRIORS ARE DEFINED IN ONE PLACE (PriorConfig).
 """
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Any, Optional
-import yaml
+from typing import Any
+
 import numpy as np
+import yaml
 
 
 @dataclass
 class PriorConfig:
     """
     Prior ranges for ALL physical parameters.
-    
+
     This is the SINGLE SOURCE OF TRUTH for all parameter bounds.
-    
+
     Parameters by model type:
     - faraday_thin: [RM, amp, chi0] per component
-    - burn_slab: [phi_c, delta_phi, amp, chi0] per component  
+    - burn_slab: [phi_c, delta_phi, amp, chi0] per component
     - external_dispersion: [phi, sigma_phi, amp, chi0] per component
     - internal_dispersion: [phi, sigma_phi, amp, chi0] per component
     """
+
     # Faraday depth / Rotation Measure (rad/m²)
     # Used for: RM (faraday_thin), phi/phi_c (all other models)
     rm_min: float = -500.0
     rm_max: float = 500.0
-    
+
     # Fractional polarization amplitude (dimensionless, 0-1)
     amp_min: float = 0.01
     amp_max: float = 1.0
-    
+
     # Intrinsic polarization angle (radians)
     # Physical constraint: [0, π]
     chi0_min: float = 0.0
     chi0_max: float = np.pi
-    
+
     # RM dispersion for external/internal dispersion models (rad/m²)
     # Used for: sigma_phi in external_dispersion, internal_dispersion
     sigma_phi_min: float = 0.0
     sigma_phi_max: float = 100.0  # Reasonable default, override in config.yaml
-    
+
     # Slab half-width for burn_slab model (rad/m²)
     # Used for: delta_phi in burn_slab (full width = 2*delta_phi)
     delta_phi_min: float = 0.0
     delta_phi_max: float = 100.0  # Reasonable default, override in config.yaml
-    
-    def to_flat_dict(self) -> Dict[str, float]:
+
+    def to_flat_dict(self) -> dict[str, float]:
         """Convert to flat dictionary for simulator functions."""
         return {
             "rm_min": self.rm_min,
@@ -65,40 +66,49 @@ class PriorConfig:
             "delta_phi_min": self.delta_phi_min,
             "delta_phi_max": self.delta_phi_max,
         }
-    
+
     def get_bounds_for_model(self, model_type: str, n_components: int) -> tuple:
         """
         Get (low, high) bounds arrays for a specific model configuration.
-        
+
         Returns arrays suitable for SBI BoxUniform prior.
         """
         low = []
         high = []
-        
+
         if model_type == "faraday_thin":
             # 3 params per component: [RM, amp, chi0]
             for _ in range(n_components):
                 low.extend([self.rm_min, self.amp_min, self.chi0_min])
                 high.extend([self.rm_max, self.amp_max, self.chi0_max])
-        
+
         elif model_type == "burn_slab":
             # 4 params per component: [phi_c, delta_phi, amp, chi0]
             for _ in range(n_components):
-                low.extend([self.rm_min, self.delta_phi_min, self.amp_min, self.chi0_min])
-                high.extend([self.rm_max, self.delta_phi_max, self.amp_max, self.chi0_max])
-        
+                low.extend(
+                    [self.rm_min, self.delta_phi_min, self.amp_min, self.chi0_min]
+                )
+                high.extend(
+                    [self.rm_max, self.delta_phi_max, self.amp_max, self.chi0_max]
+                )
+
         else:  # external_dispersion, internal_dispersion
             # 4 params per component: [phi, sigma_phi, amp, chi0]
             for _ in range(n_components):
-                low.extend([self.rm_min, self.sigma_phi_min, self.amp_min, self.chi0_min])
-                high.extend([self.rm_max, self.sigma_phi_max, self.amp_max, self.chi0_max])
-        
+                low.extend(
+                    [self.rm_min, self.sigma_phi_min, self.amp_min, self.chi0_min]
+                )
+                high.extend(
+                    [self.rm_max, self.sigma_phi_max, self.amp_max, self.chi0_max]
+                )
+
         return np.array(low), np.array(high)
 
 
 @dataclass
 class NoiseConfig:
     """Noise configuration for simulations (percentage-based)."""
+
     base_percent: float = 10.0  # 10% of signal amplitude
     augmentation_enable: bool = True
     augmentation_min_factor: float = 0.5
@@ -108,52 +118,55 @@ class NoiseConfig:
 @dataclass
 class HardwareConfig:
     """Hardware configuration - set explicitly or use 'auto' for detection."""
-    vram_gb: float = 0.0        # 0 = auto-detect
-    ram_gb: float = 0.0         # 0 = auto-detect
-    num_workers: int = 0        # 0 = auto (cpu_cores / 2)
+
+    vram_gb: float = 0.0  # 0 = auto-detect
+    ram_gb: float = 0.0  # 0 = auto-detect
+    num_workers: int = 0  # 0 = auto (cpu_cores / 2)
 
 
 @dataclass
 class TrainingConfig:
     """Training hyperparameters."""
+
     # Simulation settings
     n_simulations: int = 30000
     simulation_scaling: bool = True
     simulation_scaling_mode: str = "power"
     scaling_power: float = 2.0
     simulation_batch_size: int = 10000  # Chunk size for saving simulations to disk
-    
+
     # Neural network training parameters
     learning_rate: float = 5e-4
     training_batch_size: int = 1024  # Mini-batch size for GPU training
     stop_after_epochs: int = 20
     validation_fraction: float = 0.1
-    
+
     # Output settings
     device: str = "cuda"
     save_dir: str = "models"
-    
+
     def get_scaled_simulations(self, n_components: int) -> int:
         """Calculate scaled number of simulations based on model complexity."""
         if not self.simulation_scaling:
             return self.n_simulations
-            
+
         if self.simulation_scaling_mode == "power":
-            factor = n_components ** self.scaling_power
+            factor = n_components**self.scaling_power
         elif self.simulation_scaling_mode == "quadratic":
-            factor = n_components ** 2
+            factor = n_components**2
         elif self.simulation_scaling_mode == "subquadratic":
-            factor = n_components ** 1.5
+            factor = n_components**1.5
         else:  # "linear" or default
             scaling_factors = {1: 1, 2: 2, 3: 4, 4: 6, 5: 8}
             factor = scaling_factors.get(n_components, n_components * 2)
-            
+
         return int(self.n_simulations * factor)
 
 
 @dataclass
 class MemoryConfig:
     """Memory management configuration."""
+
     max_ram_gb: float = 16.0  # Maximum RAM to use
     max_vram_gb: float = 8.0  # Maximum VRAM to use
     stage_models_to_ram: bool = True  # Keep models in RAM when not on GPU
@@ -165,6 +178,7 @@ class MemoryConfig:
 @dataclass
 class ModelSelectionConfig:
     """Model selection configuration."""
+
     min_components: int = 1
     max_components: int = 5
     use_classifier: bool = True
@@ -174,12 +188,14 @@ class ModelSelectionConfig:
 @dataclass
 class PhysicsConfig:
     """Physical model configuration."""
-    model_types: List[str] = field(default_factory=lambda: ["faraday_thin"])
+
+    model_types: list[str] = field(default_factory=lambda: ["faraday_thin"])
 
 
 @dataclass
 class SBIArchitectureConfig:
     """Architecture configuration for a specific component count."""
+
     hidden_features: int = 256
     num_transforms: int = 15
 
@@ -187,10 +203,11 @@ class SBIArchitectureConfig:
 @dataclass
 class SBIConfig:
     """SBI (Neural Posterior Estimation) configuration."""
+
     model: str = "nsf"  # Neural Spline Flow
     num_bins: int = 16
     embedding_dim: int = 64
-    architecture_scaling: Dict[int, SBIArchitectureConfig] = field(
+    architecture_scaling: dict[int, SBIArchitectureConfig] = field(
         default_factory=lambda: {
             1: SBIArchitectureConfig(256, 15),
             2: SBIArchitectureConfig(256, 15),
@@ -199,13 +216,15 @@ class SBIConfig:
             5: SBIArchitectureConfig(256, 15),
         }
     )
-    
+
     def get_architecture(self, n_components: int) -> SBIArchitectureConfig:
         """Get architecture for given component count."""
         if n_components in self.architecture_scaling:
             return self.architecture_scaling[n_components]
         # Fallback to closest larger
-        available = sorted([k for k in self.architecture_scaling.keys() if k >= n_components])
+        available = sorted(
+            [k for k in self.architecture_scaling.keys() if k >= n_components]
+        )
         if available:
             return self.architecture_scaling[available[0]]
         return self.architecture_scaling[max(self.architecture_scaling.keys())]
@@ -214,8 +233,9 @@ class SBIConfig:
 @dataclass
 class ClassifierConfig:
     """Model selection classifier configuration."""
-    conv_channels: List[int] = field(default_factory=lambda: [32, 64, 128])
-    kernel_sizes: List[int] = field(default_factory=lambda: [7, 5, 3])
+
+    conv_channels: list[int] = field(default_factory=lambda: [32, 64, 128])
+    kernel_sizes: list[int] = field(default_factory=lambda: [7, 5, 3])
     dropout: float = 0.1
     n_epochs: int = 50
     batch_size: int = 1024
@@ -224,9 +244,10 @@ class ClassifierConfig:
     use_posterior_simulations: bool = True
 
 
-@dataclass  
+@dataclass
 class WeightAugmentationConfig:
     """Weight augmentation settings."""
+
     enable: bool = True
     scattered_prob: float = 0.3
     gap_prob: float = 0.3
@@ -238,11 +259,12 @@ class WeightAugmentationConfig:
 class Configuration:
     """
     Main configuration container for VROOM-SBI.
-    
+
     Loads from YAML and provides structured access to all settings.
     """
+
     freq_file: str = "freq.txt"
-    
+
     priors: PriorConfig = field(default_factory=PriorConfig)
     noise: NoiseConfig = field(default_factory=NoiseConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
@@ -252,17 +274,19 @@ class Configuration:
     physics: PhysicsConfig = field(default_factory=PhysicsConfig)
     sbi: SBIConfig = field(default_factory=SBIConfig)
     classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
-    weight_augmentation: WeightAugmentationConfig = field(default_factory=WeightAugmentationConfig)
-    
+    weight_augmentation: WeightAugmentationConfig = field(
+        default_factory=WeightAugmentationConfig
+    )
+
     @classmethod
-    def from_yaml(cls, config_path: str) -> 'Configuration':
+    def from_yaml(cls, config_path: str) -> "Configuration":
         """Load configuration from YAML file."""
-        with open(config_path, 'r') as f:
+        with open(config_path) as f:
             raw = yaml.safe_load(f)
         return cls.from_dict(raw)
-    
+
     @classmethod
-    def from_dict(cls, raw: Dict[str, Any]) -> 'Configuration':
+    def from_dict(cls, raw: dict[str, Any]) -> "Configuration":
         """Create Configuration from dictionary."""
         # Extract ALL priors from ONE place
         priors_raw = raw.get("priors", {})
@@ -271,7 +295,7 @@ class Configuration:
         chi0_raw = priors_raw.get("chi0", {})
         sigma_phi_raw = priors_raw.get("sigma_phi", {})
         delta_phi_raw = priors_raw.get("delta_phi", {})
-        
+
         priors = PriorConfig(
             rm_min=float(rm_raw.get("min", -500.0)),
             rm_max=float(rm_raw.get("max", 500.0)),
@@ -284,7 +308,7 @@ class Configuration:
             delta_phi_min=float(delta_phi_raw.get("min", 0.0)),
             delta_phi_max=float(delta_phi_raw.get("max", 100.0)),
         )
-        
+
         # Extract noise config
         noise_raw = raw.get("noise", {})
         aug_raw = noise_raw.get("augmentation", {})
@@ -294,29 +318,31 @@ class Configuration:
             augmentation_min_factor=float(aug_raw.get("min_factor", 0.5)),
             augmentation_max_factor=float(aug_raw.get("max_factor", 2.0)),
         )
-        
+
         # Extract hardware config
         hw_raw = raw.get("hardware", {})
-        
+
         def parse_auto_or_number(val, default=0):
             """Parse 'auto' as 0, or return the number."""
             if val == "auto" or val is None:
                 return 0
-            return float(val) if isinstance(val, (int, float)) else 0
-        
+            return float(val) if isinstance(val, int | float) else 0
+
         hardware = HardwareConfig(
             vram_gb=parse_auto_or_number(hw_raw.get("vram_gb")),
             ram_gb=parse_auto_or_number(hw_raw.get("ram_gb")),
             num_workers=int(parse_auto_or_number(hw_raw.get("num_workers"))),
         )
-        
+
         # Extract training config
         train_raw = raw.get("training", {})
-        
+
         training = TrainingConfig(
             n_simulations=int(train_raw.get("n_simulations", 30000)),
             simulation_scaling=bool(train_raw.get("simulation_scaling", True)),
-            simulation_scaling_mode=str(train_raw.get("simulation_scaling_mode", "power")),
+            simulation_scaling_mode=str(
+                train_raw.get("simulation_scaling_mode", "power")
+            ),
             scaling_power=float(train_raw.get("scaling_power", 2.0)),
             simulation_batch_size=int(train_raw.get("simulation_batch_size", 10000)),
             learning_rate=float(train_raw.get("learning_rate", 5e-4)),
@@ -326,7 +352,7 @@ class Configuration:
             device=str(train_raw.get("device", "cuda")),
             save_dir=str(train_raw.get("save_dir", "models")),
         )
-        
+
         # Extract memory config (legacy, mostly unused now)
         mem_raw = raw.get("memory", {})
         memory = MemoryConfig(
@@ -337,7 +363,7 @@ class Configuration:
             gradient_checkpointing=bool(mem_raw.get("gradient_checkpointing", False)),
             mixed_precision=bool(mem_raw.get("mixed_precision", True)),
         )
-        
+
         # Extract model selection
         ms_raw = raw.get("model_selection", {})
         model_selection = ModelSelectionConfig(
@@ -346,15 +372,17 @@ class Configuration:
             use_classifier=bool(ms_raw.get("use_classifier", True)),
             classifier_only=bool(ms_raw.get("classifier_only", False)),
         )
-        
+
         # Extract physics config (just model types - priors are in PriorConfig!)
         phys_raw = raw.get("physics", {})
-        model_types = phys_raw.get("model_types", phys_raw.get("model_type", ["faraday_thin"]))
+        model_types = phys_raw.get(
+            "model_types", phys_raw.get("model_type", ["faraday_thin"])
+        )
         if isinstance(model_types, str):
             model_types = [model_types]
-        
+
         physics = PhysicsConfig(model_types=model_types)
-        
+
         # Extract SBI config
         sbi_raw = raw.get("sbi", {})
         arch_raw = sbi_raw.get("architecture_scaling", {})
@@ -368,14 +396,14 @@ class Configuration:
             # Default architecture
             for i in range(1, 6):
                 arch_scaling[i] = SBIArchitectureConfig(256, 15)
-                
+
         sbi = SBIConfig(
             model=str(sbi_raw.get("model", "nsf")),
             num_bins=int(sbi_raw.get("num_bins", 16)),
             embedding_dim=int(sbi_raw.get("embedding_dim", 64)),
             architecture_scaling=arch_scaling,
         )
-        
+
         # Extract classifier config
         cls_raw = raw.get("classifier", {})
         classifier = ClassifierConfig(
@@ -386,9 +414,11 @@ class Configuration:
             batch_size=int(cls_raw.get("batch_size", 1024)),
             learning_rate=float(cls_raw.get("learning_rate", 0.0001)),
             validation_fraction=float(cls_raw.get("validation_fraction", 0.2)),
-            use_posterior_simulations=bool(cls_raw.get("use_posterior_simulations", True)),
+            use_posterior_simulations=bool(
+                cls_raw.get("use_posterior_simulations", True)
+            ),
         )
-        
+
         # Extract weight augmentation
         wa_raw = raw.get("weight_augmentation", {})
         weight_aug = WeightAugmentationConfig(
@@ -398,7 +428,7 @@ class Configuration:
             large_block_prob=float(wa_raw.get("large_block_prob", 0.1)),
             noise_variation=bool(wa_raw.get("noise_variation", True)),
         )
-        
+
         return cls(
             freq_file=str(raw.get("freq_file", "freq.txt")),
             priors=priors,
@@ -412,8 +442,8 @@ class Configuration:
             classifier=classifier,
             weight_augmentation=weight_aug,
         )
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "freq_file": self.freq_file,
@@ -421,8 +451,14 @@ class Configuration:
                 "rm": {"min": self.priors.rm_min, "max": self.priors.rm_max},
                 "amp": {"min": self.priors.amp_min, "max": self.priors.amp_max},
                 "chi0": {"min": self.priors.chi0_min, "max": self.priors.chi0_max},
-                "sigma_phi": {"min": self.priors.sigma_phi_min, "max": self.priors.sigma_phi_max},
-                "delta_phi": {"min": self.priors.delta_phi_min, "max": self.priors.delta_phi_max},
+                "sigma_phi": {
+                    "min": self.priors.sigma_phi_min,
+                    "max": self.priors.sigma_phi_max,
+                },
+                "delta_phi": {
+                    "min": self.priors.delta_phi_min,
+                    "max": self.priors.delta_phi_max,
+                },
             },
             "noise": {
                 "base_percent": self.noise.base_percent,
@@ -459,8 +495,8 @@ class Configuration:
                 "model_types": self.physics.model_types,
             },
         }
-    
+
     def save(self, path: str):
         """Save configuration to YAML file."""
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             yaml.dump(self.to_dict(), f, default_flow_style=False)

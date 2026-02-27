@@ -6,17 +6,17 @@ Requires the optional 'io' dependencies:
 """
 
 from .cube_io import (
+    compute_weights,
+    normalize_qu_by_i,
     read_iquv_cube,
     read_qu_cubes,
-    normalize_qu_by_i,
-    compute_weights,
     write_results_maps,
 )
 
 __all__ = [
-    'read_iquv_cube',
-    'read_qu_cubes',
-    'normalize_qu_by_i',
-    'compute_weights',
-    'write_results_maps',
+    "read_iquv_cube",
+    "read_qu_cubes",
+    "normalize_qu_by_i",
+    "compute_weights",
+    "write_results_maps",
 ]

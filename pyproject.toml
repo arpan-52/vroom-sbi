@@ -36,6 +36,18 @@ vroom-sbi = "src.cli.main:main"
 # Build backend  (setuptools, same behaviour as the old setup.py)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Ruff — linting + formatting config
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]   # pycodestyle, pyflakes, isort, pyupgrade
+ignore = ["E501"]                 # line length handled by formatter
+
 [build-system]
 requires      = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
@@ -84,8 +96,10 @@ spectral-cube = ">=0.4"
 # ---------------------------------------------------------------------------
 
 [tool.pixi.feature.dev.dependencies]
-pytest     = ">=7.0"
-pytest-cov = "*"
+pytest      = ">=7.0"
+pytest-cov  = "*"
+ruff        = ">=0.9"
+pre-commit  = ">=3.0"
 
 # ---------------------------------------------------------------------------
 # Environments
@@ -116,3 +130,8 @@ validate   = "vroom-sbi validate"
 test       = "pytest tests/ -v --tb=short"
 test-cube  = "pytest tests/test_cube_io.py tests/test_cube_inference.py -v --tb=short"
 test-all   = "pytest tests/ -v --tb=short --cov=src --cov-report=term-missing"
+
+# Linting (run manually or via pre-commit)
+lint       = "ruff check src tests"
+lint-fix   = "ruff check --fix src tests && ruff format src tests"
+hooks-install = "pre-commit install"
