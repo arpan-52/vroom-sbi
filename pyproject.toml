@@ -1,0 +1,118 @@
+# pyproject.toml — vroom-sbi
+# Replaces setup.py.  Manages both the Python package metadata (PEP 621)
+# and the pixi environments used for development and CI.
+
+# ---------------------------------------------------------------------------
+# Python package metadata (PEP 621)
+# ---------------------------------------------------------------------------
+
+[project]
+name = "vroom-sbi"
+version = "2.0.0"
+description = "Simulation-Based Inference for RM Synthesis"
+requires-python = ">=3.10"
+
+# Core runtime dependencies (pip-compatible list for non-pixi installs)
+dependencies = [
+    "numpy>=1.20",
+    "torch>=2.0",
+    "sbi>=0.18",
+    "astropy>=5.0",
+    "matplotlib>=3.5",
+    "corner>=2.2",
+    "tqdm>=4.60",
+    "pyyaml>=6.0",
+    "huggingface-hub>=0.10",
+]
+
+[project.optional-dependencies]
+io  = ["spectral-cube>=0.4"]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[project.scripts]
+vroom-sbi = "src.cli.main:main"
+
+# ---------------------------------------------------------------------------
+# Build backend  (setuptools, same behaviour as the old setup.py)
+# ---------------------------------------------------------------------------
+
+[build-system]
+requires      = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]       # finds the top-level 'src' package
+
+
+# ===========================================================================
+# pixi — environment management
+# ===========================================================================
+
+[tool.pixi.project]
+channels  = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "osx-64", "win-64"]
+
+# ---------------------------------------------------------------------------
+# Core conda dependencies (default environment)
+# ---------------------------------------------------------------------------
+
+[tool.pixi.dependencies]
+python          = ">=3.10,<3.13"
+numpy           = ">=1.20"
+pytorch         = ">=2.0"       # installs the 'torch' Python package
+astropy         = ">=5.0"
+matplotlib      = ">=3.5"
+tqdm            = ">=4.60"
+pyyaml          = ">=6.0"
+corner          = ">=2.2"
+huggingface_hub = ">=0.10"
+
+# PyPI-only packages installed alongside conda deps
+[tool.pixi.pypi-dependencies]
+vroom-sbi = { path = ".", editable = true }
+sbi       = ">=0.18"
+
+# ---------------------------------------------------------------------------
+# Feature: io  (spectral_cube for FITS cube I/O)
+# ---------------------------------------------------------------------------
+
+[tool.pixi.feature.io.dependencies]
+spectral-cube = ">=0.4"
+
+# ---------------------------------------------------------------------------
+# Feature: dev  (testing tools)
+# ---------------------------------------------------------------------------
+
+[tool.pixi.feature.dev.dependencies]
+pytest     = ">=7.0"
+pytest-cov = "*"
+
+# ---------------------------------------------------------------------------
+# Environments
+# ---------------------------------------------------------------------------
+
+[tool.pixi.environments]
+# Core only — train, infer, validate
+default  = { solve-group = "default" }
+
+# Core + FITS I/O
+io       = { features = ["io"],        solve-group = "io"  }
+
+# Core + testing
+dev      = { features = ["dev"],       solve-group = "dev" }
+
+# Core + FITS I/O + testing  (used in cube-integration CI)
+cube-dev = { features = ["io", "dev"], solve-group = "cube-dev" }
+
+# ---------------------------------------------------------------------------
+# Tasks (run with: pixi run <task>  or  pixi run -e <env> <task>)
+# ---------------------------------------------------------------------------
+
+[tool.pixi.tasks]
+train      = "vroom-sbi train"
+validate   = "vroom-sbi validate"
+
+# Tests
+test       = "pytest tests/ -v --tb=short"
+test-cube  = "pytest tests/test_cube_io.py tests/test_cube_inference.py -v --tb=short"
+test-all   = "pytest tests/ -v --tb=short --cov=src --cov-report=term-missing"

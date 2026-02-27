@@ -18,22 +18,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.simulator import RMSimulator, sample_prior, build_prior
 
+# Absolute path to freq.txt so tests pass regardless of working directory
+FREQ_FILE = str(Path(__file__).parent.parent / "freq.txt")
 
-def test_model(model_type: str, n_components: int = 2):
-    """Test a specific physical model."""
+
+def _check_model(model_type: str, n_components: int = 2):
+    """Helper (not a pytest test) — verifies a specific physical model."""
     print(f"\n{'='*60}")
     print(f"Testing: {model_type} with {n_components} components")
     print(f"{'='*60}")
-    
-    freq_file = "freq.txt"
-    base_noise_level = 0.01
-    
+
     # Create simulator
     try:
         simulator = RMSimulator(
-            freq_file=freq_file,
+            freq_file=FREQ_FILE,
             n_components=n_components,
-            base_noise_level=base_noise_level,
             model_type=model_type
         )
         print(f"✓ Simulator created")
@@ -110,13 +109,10 @@ def test_depolarization_formulas():
     print("Testing depolarization formula correctness")
     print(f"{'='*60}")
     
-    freq_file = "freq.txt"
-    
     # Test external dispersion: should use λ⁴ = (λ²)²
     simulator = RMSimulator(
-        freq_file=freq_file,
+        freq_file=FREQ_FILE,
         n_components=1,
-        base_noise_level=0.0,  # No noise for testing
         model_type="external_dispersion"
     )
     
@@ -157,9 +153,8 @@ def test_depolarization_formulas():
     
     # Test internal dispersion
     simulator_int = RMSimulator(
-        freq_file=freq_file,
+        freq_file=FREQ_FILE,
         n_components=1,
-        base_noise_level=0.0,
         model_type="internal_dispersion"
     )
     
@@ -197,7 +192,7 @@ def main():
     for model_type in models_to_test:
         results[model_type] = {}
         for n_comp in component_counts:
-            success = test_model(model_type, n_comp)
+            success = _check_model(model_type, n_comp)
             results[model_type][n_comp] = success
     
     # Test depolarization formulas

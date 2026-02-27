@@ -78,6 +78,69 @@ def validate_command(args):
     )
 
 
+def cube_infer_command(args):
+    import numpy as np
+    from astropy.io import fits as afits
+    from ..io import read_iquv_cube, read_qu_cubes, normalize_qu_by_i, compute_weights, write_results_maps
+    from ..inference import InferenceEngine
+    from ..config import Configuration
+
+    # ------------------------------------------------------------------
+    # Read cubes
+    # ------------------------------------------------------------------
+    if args.cube:
+        q_data, u_data, frequencies, wcs_2d, i_data = read_iquv_cube(args.cube)
+        q_data, u_data = normalize_qu_by_i(q_data, u_data, i_data)
+    else:
+        if not args.cube_u:
+            import sys
+            print("error: --cube-u is required when --cube-q is used", file=sys.stderr)
+            sys.exit(2)
+        # warns internally that spectra assumed already normalised
+        q_data, u_data, frequencies, wcs_2d = read_qu_cubes(args.cube_q, args.cube_u)
+
+    # ------------------------------------------------------------------
+    # Noise weights
+    # ------------------------------------------------------------------
+    noise_cube = None
+    if args.noise_cube:
+        noise_cube = afits.getdata(args.noise_cube).astype(np.float64)
+    weights = compute_weights(q_data, u_data, noise_cube=noise_cube)
+
+    # ------------------------------------------------------------------
+    # Spatial mask
+    # ------------------------------------------------------------------
+    mask = None
+    if args.mask:
+        mask = (afits.getdata(args.mask) != 0)
+
+    # ------------------------------------------------------------------
+    # Engine
+    # ------------------------------------------------------------------
+    config = None
+    if args.config:
+        config = Configuration.from_yaml(args.config)
+
+    device = args.device or ('cuda' if config is None else config.training.device)
+    engine = InferenceEngine(config=config, model_dir=args.model_dir, device=device)
+    engine.load_models(max_components=args.max_components)
+
+    # ------------------------------------------------------------------
+    # Run
+    # ------------------------------------------------------------------
+    results = engine.run_inference_cube(
+        q_data,
+        u_data,
+        weights=weights,
+        mask=mask,
+        snr_threshold=args.snr_threshold,
+        n_samples=args.n_samples,
+        batch_size=args.batch_size,
+    )
+
+    write_results_maps(results, wcs_2d, args.output_dir)
+
+
 def push_command(args):
     from ..utils import push_to_huggingface
     push_to_huggingface(model_dir=args.model_dir, repo_id=args.repo_id,
@@ -182,6 +245,44 @@ vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
     val_p.add_argument('--seed', type=int, default=42)
     val_p.set_defaults(func=validate_command)
     
+    # Cube infer
+    cube_p = subparsers.add_parser(
+        'cube-infer',
+        help='Run inference over all pixels of a Stokes spectral cube',
+    )
+    cube_input = cube_p.add_mutually_exclusive_group(required=True)
+    cube_input.add_argument(
+        '--cube',
+        metavar='PATH',
+        help='4D IQUV FITS cube (enables Q/I, U/I normalisation)',
+    )
+    cube_input.add_argument(
+        '--cube-q',
+        metavar='PATH',
+        help='3D Stokes Q cube (use with --cube-u; assumed already spectrally normalised)',
+    )
+    cube_p.add_argument(
+        '--cube-u',
+        metavar='PATH',
+        help='3D Stokes U cube (required with --cube-q)',
+    )
+    cube_p.add_argument('--noise-cube', metavar='PATH', default=None,
+                        help='Per-channel noise FITS cube for inverse-variance weighting')
+    cube_p.add_argument('--mask', metavar='PATH', default=None,
+                        help='2D FITS mask; non-zero pixels are processed')
+    cube_p.add_argument('--snr-threshold', type=float, default=None,
+                        help='Only process pixels with mean polarised SNR above this value')
+    cube_p.add_argument('--output-dir', default='cube_results',
+                        help='Output directory (default: cube_results/)')
+    cube_p.add_argument('--model-dir', default='models')
+    cube_p.add_argument('--config', default=None)
+    cube_p.add_argument('--device', default=None)
+    cube_p.add_argument('--max-components', type=int, default=5)
+    cube_p.add_argument('--n-samples', type=int, default=1000)
+    cube_p.add_argument('--batch-size', type=int, default=1,
+                        help='Pixels per progress chunk (default: 1, serial)')
+    cube_p.set_defaults(func=cube_infer_command)
+
     # Push
     push_p = subparsers.add_parser('push')
     push_p.add_argument('--model-dir', default='models')

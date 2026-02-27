@@ -17,3 +17,11 @@ __all__ = [
     'Validator', 'run_validation',
     'push_to_huggingface', 'download_from_huggingface',
 ]
+
+# io is an optional submodule (requires spectral_cube).
+# Import it lazily so the package still loads without spectral_cube installed.
+try:
+    from . import io
+    __all__.append('io')
+except ImportError:
+    pass
