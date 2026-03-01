@@ -113,6 +113,7 @@ class InferenceEngine(InferenceEngineInterface):
 
         self.posteriors: dict[str, Any] = {}
         self.posterior_metadata: dict[str, dict] = {}
+        self.model_lambda_sq: dict[str, np.ndarray] = {}
         self.classifier = None
         self.memory_config = config.memory if config else MemoryConfig()
         self._models_on_device: dict[str, str] = {}
@@ -141,6 +142,8 @@ class InferenceEngine(InferenceEngineInterface):
                         self.posteriors[key] = posterior
                         self.posterior_metadata[key] = metadata
                         self._models_on_device[key] = self.device
+                        if "lambda_sq" in metadata:
+                            self.model_lambda_sq[key] = np.asarray(metadata["lambda_sq"])
                         logger.info(f"  Loaded {key}")
                     except Exception as e:
                         logger.warning(f"  Failed to load {model_path}: {e}")
@@ -329,6 +332,25 @@ class InferenceEngine(InferenceEngineInterface):
             raise ValueError("No models available for inference")
         return results[best_key], results
 
+    def _check_frequency_compatibility(self, frequencies_hz: np.ndarray) -> None:
+        """Warn if cube frequencies differ from the model's training frequency grid."""
+        from ..simulator.physics import freq_to_lambda_sq
+
+        cube_lsq = freq_to_lambda_sq(frequencies_hz)
+        for key, model_lsq in self.model_lambda_sq.items():
+            if len(cube_lsq) != len(model_lsq):
+                logger.warning(
+                    f"Frequency mismatch for model '{key}': "
+                    f"expected {len(model_lsq)} channels, got {len(cube_lsq)}. "
+                    f"Cube range: {frequencies_hz[0]/1e6:.1f}–{frequencies_hz[-1]/1e6:.1f} MHz."
+                )
+            elif not np.allclose(cube_lsq, model_lsq, rtol=1e-3):
+                logger.warning(
+                    f"Frequency values for model '{key}' differ from cube "
+                    f"(rtol=1e-3). Results may be unreliable. "
+                    f"Cube range: {frequencies_hz[0]/1e6:.1f}–{frequencies_hz[-1]/1e6:.1f} MHz."
+                )
+
     def run_inference_cube(
         self,
         q_data: np.ndarray,
@@ -338,6 +360,7 @@ class InferenceEngine(InferenceEngineInterface):
         batch_size: int = 1,
         mask: np.ndarray | None = None,
         snr_threshold: float | None = None,
+        frequencies_hz: np.ndarray | None = None,
         **infer_kwargs,
     ) -> dict[str, np.ndarray]:
         """
@@ -382,6 +405,9 @@ class InferenceEngine(InferenceEngineInterface):
                 f"q_data and u_data must have the same shape; "
                 f"got {q_data.shape} and {u_data.shape}"
             )
+
+        if frequencies_hz is not None and self.model_lambda_sq:
+            self._check_frequency_compatibility(frequencies_hz)
 
         _, n_dec, n_ra = q_data.shape
 

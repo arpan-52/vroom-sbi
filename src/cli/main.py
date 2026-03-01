@@ -20,20 +20,44 @@ def train_command(args):
 def infer_command(args):
     import numpy as np
 
+    from ..config import Configuration
     from ..inference import InferenceEngine
 
-    Q = np.array([float(x) for x in args.q.split(",")])
-    U = np.array([float(x) for x in args.u.split(",")])
-    engine = InferenceEngine(
-        model_dir=args.model_dir,
-        config_path=args.config,
-        max_components=args.max_components,
-        device=args.device,
+    Q = np.array([float(x.strip()) for x in args.q.split(",")])
+    U = np.array([float(x.strip()) for x in args.u.split(",")])
+
+    if len(Q) != len(U):
+        raise ValueError(f"Q and U must have same length: {len(Q)} vs {len(U)}")
+
+    qu_obs = np.concatenate([Q, U])
+
+    config = None
+    if args.config:
+        config = Configuration.from_yaml(args.config)
+
+    device = args.device or ("cuda" if config is None else config.training.device)
+    engine = InferenceEngine(config=config, model_dir=args.model_dir, device=device)
+    engine.load_models(max_components=args.max_components)
+
+    best_result, all_results = engine.infer(qu_obs, n_samples=args.n_samples)
+
+    print("\n" + "=" * 60)
+    print("INFERENCE RESULTS")
+    print("=" * 60)
+    print(
+        f"\nBest model: {best_result.model_type} with {best_result.n_components} component(s)"
     )
-    result = engine.infer(Q, U, n_samples=args.n_samples)
-    print(result)
-    if args.output:
-        result.plot(args.output)
+    print(f"Log evidence: {best_result.log_evidence:.2f}")
+
+    for i, comp in enumerate(best_result.components):
+        print(f"\nComponent {i + 1}:")
+        print(f"  RM = {comp.rm_mean:.2f} ± {comp.rm_std:.2f} rad/m²")
+        if comp.sigma_phi_mean is not None:
+            print(
+                f"  σ_φ = {comp.sigma_phi_mean:.2f} ± {comp.sigma_phi_std:.2f} rad/m²"
+            )
+        if comp.delta_phi_mean is not None:
+            print(f"  Δφ = {comp.delta_phi_mean:.2f} ± {comp.delta_phi_std:.2f} rad/m²")
 
 
 def validate_command(args):
@@ -151,6 +175,7 @@ def cube_infer_command(args):
         snr_threshold=args.snr_threshold,
         n_samples=args.n_samples,
         batch_size=args.batch_size,
+        frequencies_hz=frequencies,
     )
 
     write_results_maps(results, wcs_2d, args.output_dir)
