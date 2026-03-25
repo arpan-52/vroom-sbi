@@ -110,48 +110,36 @@ def validate_command(args):
 
 
 def cube_infer_command(args):
-    import numpy as np
-    from astropy.io import fits as afits
+    import sys
+    import warnings
 
     from ..config import Configuration
     from ..inference import InferenceEngine
-    from ..io import (
-        compute_weights,
-        normalize_qu_by_i,
-        read_iquv_cube,
-        read_qu_cubes,
-        write_results_maps,
+    from ..io import open_i_cube_lazy, open_qu_cubes_lazy, write_results_maps
+
+    if not args.cube and not args.cube_u:
+        print("error: --cube-u is required when --cube-q is used", file=sys.stderr)
+        sys.exit(2)
+
+    if args.cube:
+        print("error: --cube (IQUV) not yet supported in chunked mode; use --cube-q/--cube-u", file=sys.stderr)
+        sys.exit(2)
+
+    # Open lazily — no data loaded yet
+    q_cube, u_cube, shape, frequencies, wcs_2d = open_qu_cubes_lazy(
+        args.cube_q, args.cube_u
     )
 
-    # ------------------------------------------------------------------
-    # Read cubes
-    # ------------------------------------------------------------------
-    if args.cube:
-        q_data, u_data, frequencies, wcs_2d, i_data = read_iquv_cube(args.cube)
-        q_data, u_data = normalize_qu_by_i(q_data, u_data, i_data)
+    i_cube = None
+    if args.cube_i:
+        i_cube = open_i_cube_lazy(args.cube_i)
     else:
-        if not args.cube_u:
-            import sys
-
-            print("error: --cube-u is required when --cube-q is used", file=sys.stderr)
-            sys.exit(2)
-        # warns internally that spectra assumed already normalised
-        q_data, u_data, frequencies, wcs_2d = read_qu_cubes(args.cube_q, args.cube_u)
-
-    # ------------------------------------------------------------------
-    # Noise weights
-    # ------------------------------------------------------------------
-    noise_cube = None
-    if args.noise_cube:
-        noise_cube = afits.getdata(args.noise_cube).astype(np.float64)
-    weights = compute_weights(q_data, u_data, noise_cube=noise_cube)
-
-    # ------------------------------------------------------------------
-    # Spatial mask
-    # ------------------------------------------------------------------
-    mask = None
-    if args.mask:
-        mask = afits.getdata(args.mask) != 0
+        warnings.warn(
+            "No Stokes I provided — assuming Q and U are already spectrally "
+            "normalised (fractional polarisation p = Q/I, U/I).",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # ------------------------------------------------------------------
     # Engine
@@ -165,17 +153,16 @@ def cube_infer_command(args):
     engine.load_models(max_components=args.max_components)
 
     # ------------------------------------------------------------------
-    # Run
+    # Run chunked inference
     # ------------------------------------------------------------------
-    results = engine.run_inference_cube(
-        q_data,
-        u_data,
-        weights=weights,
-        mask=mask,
-        snr_threshold=args.snr_threshold,
-        n_samples=args.n_samples,
-        batch_size=args.batch_size,
+    results = engine.run_inference_cube_chunked(
+        q_cube,
+        u_cube,
+        shape=shape,
         frequencies_hz=frequencies,
+        snr_threshold=args.snr_threshold if args.snr_threshold is not None else 5.0,
+        n_samples=args.n_samples,
+        i_cube=i_cube,
     )
 
     write_results_maps(results, wcs_2d, args.output_dir)
@@ -356,6 +343,12 @@ vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
         "--cube-u",
         metavar="PATH",
         help="3D Stokes U cube (required with --cube-q)",
+    )
+    cube_p.add_argument(
+        "--cube-i",
+        metavar="PATH",
+        default=None,
+        help="3D Stokes I cube for Q/I, U/I normalisation (optional with --cube-q/--cube-u)",
     )
     cube_p.add_argument(
         "--noise-cube",

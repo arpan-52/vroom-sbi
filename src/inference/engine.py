@@ -201,7 +201,7 @@ class InferenceEngine(InferenceEngineInterface):
             model_type_key = key.rsplit("_n", 1)[0]
             n_components = int(key.rsplit("_n", 1)[1])
 
-            logger.info(f"Running inference for {key}...")
+            logger.debug(f"Running inference for {key}...")
 
             samples = posterior.sample((n_samples,), x=qu_obs_t)
             samples_np = samples.cpu().numpy()
@@ -351,6 +351,57 @@ class InferenceEngine(InferenceEngineInterface):
                     f"Cube range: {frequencies_hz[0]/1e6:.1f}–{frequencies_hz[-1]/1e6:.1f} MHz."
                 )
 
+    def _infer_batch_key(
+        self,
+        x_batch: np.ndarray,
+        key: str,
+        n_samples: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Run batched inference for a specific model key.
+
+        Parameters
+        ----------
+        x_batch : np.ndarray, shape (B, 2*n_freq)
+        key : str
+        n_samples : int
+
+        Returns
+        -------
+        samples_np : np.ndarray, shape (B, n_samples, n_params)
+        log_evidence : np.ndarray, shape (B,)
+        """
+        B = x_batch.shape[0]
+        posterior = self.posteriors[key]
+        model_type_key = key.rsplit("_n", 1)[0]
+        n_components = int(key.rsplit("_n", 1)[1])
+        params_per_comp = get_params_per_component(model_type_key)
+
+        x_t = torch.tensor(x_batch, dtype=torch.float32, device=self.device)  # (B, n_obs)
+
+        # sbi 0.25: use sample_batched for multiple observations
+        # returns (B, n_samples, n_params)
+        samples = posterior.sample_batched(
+            (n_samples,), x=x_t, show_progress_bars=False
+        )
+        samples_np = samples.cpu().numpy()  # (B, n_samples, n_params)
+
+        # Sort components per pixel (no-op for n_components=1)
+        if n_components > 1:
+            for i in range(B):
+                samples_np[i] = sort_posterior_samples(
+                    samples_np[i], n_components, params_per_comp
+                )
+
+        # Log evidence per pixel via log_prob_batched
+        # samples: (B, n_samples, n_params) -> log_probs: (B, n_samples)
+        log_probs = posterior.log_prob_batched(samples, x=x_t)  # (B, n_samples)
+        log_evidence = (
+            torch.logsumexp(log_probs, dim=1) - np.log(n_samples)
+        ).cpu().numpy()  # (B,)
+
+        return samples_np, log_evidence
+
     def run_inference_cube(
         self,
         q_data: np.ndarray,
@@ -409,7 +460,7 @@ class InferenceEngine(InferenceEngineInterface):
         if frequencies_hz is not None and self.model_lambda_sq:
             self._check_frequency_compatibility(frequencies_hz)
 
-        _, n_dec, n_ra = q_data.shape
+        n_freq, n_dec, n_ra = q_data.shape
 
         # ------------------------------------------------------------------
         # Determine maximum number of components across loaded models
@@ -444,8 +495,16 @@ class InferenceEngine(InferenceEngineInterface):
         # ------------------------------------------------------------------
         # Build combined pixel mask
         # ------------------------------------------------------------------
-        # Layer 1: auto NaN mask
-        valid = ~np.any(np.isnan(q_data) | np.isnan(u_data), axis=0)
+        # Layer 1: auto NaN mask — only check channels with non-zero weight
+        if weights is not None:
+            w = np.asarray(weights)
+            good_chans = (w > 0) if w.ndim == 1 else np.any(w > 0, axis=(1, 2))
+            q_check = q_data[good_chans]
+            u_check = u_data[good_chans]
+        else:
+            q_check = q_data
+            u_check = u_data
+        valid = ~np.any(np.isnan(q_check) | np.isnan(u_check), axis=0)
 
         # Layer 2: user spatial mask
         if mask is not None:
@@ -455,13 +514,30 @@ class InferenceEngine(InferenceEngineInterface):
                 )
             valid = valid & mask.astype(bool)
 
-        # Layer 3: SNR threshold
+        # Layer 3: P-map collapse — only process pixels with significant
+        # polarised emission.  Use good channels only (weight > 0).
+        if weights is not None:
+            w1d = weights if weights.ndim == 1 else np.any(weights > 0, axis=(1, 2))
+            good_chans = w1d > 0
+        else:
+            good_chans = slice(None)
+        p_map = np.nanmean(
+            np.sqrt(q_data[good_chans] ** 2 + u_data[good_chans] ** 2), axis=0
+        )  # (n_dec, n_ra)
+        logger.info(
+            f"P map: min={np.nanmin(p_map):.4f}, max={np.nanmax(p_map):.4f}, "
+            f"mean={np.nanmean(p_map):.4f}"
+        )
+
+        # Estimate noise in the collapsed P map via MAD (robust to bright sources)
+        p_median = np.nanmedian(p_map)
+        sigma_p = 1.4826 * np.nanmedian(np.abs(p_map - p_median))
+        logger.info(f"P map noise (MAD): {sigma_p:.4f}")
+
         if snr_threshold is not None:
-            p_mean = np.nanmean(np.sqrt(q_data**2 + u_data**2), axis=0)
-            noise_est = np.nanstd(q_data, axis=0)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                snr_map = np.where(noise_est > 0, p_mean / noise_est, 0.0)
-            valid = valid & (snr_map >= snr_threshold)
+            valid = valid & (p_map >= snr_threshold * sigma_p)
+        else:
+            valid = valid & (p_map > sigma_p)
 
         pixel_list = np.argwhere(valid)  # shape (N_valid, 2)
         n_valid = len(pixel_list)
@@ -472,97 +548,359 @@ class InferenceEngine(InferenceEngineInterface):
         )
 
         # ------------------------------------------------------------------
-        # Pixel loop
+        # Per-pixel inference loop
         # ------------------------------------------------------------------
-        for chunk_start in range(0, n_valid, max(1, batch_size)):
-            chunk = pixel_list[chunk_start : chunk_start + max(1, batch_size)]
-            for dec_idx, ra_idx in tqdm(
-                chunk,
-                desc=f"Pixels {chunk_start}–{chunk_start + len(chunk) - 1}",
-                leave=False,
-            ):
-                Q_pix = q_data[:, dec_idx, ra_idx]
-                U_pix = u_data[:, dec_idx, ra_idx]
-                qu_obs = np.concatenate([Q_pix, U_pix])
+        for dec_idx, ra_idx in tqdm(pixel_list, desc="Cube inference", unit="px"):
+            Q_pix = q_data[:, dec_idx, ra_idx].copy()
+            U_pix = u_data[:, dec_idx, ra_idx].copy()
 
-                # Per-pixel weights
-                if weights is not None and weights.ndim == 3:
-                    pix_weights = weights[:, dec_idx, ra_idx]
-                else:
-                    pix_weights = weights
+            if weights is not None and weights.ndim == 3:
+                pix_weights = weights[:, dec_idx, ra_idx]
+            else:
+                pix_weights = weights
 
-                try:
-                    best_result, _ = self.infer(
-                        qu_obs,
-                        weights=pix_weights,
-                        n_samples=n_samples,
-                        **infer_kwargs,
-                    )
-                except Exception as exc:
-                    logger.warning(f"Pixel ({dec_idx}, {ra_idx}) failed: {exc}")
-                    continue
+            # Zero out flagged channels (model trained with 0.0, not NaN)
+            if pix_weights is not None:
+                Q_pix[pix_weights == 0] = 0.0
+                U_pix[pix_weights == 0] = 0.0
+            else:
+                Q_pix[~np.isfinite(Q_pix)] = 0.0
+                U_pix[~np.isfinite(U_pix)] = 0.0
 
-                results["log_evidence"][dec_idx, ra_idx] = best_result.log_evidence
-                results["n_components"][dec_idx, ra_idx] = best_result.n_components
+            qu_obs = np.concatenate([Q_pix, U_pix])
 
-                for comp_i, comp in enumerate(best_result.components):
-                    tag = f"comp{comp_i + 1}"
+            try:
+                best_result, _ = self.infer(
+                    qu_obs,
+                    weights=pix_weights,
+                    n_samples=n_samples,
+                    **infer_kwargs,
+                )
+            except Exception as exc:
+                logger.warning(f"Pixel ({dec_idx}, {ra_idx}) failed: {exc}")
+                continue
 
-                    # RM
-                    rm_samp = comp.samples[:, 0]
-                    results[f"rm_mean_{tag}"][dec_idx, ra_idx] = np.mean(rm_samp)
-                    results[f"rm_std_{tag}"][dec_idx, ra_idx] = np.std(rm_samp)
-                    results[f"rm_p16_{tag}"][dec_idx, ra_idx] = np.percentile(
-                        rm_samp, 16
-                    )
-                    results[f"rm_p84_{tag}"][dec_idx, ra_idx] = np.percentile(
-                        rm_samp, 84
-                    )
+            results["log_evidence"][dec_idx, ra_idx] = best_result.log_evidence
+            results["n_components"][dec_idx, ra_idx] = best_result.n_components
 
-                    # Amplitude (second-to-last column in samples)
-                    amp_col = comp.samples.shape[1] - 2
-                    amp_samp = comp.samples[:, amp_col]
-                    results[f"amp_mean_{tag}"][dec_idx, ra_idx] = np.mean(amp_samp)
-                    results[f"amp_std_{tag}"][dec_idx, ra_idx] = np.std(amp_samp)
-                    results[f"amp_p16_{tag}"][dec_idx, ra_idx] = np.percentile(
-                        amp_samp, 16
-                    )
-                    results[f"amp_p84_{tag}"][dec_idx, ra_idx] = np.percentile(
-                        amp_samp, 84
-                    )
+            for comp_i, comp in enumerate(best_result.components):
+                tag = f"comp{comp_i + 1}"
 
-                    # chi0 (last column)
-                    chi0_samp = comp.samples[:, -1]
-                    results[f"chi0_mean_{tag}"][dec_idx, ra_idx] = np.mean(chi0_samp)
-                    results[f"chi0_std_{tag}"][dec_idx, ra_idx] = np.std(chi0_samp)
-                    results[f"chi0_p16_{tag}"][dec_idx, ra_idx] = np.percentile(
-                        chi0_samp, 16
-                    )
-                    results[f"chi0_p84_{tag}"][dec_idx, ra_idx] = np.percentile(
-                        chi0_samp, 84
-                    )
+                rm_samp = comp.samples[:, 0]
+                results[f"rm_mean_{tag}"][dec_idx, ra_idx] = np.mean(rm_samp)
+                results[f"rm_std_{tag}"][dec_idx, ra_idx] = np.std(rm_samp)
+                results[f"rm_p16_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 16)
+                results[f"rm_p84_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 84)
 
-                    # Extended-model second parameter (column 1 when ndim >= 4)
-                    if comp.samples.shape[1] >= 4:
-                        sec_samp = comp.samples[:, 1]
-                        if comp.sigma_phi_mean is not None:
-                            prefix = "sigma_phi"
-                        elif comp.delta_phi_mean is not None:
-                            prefix = "delta_phi"
-                        else:
-                            prefix = "sigma_phi"  # safe fallback
-                        results[f"{prefix}_mean_{tag}"][dec_idx, ra_idx] = np.mean(
-                            sec_samp
-                        )
-                        results[f"{prefix}_std_{tag}"][dec_idx, ra_idx] = np.std(
-                            sec_samp
-                        )
-                        results[f"{prefix}_p16_{tag}"][dec_idx, ra_idx] = np.percentile(
-                            sec_samp, 16
-                        )
-                        results[f"{prefix}_p84_{tag}"][dec_idx, ra_idx] = np.percentile(
-                            sec_samp, 84
-                        )
+                amp_col = comp.samples.shape[1] - 2
+                amp_samp = comp.samples[:, amp_col]
+                results[f"amp_mean_{tag}"][dec_idx, ra_idx] = np.mean(amp_samp)
+                results[f"amp_std_{tag}"][dec_idx, ra_idx] = np.std(amp_samp)
+                results[f"amp_p16_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 16)
+                results[f"amp_p84_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 84)
+
+                chi0_samp = comp.samples[:, -1]
+                results[f"chi0_mean_{tag}"][dec_idx, ra_idx] = np.mean(chi0_samp)
+                results[f"chi0_std_{tag}"][dec_idx, ra_idx] = np.std(chi0_samp)
+                results[f"chi0_p16_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 16)
+                results[f"chi0_p84_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 84)
+
+                if comp.samples.shape[1] >= 4:
+                    sec_samp = comp.samples[:, 1]
+                    if comp.sigma_phi_mean is not None:
+                        prefix = "sigma_phi"
+                    elif comp.delta_phi_mean is not None:
+                        prefix = "delta_phi"
+                    else:
+                        prefix = "sigma_phi"
+                    results[f"{prefix}_mean_{tag}"][dec_idx, ra_idx] = np.mean(sec_samp)
+                    results[f"{prefix}_std_{tag}"][dec_idx, ra_idx] = np.std(sec_samp)
+                    results[f"{prefix}_p16_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 16)
+                    results[f"{prefix}_p84_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 84)
 
         logger.info("Cube inference complete.")
+        return results
+
+    def run_inference_cube_chunked(
+        self,
+        q_cube,
+        u_cube,
+        shape: tuple[int, int, int],
+        frequencies_hz: np.ndarray,
+        snr_threshold: float = 5.0,
+        n_samples: int = 1000,
+        mem_fraction: float = 0.5,
+        i_cube=None,
+    ) -> dict[str, np.ndarray]:
+        """
+        Chunked cube inference — never loads the full cube into RAM.
+
+        Determines chunk size automatically from available RAM.
+
+        Two passes:
+          Pass 1 — build collapsed P map + per-channel noise weights chunk by chunk
+          Pass 2 — run per-pixel inference on active pixels only
+
+        Parameters
+        ----------
+        q_cube, u_cube : SpectralCube (lazy)
+        shape : (n_freq, n_dec, n_ra)
+        frequencies_hz : np.ndarray
+        snr_threshold : float
+            Keep pixels where mean_P >= snr_threshold * sigma_P (MAD-based)
+        n_samples : int
+        mem_fraction : float
+            Fraction of available RAM to use per chunk (default 0.5)
+        """
+        import psutil
+        from tqdm import tqdm
+        from ..io import load_spatial_chunk
+
+        n_freq, n_dec, n_ra = shape
+
+        # ------------------------------------------------------------------
+        # Frequency channel reordering: cube channels must match training order
+        # SpectralCube often returns frequencies in descending order (CDELT<0),
+        # while the training freq.txt is typically ascending.  Feeding reversed
+        # channels to the network inverts the sign of inferred RM.
+        # ------------------------------------------------------------------
+        from ..simulator.physics import freq_to_lambda_sq as _f2lsq
+
+        freq_sort_idx = None
+        if self.model_lambda_sq:
+            ref_lsq = next(iter(self.model_lambda_sq.values()))
+            cube_lsq = _f2lsq(frequencies_hz)
+            if len(ref_lsq) == len(cube_lsq):
+                if np.allclose(cube_lsq[::-1], ref_lsq, rtol=1e-3):
+                    freq_sort_idx = np.arange(n_freq)[::-1]
+                    logger.info(
+                        "Cube frequency channels are in reverse order relative to "
+                        "training — reordering channels to match training grid."
+                    )
+                elif not np.allclose(cube_lsq, ref_lsq, rtol=1e-3):
+                    logger.warning(
+                        "Cube frequency grid does not match training grid in forward "
+                        "or reverse order — inferred RM values may be unreliable."
+                    )
+        else:
+            # No stored training grid — fall back to sorting cube frequencies
+            # to ascending order, which matches the standard freq.txt convention.
+            if frequencies_hz[0] > frequencies_hz[-1]:
+                freq_sort_idx = np.arange(n_freq)[::-1]
+                logger.info(
+                    "No training frequency grid stored in checkpoint; cube frequencies "
+                    "are descending — reordering to ascending to match training convention."
+                )
+
+        # ------------------------------------------------------------------
+        # Auto chunk size from available RAM
+        # Use 25% of available RAM — leaves room for intermediate arrays,
+        # PyTorch model tensors, and OS overhead during inference.
+        # Hard cap at 1024 to avoid excessive per-chunk I/O time.
+        # ------------------------------------------------------------------
+        available = psutil.virtual_memory().available
+        n_cubes = 3 if i_cube is not None else 2  # Q + U [+ I]
+        bytes_per_pixel = n_freq * 4 * n_cubes  # float32 per cube
+        max_pixels = int(available * 0.25 / bytes_per_pixel)
+        chunk_side = max(64, int(np.sqrt(max_pixels)))
+        chunk_side = min(chunk_side, n_dec, n_ra)
+        logger.info(
+            f"Available RAM: {available / 2**30:.1f} GB  →  "
+            f"chunk size: {chunk_side}×{chunk_side} "
+            f"({chunk_side**2 * bytes_per_pixel / 2**20:.0f} MB per chunk)"
+        )
+
+        # ------------------------------------------------------------------
+        # Initialise output maps (full spatial size, NaN)
+        # ------------------------------------------------------------------
+        shape2d = (n_dec, n_ra)
+
+        def _nan2d():
+            return np.full(shape2d, np.nan, dtype=np.float32)
+
+        results: dict[str, np.ndarray] = {}
+        model_keys = list(self.posteriors.keys())
+        for key in model_keys:
+            mt = key.rsplit("_n", 1)[0]
+            nc = int(key.rsplit("_n", 1)[1])
+            ppc = get_params_per_component(mt)
+            for ci in range(1, nc + 1):
+                tag = f"comp{ci}"
+                for stat in ("mean", "std", "p16", "p84"):
+                    results[f"rm_{stat}_{tag}"] = _nan2d()
+                    results[f"amp_{stat}_{tag}"] = _nan2d()
+                    results[f"chi0_{stat}_{tag}"] = _nan2d()
+                    if ppc >= 4:
+                        prefix = "delta_phi" if mt == "burn_slab" else "sigma_phi"
+                        results[f"{prefix}_{stat}_{tag}"] = _nan2d()
+        results["log_evidence"] = _nan2d()
+        results["n_components"] = _nan2d()
+
+        # ------------------------------------------------------------------
+        # Pass 1a: per-channel noise → weights → good_chans
+        # ------------------------------------------------------------------
+        logger.info("Pass 1a: estimating per-channel noise...")
+        noise_sum = np.zeros(n_freq, dtype=np.float64)
+        noise_sum2 = np.zeros(n_freq, dtype=np.float64)
+        n_pix_total = 0
+
+        for y0 in tqdm(range(0, n_dec, chunk_side), desc="Pass 1a (rows)", unit="row"):
+            y1 = min(y0 + chunk_side, n_dec)
+            for x0 in range(0, n_ra, chunk_side):
+                x1 = min(x0 + chunk_side, n_ra)
+                q_chunk, _ = load_spatial_chunk(q_cube, u_cube, y0, y1, x0, x1)
+                if freq_sort_idx is not None:
+                    q_chunk = q_chunk[freq_sort_idx]
+                finite_q = np.where(np.isfinite(q_chunk), q_chunk, 0.0)
+                noise_sum += finite_q.sum(axis=(1, 2))
+                noise_sum2 += (finite_q ** 2).sum(axis=(1, 2))
+                n_pix_total += (y1 - y0) * (x1 - x0)
+
+        mean_q = noise_sum / n_pix_total
+        var_q = noise_sum2 / n_pix_total - mean_q ** 2
+        noise_per_chan = np.sqrt(np.maximum(var_q, 0.0))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            weights = np.where(noise_per_chan > 0, 1.0 / noise_per_chan ** 2, 0.0)
+        w_max = weights.max()
+        if w_max > 0:
+            weights /= w_max
+        n_flagged = int((weights == 0).sum())
+        good_chans = weights > 0
+        logger.info(f"Weights: {n_flagged}/{n_freq} channels flagged (weight=0)")
+
+        # ------------------------------------------------------------------
+        # Pass 1b: collapsed P map using good channels only
+        # ------------------------------------------------------------------
+        logger.info("Pass 1b: building P map over good channels...")
+        p_map = np.zeros(shape2d, dtype=np.float64)
+
+        for y0 in tqdm(range(0, n_dec, chunk_side), desc="Pass 1b (rows)", unit="row"):
+            y1 = min(y0 + chunk_side, n_dec)
+            for x0 in range(0, n_ra, chunk_side):
+                x1 = min(x0 + chunk_side, n_ra)
+                q_chunk, u_chunk = load_spatial_chunk(q_cube, u_cube, y0, y1, x0, x1)
+                if freq_sort_idx is not None:
+                    q_chunk = q_chunk[freq_sort_idx]
+                    u_chunk = u_chunk[freq_sort_idx]
+                p_chunk = np.sqrt(q_chunk[good_chans] ** 2 + u_chunk[good_chans] ** 2)
+                p_map[y0:y1, x0:x1] = np.nanmean(p_chunk, axis=0)
+
+        # Noise in the 2D P map via MAD (robust against bright sources)
+        p_median = np.nanmedian(p_map)
+        sigma_p = 1.4826 * np.nanmedian(np.abs(p_map - p_median))
+        p_threshold = snr_threshold * p_median
+        logger.info(
+            f"P map: median={p_median:.6f}, threshold ({snr_threshold}x median)={p_threshold:.6f}"
+        )
+
+        # ------------------------------------------------------------------
+        # Dump P map and noise map for inspection
+        # ------------------------------------------------------------------
+        from astropy.io import fits as _fits
+        _fits.writeto("p_map.fits", p_map.astype(np.float32), overwrite=True)
+        _fits.writeto("noise_per_chan.fits", noise_per_chan.astype(np.float32), overwrite=True)
+        _fits.writeto("weights.fits", weights.astype(np.float32), overwrite=True)
+        logger.info("Dumped p_map.fits, noise_per_chan.fits, weights.fits")
+
+        # ------------------------------------------------------------------
+        # Pass 2: inference on active pixels
+        # Re-read available RAM now that results arrays and P map are allocated
+        # ------------------------------------------------------------------
+        n_active = int((p_map >= p_threshold).sum())
+        logger.info(f"Pass 2: inference on {n_active}/{n_dec*n_ra} active pixels...")
+
+        available_p2 = psutil.virtual_memory().available
+        max_pixels_p2 = int(available_p2 * 0.25 / bytes_per_pixel)
+        chunk_side = max(64, int(np.sqrt(max_pixels_p2)))
+        chunk_side = min(chunk_side, n_dec, n_ra)
+        logger.info(
+            f"Pass 2 available RAM: {available_p2 / 2**30:.1f} GB  →  "
+            f"chunk size: {chunk_side}×{chunk_side} "
+            f"({chunk_side**2 * bytes_per_pixel / 2**20:.0f} MB per chunk)"
+        )
+
+        self._check_frequency_compatibility(frequencies_hz)
+
+        for y0 in tqdm(range(0, n_dec, chunk_side), desc="Pass 2 (rows)", unit="row"):
+            y1 = min(y0 + chunk_side, n_dec)
+            for x0 in range(0, n_ra, chunk_side):
+                x1 = min(x0 + chunk_side, n_ra)
+
+                # Skip chunks with no active pixels
+                chunk_p = p_map[y0:y1, x0:x1]
+                if not np.any(chunk_p >= p_threshold):
+                    continue
+
+                q_chunk, u_chunk = load_spatial_chunk(q_cube, u_cube, y0, y1, x0, x1)
+                if freq_sort_idx is not None:
+                    q_chunk = q_chunk[freq_sort_idx]
+                    u_chunk = u_chunk[freq_sort_idx]
+
+                if i_cube is not None:
+                    from ..io import load_i_chunk, normalize_qu_by_i
+                    i_chunk = load_i_chunk(i_cube, y0, y1, x0, x1)
+                    if freq_sort_idx is not None:
+                        i_chunk = i_chunk[freq_sort_idx]
+                    q_chunk, u_chunk = normalize_qu_by_i(q_chunk, u_chunk, i_chunk)
+
+                active_local = np.argwhere(chunk_p >= p_threshold)
+                for dec_local, ra_local in active_local:
+                    dec_idx = y0 + dec_local
+                    ra_idx = x0 + ra_local
+
+                    Q_pix = q_chunk[:, dec_local, ra_local].copy()
+                    U_pix = u_chunk[:, dec_local, ra_local].copy()
+
+                    bad = ~good_chans | ~np.isfinite(Q_pix) | ~np.isfinite(U_pix)
+                    Q_pix[bad] = 0.0
+                    U_pix[bad] = 0.0
+
+                    qu_obs = np.concatenate([Q_pix, U_pix])
+
+                    try:
+                        best_result, _ = self.infer(
+                            qu_obs, weights=weights, n_samples=n_samples
+                        )
+                    except Exception as exc:
+                        logger.warning(f"Pixel ({dec_idx}, {ra_idx}) failed: {exc}")
+                        continue
+
+                    results["log_evidence"][dec_idx, ra_idx] = best_result.log_evidence
+                    results["n_components"][dec_idx, ra_idx] = best_result.n_components
+
+                    for comp_i, comp in enumerate(best_result.components):
+                        tag = f"comp{comp_i + 1}"
+
+                        rm_samp = comp.samples[:, 0]
+                        results[f"rm_mean_{tag}"][dec_idx, ra_idx] = np.mean(rm_samp)
+                        results[f"rm_std_{tag}"][dec_idx, ra_idx] = np.std(rm_samp)
+                        results[f"rm_p16_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 16)
+                        results[f"rm_p84_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 84)
+
+                        amp_col = comp.samples.shape[1] - 2
+                        amp_samp = comp.samples[:, amp_col]
+                        results[f"amp_mean_{tag}"][dec_idx, ra_idx] = np.mean(amp_samp)
+                        results[f"amp_std_{tag}"][dec_idx, ra_idx] = np.std(amp_samp)
+                        results[f"amp_p16_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 16)
+                        results[f"amp_p84_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 84)
+
+                        chi0_samp = comp.samples[:, -1]
+                        results[f"chi0_mean_{tag}"][dec_idx, ra_idx] = np.mean(chi0_samp)
+                        results[f"chi0_std_{tag}"][dec_idx, ra_idx] = np.std(chi0_samp)
+                        results[f"chi0_p16_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 16)
+                        results[f"chi0_p84_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 84)
+
+                        if comp.samples.shape[1] >= 4:
+                            sec_samp = comp.samples[:, 1]
+                            prefix = (
+                                "delta_phi"
+                                if best_result.model_type == "burn_slab"
+                                else "sigma_phi"
+                            )
+                            results[f"{prefix}_mean_{tag}"][dec_idx, ra_idx] = np.mean(sec_samp)
+                            results[f"{prefix}_std_{tag}"][dec_idx, ra_idx] = np.std(sec_samp)
+                            results[f"{prefix}_p16_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 16)
+                            results[f"{prefix}_p84_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 84)
+
+        logger.info("Chunked cube inference complete.")
         return results

@@ -229,6 +229,89 @@ def read_qu_cubes(
 
 
 # ---------------------------------------------------------------------------
+# Lazy / chunked I/O
+# ---------------------------------------------------------------------------
+
+
+def open_qu_cubes_lazy(q_path: str, u_path: str):
+    """
+    Open Q and U FITS cubes lazily — no data loaded.
+
+    Returns
+    -------
+    q_cube, u_cube : SpectralCube objects (lazy)
+    shape : tuple (n_freq, n_dec, n_ra)
+    frequencies_hz : np.ndarray
+    wcs_2d : astropy.wcs.WCS
+    """
+    import warnings
+
+    sc_mod = _get_spectral_cube()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        q_cube = sc_mod.SpectralCube.read(str(q_path))
+        u_cube = sc_mod.SpectralCube.read(str(u_path))
+
+    frequencies_hz = q_cube.spectral_axis.to(u.Hz).value
+    wcs_2d = q_cube.wcs.celestial
+    shape = tuple(int(x) for x in q_cube.shape)  # (n_freq, n_dec, n_ra)
+
+    logger.info(f"Opened Q/U cubes lazily: shape {shape}, {len(frequencies_hz)} channels")
+    return q_cube, u_cube, shape, frequencies_hz, wcs_2d
+
+
+def open_i_cube_lazy(i_path: str):
+    """
+    Open a Stokes I FITS cube lazily — no data loaded.
+
+    Returns
+    -------
+    i_cube : SpectralCube object (lazy)
+    """
+    sc_mod = _get_spectral_cube()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        i_cube = sc_mod.SpectralCube.read(str(i_path))
+    logger.info(f"Opened Stokes I cube lazily: shape {i_cube.shape}")
+    return i_cube
+
+
+def load_i_chunk(i_cube, y0: int, y1: int, x0: int, x1: int) -> np.ndarray:
+    """
+    Load a spatial tile from a lazy Stokes I SpectralCube object.
+
+    Returns
+    -------
+    i_chunk : np.ndarray, shape (n_freq, y1-y0, x1-x0)
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        i_chunk = i_cube[:, y0:y1, x0:x1].unmasked_data[:, :, :].value
+    return i_chunk.astype(np.float32)
+
+
+def load_spatial_chunk(
+    q_cube, u_cube, y0: int, y1: int, x0: int, x1: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Load a spatial tile from lazy Q/U SpectralCube objects.
+
+    Returns
+    -------
+    q_chunk, u_chunk : np.ndarray, shape (n_freq, y1-y0, x1-x0)
+    """
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        q_chunk = q_cube[:, y0:y1, x0:x1].unmasked_data[:, :, :].value
+        u_chunk = u_cube[:, y0:y1, x0:x1].unmasked_data[:, :, :].value
+
+    return q_chunk.astype(np.float32), u_chunk.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
 # Normalisation
 # ---------------------------------------------------------------------------
 
