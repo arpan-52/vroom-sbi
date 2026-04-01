@@ -23,6 +23,7 @@ from .streaming_trainer import (
     StreamingNPETrainer,
     train_streaming_npe,
 )
+from .spectral_trainer import SpectralShapeTrainer
 from .trainer import (
     SBITrainer,
     train_all_models,
@@ -31,6 +32,7 @@ from .trainer import (
 
 __all__ = [
     "SBITrainer",
+    "SpectralShapeTrainer",
     "train_model",
     "train_all_models",
     "ClassifierTrainer",

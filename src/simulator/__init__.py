@@ -11,6 +11,7 @@ from .augmentation import (
     augment_weights_scattered,
 )
 from .base_simulator import RMSimulator
+from .spectral_simulator import SpectralShapeSimulator
 from .physics import (
     compute_rmsf,
     freq_to_lambda_sq,
@@ -19,7 +20,9 @@ from .physics import (
 )
 from .prior import (
     build_prior,
+    build_spectral_shape_prior,
     sample_prior,
+    sample_spectral_shape_prior,
     sort_components_by_rm,
     sort_posterior_samples,
 )
@@ -30,8 +33,11 @@ __all__ = [
     "compute_rmsf",
     "get_rmsf_properties",
     "RMSimulator",
+    "SpectralShapeSimulator",
     "build_prior",
+    "build_spectral_shape_prior",
     "sample_prior",
+    "sample_spectral_shape_prior",
     "sort_components_by_rm",
     "sort_posterior_samples",
     "augment_weights_combined",

@@ -227,6 +227,60 @@ def get_params_per_component(model_type: str) -> int:
         return 4
 
 
+def build_spectral_shape_prior(config, device: str = "cpu"):
+    """
+    Build SBI BoxUniform prior for the spectral shape model.
+
+    Parameters: [log_F0, alpha, beta, gamma]
+
+    Parameters
+    ----------
+    config : SpectralShapeConfig
+        Spectral shape configuration with prior bounds
+    device : str
+        Torch device
+
+    Returns
+    -------
+    BoxUniform
+        SBI prior distribution
+    """
+    from sbi.utils import BoxUniform
+
+    low = [config.log_F0_min, config.alpha_min, config.beta_min, config.gamma_min]
+    high = [config.log_F0_max, config.alpha_max, config.beta_max, config.gamma_max]
+
+    low_t = torch.tensor(low, dtype=torch.float32, device=device)
+    high_t = torch.tensor(high, dtype=torch.float32, device=device)
+
+    return BoxUniform(low=low_t, high=high_t)
+
+
+def sample_spectral_shape_prior(n_samples: int, config) -> np.ndarray:
+    """
+    Sample from the spectral shape prior.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of samples
+    config : SpectralShapeConfig
+        Spectral shape configuration with prior bounds
+
+    Returns
+    -------
+    np.ndarray
+        Parameter samples of shape (n_samples, 4): [log_F0, alpha, beta, gamma]
+    """
+    low = np.array(
+        [config.log_F0_min, config.alpha_min, config.beta_min, config.gamma_min]
+    )
+    high = np.array(
+        [config.log_F0_max, config.alpha_max, config.beta_max, config.gamma_max]
+    )
+    return np.random.uniform(low, high, size=(n_samples, 4))
+
+
 def get_param_names(model_type: str, n_components: int) -> list:
     """Get parameter names for a model configuration."""
     names = []

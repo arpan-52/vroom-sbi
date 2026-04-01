@@ -271,9 +271,10 @@ class RMSimulator(BaseSimulator):
         theta: np.ndarray,
         weights: np.ndarray | None = None,
         noise_percent: float = 10.0,
+        noise_sigma: float | None = None,
     ) -> np.ndarray:
         """
-        Simulate Q, U spectra from parameters with percentage-based noise.
+        Simulate Q, U spectra from parameters with noise.
 
         Parameters
         ----------
@@ -282,7 +283,10 @@ class RMSimulator(BaseSimulator):
         weights : np.ndarray, optional
             Channel weights of shape (n_freq,). If None, uses loaded weights.
         noise_percent : float
-            Noise as percentage of signal amplitude (default: 10 means 10%)
+            Noise as percentage of signal amplitude (used when noise_sigma is None).
+        noise_sigma : float, optional
+            If given, use additive Gaussian noise with this fixed std dev instead
+            of percentage-based noise.
 
         Returns
         -------
@@ -315,22 +319,26 @@ class RMSimulator(BaseSimulator):
             )
             P = np.nan_to_num(P, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Percentage-based noise: sigma = noise_percent/100 * |P|
-        P_amplitude = np.abs(P)  # (batch, n_freq)
-        min_sigma = 1e-6
-
         Q = np.zeros((batch_size, self._n_freq))
         U = np.zeros((batch_size, self._n_freq))
 
-        for b in range(batch_size):
-            for j in range(self._n_freq):
-                if weights[j] > 0:
-                    sigma = max(noise_percent / 100.0 * P_amplitude[b, j], min_sigma)
-                    Q[b, j] = P[b, j].real + np.random.normal(0, sigma)
-                    U[b, j] = P[b, j].imag + np.random.normal(0, sigma)
-                else:
-                    Q[b, j] = 0.0
-                    U[b, j] = 0.0
+        if noise_sigma is not None:
+            # Additive noise: fixed sigma for all channels
+            for b in range(batch_size):
+                for j in range(self._n_freq):
+                    if weights[j] > 0:
+                        Q[b, j] = P[b, j].real + np.random.normal(0, noise_sigma)
+                        U[b, j] = P[b, j].imag + np.random.normal(0, noise_sigma)
+        else:
+            # Percentage-based noise: sigma = noise_percent/100 * |P|
+            P_amplitude = np.abs(P)  # (batch, n_freq)
+            min_sigma = 1e-6
+            for b in range(batch_size):
+                for j in range(self._n_freq):
+                    if weights[j] > 0:
+                        sigma = max(noise_percent / 100.0 * P_amplitude[b, j], min_sigma)
+                        Q[b, j] = P[b, j].real + np.random.normal(0, sigma)
+                        U[b, j] = P[b, j].imag + np.random.normal(0, sigma)
 
         # Concatenate [Q, U]
         x = np.hstack([Q, U])
@@ -342,12 +350,10 @@ class RMSimulator(BaseSimulator):
         theta: np.ndarray,
         weights_batch: np.ndarray,
         noise_percent: float = 10.0,
+        noise_sigma: float | None = None,
     ) -> np.ndarray:
         """
-        Simulate batch with per-sample weights and percentage-based noise.
-
-        Noise is computed as a percentage of the signal amplitude at each channel:
-            sigma = noise_percent/100 * |P|
+        Simulate batch with per-sample weights and noise.
 
         Parameters
         ----------
@@ -356,7 +362,10 @@ class RMSimulator(BaseSimulator):
         weights_batch : np.ndarray
             Per-sample weights of shape (batch, n_freq)
         noise_percent : float
-            Noise as percentage of signal amplitude (default: 10 means 10%)
+            Noise as percentage of signal amplitude (used when noise_sigma is None).
+        noise_sigma : float, optional
+            If given, use additive Gaussian noise with this fixed std dev instead
+            of percentage-based noise.
 
         Returns
         -------
@@ -382,20 +391,20 @@ class RMSimulator(BaseSimulator):
         if np.any(~np.isfinite(P)):
             P = np.nan_to_num(P, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Percentage-based noise: sigma = noise_percent/100 * |P|
-        # |P| is the polarized intensity at each channel
-        P_amplitude = np.abs(P)  # (batch, n_freq)
-
-        # Avoid zero sigma where signal is zero - use small floor
-        min_sigma = 1e-6
-        sigma = np.maximum(noise_percent / 100.0 * P_amplitude, min_sigma)
-
-        # Generate noise
-        noise_Q = np.random.normal(0, 1, (batch_size, self._n_freq)) * sigma
-        noise_U = np.random.normal(0, 1, (batch_size, self._n_freq)) * sigma
-
         # Apply weights mask (zero where weight is zero)
         mask = weights_batch > 0
+
+        if noise_sigma is not None:
+            # Additive noise: same fixed sigma for all channels
+            noise_Q = np.random.normal(0, noise_sigma, (batch_size, self._n_freq))
+            noise_U = np.random.normal(0, noise_sigma, (batch_size, self._n_freq))
+        else:
+            # Percentage-based noise: sigma = noise_percent/100 * |P|
+            P_amplitude = np.abs(P)  # (batch, n_freq)
+            min_sigma = 1e-6
+            sigma = np.maximum(noise_percent / 100.0 * P_amplitude, min_sigma)
+            noise_Q = np.random.normal(0, 1, (batch_size, self._n_freq)) * sigma
+            noise_U = np.random.normal(0, 1, (batch_size, self._n_freq)) * sigma
 
         Q = np.where(mask, P.real + noise_Q, 0.0)
         U = np.where(mask, P.imag + noise_U, 0.0)

@@ -109,7 +109,8 @@ def validate_command(args):
     )
 
 
-def cube_infer_command(args):
+def cube_infer_pol(args):
+    """Polarization (Q/U) cube inference — renamed from cube-infer."""
     import sys
     import warnings
 
@@ -141,9 +142,6 @@ def cube_infer_command(args):
             stacklevel=2,
         )
 
-    # ------------------------------------------------------------------
-    # Engine
-    # ------------------------------------------------------------------
     config = None
     if args.config:
         config = Configuration.from_yaml(args.config)
@@ -152,9 +150,6 @@ def cube_infer_command(args):
     engine = InferenceEngine(config=config, model_dir=args.model_dir, device=device)
     engine.load_models(max_components=args.max_components)
 
-    # ------------------------------------------------------------------
-    # Run chunked inference
-    # ------------------------------------------------------------------
     results = engine.run_inference_cube_chunked(
         q_cube,
         u_cube,
@@ -163,6 +158,45 @@ def cube_infer_command(args):
         snr_threshold=args.snr_threshold if args.snr_threshold is not None else 5.0,
         n_samples=args.n_samples,
         i_cube=i_cube,
+    )
+
+    write_results_maps(results, wcs_2d, args.output_dir)
+
+
+def cube_infer_spectra(args):
+    """Spectral shape (total intensity) cube inference."""
+    import astropy.units as u
+
+    from ..config import Configuration
+    from ..inference import InferenceEngine
+    from ..io import open_i_cube_lazy, write_results_maps
+
+    config = None
+    if args.config:
+        config = Configuration.from_yaml(args.config)
+
+    device = args.device or ("cuda" if config is None else config.training.device)
+    engine = InferenceEngine(config=config, model_dir="models", device=device)
+
+    # Load spectral shape model
+    engine.load_spectral_shape_model(args.model)
+
+    # Open I cube lazily (returns a SpectralCube object)
+    i_cube = open_i_cube_lazy(args.fits)
+    shape = tuple(int(x) for x in i_cube.shape)  # (n_freq, n_dec, n_ra)
+    frequencies = i_cube.spectral_axis.to(u.Hz).value
+
+    try:
+        wcs_2d = i_cube.wcs.celestial
+    except Exception:
+        wcs_2d = None
+
+    results = engine.run_spectral_shape_cube_chunked(
+        i_cube,
+        shape=shape,
+        frequencies_hz=frequencies,
+        snr_threshold=args.snr_threshold if args.snr_threshold is not None else 5.0,
+        n_samples=args.n_samples,
     )
 
     write_results_maps(results, wcs_2d, args.output_dir)
@@ -323,10 +357,10 @@ vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
     val_p.add_argument("--seed", type=int, default=42)
     val_p.set_defaults(func=validate_command)
 
-    # Cube infer
+    # Cube infer (polarization)
     cube_p = subparsers.add_parser(
-        "cube-infer",
-        help="Run inference over all pixels of a Stokes spectral cube",
+        "cube-infer-pol",
+        help="Run polarization (Q/U) inference over all pixels of a spectral cube",
     )
     cube_input = cube_p.add_mutually_exclusive_group(required=True)
     cube_input.add_argument(
@@ -384,7 +418,40 @@ vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
         default=1,
         help="Pixels per progress chunk (default: 1, serial)",
     )
-    cube_p.set_defaults(func=cube_infer_command)
+    cube_p.set_defaults(func=cube_infer_pol)
+
+    # Cube infer (spectral shape — total intensity)
+    spectra_p = subparsers.add_parser(
+        "cube-infer-spectra",
+        help="Run spectral shape (total intensity) inference over all pixels of an I cube",
+    )
+    spectra_p.add_argument(
+        "--fits",
+        metavar="PATH",
+        required=True,
+        help="3D Stokes I FITS cube",
+    )
+    spectra_p.add_argument(
+        "--model",
+        metavar="PATH",
+        required=True,
+        help="Path to trained spectral_shape_posterior.pt",
+    )
+    spectra_p.add_argument(
+        "--snr-threshold",
+        type=float,
+        default=None,
+        help="Only process pixels with mean I above this SNR (default: 5)",
+    )
+    spectra_p.add_argument(
+        "--output-dir",
+        default="spectra_results",
+        help="Output directory (default: spectra_results/)",
+    )
+    spectra_p.add_argument("--config", default=None)
+    spectra_p.add_argument("--device", default=None)
+    spectra_p.add_argument("--n-samples", type=int, default=1000)
+    spectra_p.set_defaults(func=cube_infer_spectra)
 
     # Push
     push_p = subparsers.add_parser("push")

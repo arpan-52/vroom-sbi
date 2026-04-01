@@ -5,6 +5,7 @@ __pycache__/
 *.so
 .Python
 build/
+results_rmtools/
 develop-eggs/
 dist/
 downloads/
@@ -19,6 +20,9 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+compare_methods.py
+run_rmtools.py
 
 # Virtual environments
 venv/

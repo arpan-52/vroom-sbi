@@ -904,3 +904,332 @@ class InferenceEngine(InferenceEngineInterface):
 
         logger.info("Chunked cube inference complete.")
         return results
+
+    # ------------------------------------------------------------------
+    # Spectral shape inference
+    # ------------------------------------------------------------------
+
+    def load_spectral_shape_model(self, model_path: str | Path) -> None:
+        """
+        Load a trained spectral shape posterior.
+
+        The posterior is stored under the key ``"spectral_shape"`` in
+        ``self.posteriors``.
+
+        Parameters
+        ----------
+        model_path : str or Path
+            Path to the ``.pt`` file produced by :class:`SpectralShapeTrainer`.
+        """
+        posterior, metadata = load_posterior(Path(model_path), self.device)
+        self.posteriors["spectral_shape"] = posterior
+        self.posterior_metadata["spectral_shape"] = metadata
+        logger.info(f"Loaded spectral shape model from {model_path}")
+
+    def infer_spectra(
+        self,
+        i_obs: np.ndarray,
+        weights: np.ndarray | None = None,
+        n_samples: int = 1000,
+    ) -> np.ndarray:
+        """
+        Run spectral shape inference on a single total-intensity spectrum.
+
+        Parameters
+        ----------
+        i_obs : np.ndarray, shape (n_freq,)
+            Observed total intensity spectrum.
+        weights : np.ndarray, optional
+            Channel weights of shape (n_freq,).  Zero-weight channels are
+            zeroed out before feeding to the network (matching training).
+        n_samples : int
+            Number of posterior samples to draw.
+
+        Returns
+        -------
+        samples : np.ndarray, shape (n_samples, 4)
+            Posterior samples: [log_F0, alpha, beta, gamma].
+        """
+        if "spectral_shape" not in self.posteriors:
+            raise ValueError(
+                "No spectral shape model loaded. Call load_spectral_shape_model() first."
+            )
+
+        obs = i_obs.copy().astype(np.float32)
+        if weights is not None:
+            obs[weights == 0] = 0.0
+        else:
+            obs[~np.isfinite(obs)] = 0.0
+
+        x_t = torch.tensor(obs, dtype=torch.float32, device=self.device)
+        posterior = self.posteriors["spectral_shape"]
+        samples = posterior.sample((n_samples,), x=x_t)
+        return samples.cpu().numpy()
+
+    def run_spectral_shape_cube(
+        self,
+        i_data: np.ndarray,
+        weights: np.ndarray | None = None,
+        n_samples: int = 1000,
+        mask: np.ndarray | None = None,
+        snr_threshold: float | None = None,
+    ) -> dict[str, np.ndarray]:
+        """
+        Run spectral shape inference over all valid spatial pixels of a
+        total-intensity cube.
+
+        Parameters
+        ----------
+        i_data : np.ndarray, shape (n_freq, n_dec, n_ra)
+            Total intensity cube.
+        weights : np.ndarray, optional
+            Inverse-variance channel weights.
+            - ``(n_freq,)``             → same weights for every pixel.
+            - ``(n_freq, n_dec, n_ra)`` → per-pixel weights.
+        n_samples : int
+            Number of posterior samples per pixel.
+        mask : np.ndarray, optional
+            Boolean 2D array shape ``(n_dec, n_ra)``.  Only pixels where
+            ``mask == True`` are processed.
+        snr_threshold : float, optional
+            If given, only process pixels whose mean intensity exceeds
+            ``snr_threshold * sigma_I`` where ``sigma_I`` is estimated
+            via MAD over the collapsed intensity map.
+
+        Returns
+        -------
+        results : dict
+            ``{name: 2D np.ndarray}`` of shape ``(n_dec, n_ra)``.
+            Unprocessed pixels are NaN.  Keys:
+            ``log_F0_mean``, ``log_F0_std``, ``log_F0_p16``, ``log_F0_p84``,
+            ``alpha_*``, ``beta_*``, ``gamma_*``.
+        """
+        from tqdm import tqdm
+
+        if "spectral_shape" not in self.posteriors:
+            raise ValueError(
+                "No spectral shape model loaded. Call load_spectral_shape_model() first."
+            )
+
+        n_freq, n_dec, n_ra = i_data.shape
+        shape2d = (n_dec, n_ra)
+
+        # Pre-allocate output arrays
+        param_names = ["log_F0", "alpha", "beta", "gamma"]
+        results: dict[str, np.ndarray] = {}
+        for name in param_names:
+            for stat in ("mean", "std", "p16", "p84"):
+                results[f"{name}_{stat}"] = np.full(shape2d, np.nan, dtype=np.float32)
+
+        # Build pixel mask
+        if weights is not None:
+            w = np.asarray(weights)
+            good_chans = (w > 0) if w.ndim == 1 else np.any(w > 0, axis=(1, 2))
+            i_check = i_data[good_chans]
+        else:
+            i_check = i_data
+        valid = ~np.any(np.isnan(i_check), axis=0)
+
+        if mask is not None:
+            if mask.shape != shape2d:
+                raise ValueError(
+                    f"mask shape {mask.shape} does not match spatial dimensions {shape2d}"
+                )
+            valid = valid & mask.astype(bool)
+
+        # SNR threshold based on collapsed intensity map
+        good_chans_idx = (
+            (weights > 0) if (weights is not None and weights.ndim == 1) else slice(None)
+        )
+        i_map = np.nanmean(i_data[good_chans_idx], axis=0)
+        i_median = np.nanmedian(i_map)
+        sigma_i = 1.4826 * np.nanmedian(np.abs(i_map - i_median))
+        logger.info(
+            f"I map: min={np.nanmin(i_map):.4f}, max={np.nanmax(i_map):.4f}, "
+            f"noise (MAD)={sigma_i:.4f}"
+        )
+
+        if snr_threshold is not None:
+            valid = valid & (i_map >= snr_threshold * sigma_i)
+        else:
+            valid = valid & (i_map > sigma_i)
+
+        pixel_list = np.argwhere(valid)
+        n_valid = len(pixel_list)
+        n_total = n_dec * n_ra
+        logger.info(
+            f"Spectral cube inference: fitting {n_valid}/{n_total} pixels "
+            f"({100 * n_valid / n_total:.1f}%)"
+        )
+
+        for dec_idx, ra_idx in tqdm(pixel_list, desc="Spectra cube infer", unit="px"):
+            i_pix = i_data[:, dec_idx, ra_idx].copy()
+
+            if weights is not None and np.asarray(weights).ndim == 3:
+                pix_weights = weights[:, dec_idx, ra_idx]
+            else:
+                pix_weights = weights
+
+            if pix_weights is not None:
+                i_pix[pix_weights == 0] = 0.0
+            else:
+                i_pix[~np.isfinite(i_pix)] = 0.0
+
+            try:
+                samples = self.infer_spectra(i_pix, weights=pix_weights, n_samples=n_samples)
+            except Exception as exc:
+                logger.warning(f"Pixel ({dec_idx}, {ra_idx}) failed: {exc}")
+                continue
+
+            # samples: (n_samples, 4) — [log_F0, alpha, beta, gamma]
+            for pi, name in enumerate(param_names):
+                col = samples[:, pi]
+                results[f"{name}_mean"][dec_idx, ra_idx] = np.mean(col)
+                results[f"{name}_std"][dec_idx, ra_idx] = np.std(col)
+                results[f"{name}_p16"][dec_idx, ra_idx] = np.percentile(col, 16)
+                results[f"{name}_p84"][dec_idx, ra_idx] = np.percentile(col, 84)
+
+        logger.info("Spectral cube inference complete.")
+        return results
+
+    def run_spectral_shape_cube_chunked(
+        self,
+        i_cube,
+        shape: tuple[int, int, int],
+        frequencies_hz: np.ndarray,
+        snr_threshold: float = 5.0,
+        n_samples: int = 1000,
+    ) -> dict[str, np.ndarray]:
+        """
+        Chunked spectral shape cube inference — never loads the full cube into RAM.
+
+        Parameters
+        ----------
+        i_cube : SpectralCube (lazy)
+        shape : (n_freq, n_dec, n_ra)
+        frequencies_hz : np.ndarray
+        snr_threshold : float
+        n_samples : int
+        """
+        import psutil
+        from tqdm import tqdm
+
+        from ..io import load_i_chunk
+
+        if "spectral_shape" not in self.posteriors:
+            raise ValueError(
+                "No spectral shape model loaded. Call load_spectral_shape_model() first."
+            )
+
+        n_freq, n_dec, n_ra = shape
+        shape2d = (n_dec, n_ra)
+
+        # Auto chunk size from available RAM
+        available = psutil.virtual_memory().available
+        bytes_per_pixel = n_freq * 4  # float32 for I cube
+        max_pixels = int(available * 0.25 / bytes_per_pixel)
+        chunk_side = max(64, int(np.sqrt(max_pixels)))
+        chunk_side = min(chunk_side, n_dec, n_ra)
+        logger.info(
+            f"Available RAM: {available / 2**30:.1f} GB  →  "
+            f"chunk size: {chunk_side}×{chunk_side}"
+        )
+
+        # Pre-allocate output arrays
+        param_names = ["log_F0", "alpha", "beta", "gamma"]
+        results: dict[str, np.ndarray] = {}
+        for name in param_names:
+            for stat in ("mean", "std", "p16", "p84"):
+                results[f"{name}_{stat}"] = np.full(shape2d, np.nan, dtype=np.float32)
+
+        # Pass 1: per-channel noise → weights → good_chans
+        logger.info("Pass 1: estimating per-channel noise from I cube...")
+        noise_sum = np.zeros(n_freq, dtype=np.float64)
+        noise_sum2 = np.zeros(n_freq, dtype=np.float64)
+        n_pix_total = 0
+
+        for y0 in tqdm(range(0, n_dec, chunk_side), desc="Pass 1 (rows)", unit="row"):
+            y1 = min(y0 + chunk_side, n_dec)
+            for x0 in range(0, n_ra, chunk_side):
+                x1 = min(x0 + chunk_side, n_ra)
+                i_chunk = load_i_chunk(i_cube, y0, y1, x0, x1)
+                finite_i = np.where(np.isfinite(i_chunk), i_chunk, 0.0)
+                noise_sum += finite_i.sum(axis=(1, 2))
+                noise_sum2 += (finite_i**2).sum(axis=(1, 2))
+                n_pix_total += (y1 - y0) * (x1 - x0)
+
+        mean_i = noise_sum / n_pix_total
+        var_i = noise_sum2 / n_pix_total - mean_i**2
+        noise_per_chan = np.sqrt(np.maximum(var_i, 0.0))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            weights = np.where(noise_per_chan > 0, 1.0 / noise_per_chan**2, 0.0)
+        w_max = weights.max()
+        if w_max > 0:
+            weights /= w_max
+        good_chans = weights > 0
+        logger.info(f"Weights: {int((~good_chans).sum())}/{n_freq} channels flagged")
+
+        # Pass 2: collapsed I map for masking
+        logger.info("Pass 2: building I map for SNR masking...")
+        i_map = np.zeros(shape2d, dtype=np.float64)
+        i_count = np.zeros(shape2d, dtype=np.int32)
+
+        for y0 in tqdm(range(0, n_dec, chunk_side), desc="Pass 2 (rows)", unit="row"):
+            y1 = min(y0 + chunk_side, n_dec)
+            for x0 in range(0, n_ra, chunk_side):
+                x1 = min(x0 + chunk_side, n_ra)
+                i_chunk = load_i_chunk(i_cube, y0, y1, x0, x1)
+                finite = np.isfinite(i_chunk[good_chans])
+                i_map[y0:y1, x0:x1] += np.nanmean(i_chunk[good_chans], axis=0)
+                i_count[y0:y1, x0:x1] += 1
+
+        with np.errstate(invalid="ignore"):
+            i_map = np.where(i_count > 0, i_map / i_count, np.nan)
+
+        i_median = np.nanmedian(i_map)
+        sigma_i = 1.4826 * np.nanmedian(np.abs(i_map - i_median))
+        logger.info(f"I map noise (MAD): {sigma_i:.4f}")
+
+        valid = np.isfinite(i_map) & (i_map >= snr_threshold * sigma_i)
+        pixel_list = np.argwhere(valid)
+        n_valid = len(pixel_list)
+        logger.info(
+            f"Spectral cube inference: fitting {n_valid}/{n_dec * n_ra} pixels "
+            f"({100 * n_valid / (n_dec * n_ra):.1f}%)"
+        )
+
+        # Pass 3: per-pixel inference
+        for y0 in tqdm(range(0, n_dec, chunk_side), desc="Pass 3 (inference)", unit="row"):
+            y1 = min(y0 + chunk_side, n_dec)
+            for x0 in range(0, n_ra, chunk_side):
+                x1 = min(x0 + chunk_side, n_ra)
+                i_chunk = load_i_chunk(i_cube, y0, y1, x0, x1)
+
+                for dy in range(y1 - y0):
+                    for dx in range(x1 - x0):
+                        dec_idx = y0 + dy
+                        ra_idx = x0 + dx
+                        if not valid[dec_idx, ra_idx]:
+                            continue
+
+                        i_pix = i_chunk[:, dy, dx].copy().astype(np.float32)
+                        i_pix[~good_chans] = 0.0
+                        i_pix[~np.isfinite(i_pix)] = 0.0
+
+                        try:
+                            samples = self.infer_spectra(
+                                i_pix, weights=weights, n_samples=n_samples
+                            )
+                        except Exception as exc:
+                            logger.warning(f"Pixel ({dec_idx}, {ra_idx}) failed: {exc}")
+                            continue
+
+                        for pi, name in enumerate(param_names):
+                            col = samples[:, pi]
+                            results[f"{name}_mean"][dec_idx, ra_idx] = np.mean(col)
+                            results[f"{name}_std"][dec_idx, ra_idx] = np.std(col)
+                            results[f"{name}_p16"][dec_idx, ra_idx] = np.percentile(col, 16)
+                            results[f"{name}_p84"][dec_idx, ra_idx] = np.percentile(col, 84)
+
+        logger.info("Chunked spectral cube inference complete.")
+        return results

@@ -347,21 +347,35 @@ class SBITrainer:
                 dtype=np.float32,
             )
 
-            # Get noise percentage (with optional augmentation)
-            base_noise_percent = self.config.noise.base_percent
-            if self.config.noise.augmentation_enable:
-                # Vary noise percentage randomly for robustness
-                noise_percent = np.random.uniform(
-                    base_noise_percent * self.config.noise.augmentation_min_factor,
-                    base_noise_percent * self.config.noise.augmentation_max_factor,
+            # Get noise level (with optional augmentation)
+            if self.config.noise.mode == "additive":
+                if self.config.noise.augmentation_enable:
+                    noise_sigma = np.random.uniform(
+                        self.config.noise.sigma_min
+                        * self.config.noise.augmentation_min_factor,
+                        self.config.noise.sigma_max
+                        * self.config.noise.augmentation_max_factor,
+                    )
+                else:
+                    noise_sigma = (
+                        self.config.noise.sigma_min + self.config.noise.sigma_max
+                    ) / 2.0
+                chunk_x = simulator.simulate_batch(
+                    chunk_theta, chunk_weights, noise_sigma=noise_sigma
                 )
             else:
-                noise_percent = base_noise_percent
-
-            # Simulate with percentage-based noise
-            chunk_x = simulator.simulate_batch(
-                chunk_theta, chunk_weights, noise_percent
-            )
+                # Legacy percentage-based noise
+                base_noise_percent = self.config.noise.base_percent
+                if self.config.noise.augmentation_enable:
+                    noise_percent = np.random.uniform(
+                        base_noise_percent * self.config.noise.augmentation_min_factor,
+                        base_noise_percent * self.config.noise.augmentation_max_factor,
+                    )
+                else:
+                    noise_percent = base_noise_percent
+                chunk_x = simulator.simulate_batch(
+                    chunk_theta, chunk_weights, noise_percent
+                )
 
             # Save chunk to disk
             chunk_path = chunk_dir / f"chunk_{chunk_idx:04d}.pt"
@@ -689,31 +703,47 @@ def train_all_models(
     """
     results = {}
 
-    trainer = SBITrainer(config)
-    min_components = config.model_selection.min_components
-    max_components = config.model_selection.max_components
-    model_types = config.physics.model_types
-
-    n_models = len(model_types) * (max_components - min_components + 1)
-
     logger.info(f"\n{'=' * 60}")
     logger.info("VROOM-SBI TRAINING")
     logger.info(f"{'=' * 60}")
-    logger.info(f"Model types: {model_types}")
-    logger.info(f"Components: {min_components} to {max_components}")
-    logger.info(f"Total models: {n_models}")
+    logger.info(f"train_pol={config.training.train_pol}, train_spectra={config.training.train_spectra}")
 
     if not classifier_only:
-        # Train all posterior models
-        for model_type in model_types:
-            for n_comp in range(min_components, max_components + 1):
-                result = trainer.train_model(model_type, n_comp)
-                key = f"{model_type}_n{n_comp}"
-                results[key] = result
+        # Train polarization (Q/U) posterior models
+        if config.training.train_pol:
+            trainer = SBITrainer(config)
+            min_components = config.model_selection.min_components
+            max_components = config.model_selection.max_components
+            model_types = config.physics.model_types
+            n_models = len(model_types) * (max_components - min_components + 1)
+            logger.info(f"Model types: {model_types}")
+            logger.info(f"Components: {min_components} to {max_components}")
+            logger.info(f"Total pol models: {n_models}")
+            for model_type in model_types:
+                for n_comp in range(min_components, max_components + 1):
+                    result = trainer.train_model(model_type, n_comp)
+                    key = f"{model_type}_n{n_comp}"
+                    results[key] = result
 
-    # Train classifier if enabled
-    if config.model_selection.use_classifier:
+        # Train spectral shape (total intensity) model
+        if config.training.train_spectra:
+            from .spectral_trainer import SpectralShapeTrainer
+
+            logger.info(f"\n{'=' * 60}")
+            logger.info("Training Spectral Shape Model")
+            logger.info(f"{'=' * 60}")
+            spectra_trainer = SpectralShapeTrainer(config)
+            results["spectral_shape"] = spectra_trainer.train()
+
+    # Train classifier if enabled (pol models only)
+    if config.training.train_pol and config.model_selection.use_classifier and not (
+        config.training.train_spectra and not config.training.train_pol
+    ):
         from .classifier_trainer import train_classifier
+
+        min_components = config.model_selection.min_components
+        max_components = config.model_selection.max_components
+        model_types = config.physics.model_types
 
         logger.info(f"\n{'=' * 60}")
         logger.info("Training Model Selection Classifier")

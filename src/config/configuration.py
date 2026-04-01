@@ -107,9 +107,18 @@ class PriorConfig:
 
 @dataclass
 class NoiseConfig:
-    """Noise configuration for simulations (percentage-based)."""
+    """Noise configuration for simulations.
 
-    base_percent: float = 10.0  # 10% of signal amplitude
+    mode="additive"  (default) — fixed sigma per observation, physically motivated.
+    mode="percentage" — legacy sigma = noise_percent/100 * |P|.
+    """
+
+    # Additive noise mode (new default)
+    sigma_min: float = 0.001  # minimum additive noise std dev
+    sigma_max: float = 0.05   # maximum additive noise std dev
+    mode: str = "additive"    # "additive" or "percentage"
+    # Legacy percentage-based (kept for backward compat)
+    base_percent: float = 10.0
     augmentation_enable: bool = True
     augmentation_min_factor: float = 0.5
     augmentation_max_factor: float = 2.0
@@ -122,6 +131,27 @@ class HardwareConfig:
     vram_gb: float = 0.0  # 0 = auto-detect
     ram_gb: float = 0.0  # 0 = auto-detect
     num_workers: int = 0  # 0 = auto (cpu_cores / 2)
+
+
+@dataclass
+class SpectralShapeConfig:
+    """Prior bounds and noise settings for the spectral shape model.
+
+    Models: log F(ν) = log_F0 + alpha*x + beta*x^2 + gamma*x^3
+    where x = log(ν/ν₀), ν₀ = middle frequency.
+    """
+
+    log_F0_min: float = -3.0  # log flux at reference frequency (lower bound)
+    log_F0_max: float = 3.0
+    alpha_min: float = -3.0   # spectral index
+    alpha_max: float = 1.0
+    beta_min: float = -1.0    # spectral curvature
+    beta_max: float = 1.0
+    gamma_min: float = -0.5   # third-order curvature
+    gamma_max: float = 0.5
+    # Additive noise range for this model
+    sigma_min: float = 0.001
+    sigma_max: float = 0.05
 
 
 @dataclass
@@ -140,6 +170,10 @@ class TrainingConfig:
     training_batch_size: int = 1024  # Mini-batch size for GPU training
     stop_after_epochs: int = 20
     validation_fraction: float = 0.1
+
+    # What to train
+    train_pol: bool = True      # train RM / polarization models (Q/U)
+    train_spectra: bool = False  # train spectral shape model (total intensity)
 
     # Output settings
     device: str = "cuda"
@@ -277,6 +311,7 @@ class Configuration:
     weight_augmentation: WeightAugmentationConfig = field(
         default_factory=WeightAugmentationConfig
     )
+    spectral_shape: SpectralShapeConfig = field(default_factory=SpectralShapeConfig)
 
     @classmethod
     def from_yaml(cls, config_path: str) -> "Configuration":
@@ -313,6 +348,9 @@ class Configuration:
         noise_raw = raw.get("noise", {})
         aug_raw = noise_raw.get("augmentation", {})
         noise = NoiseConfig(
+            sigma_min=float(noise_raw.get("sigma_min", 0.001)),
+            sigma_max=float(noise_raw.get("sigma_max", 0.05)),
+            mode=str(noise_raw.get("mode", "additive")),
             base_percent=float(noise_raw.get("base_percent", 10.0)),
             augmentation_enable=bool(aug_raw.get("enable", True)),
             augmentation_min_factor=float(aug_raw.get("min_factor", 0.5)),
@@ -349,6 +387,8 @@ class Configuration:
             training_batch_size=int(train_raw.get("training_batch_size", 1024)),
             stop_after_epochs=int(train_raw.get("stop_after_epochs", 20)),
             validation_fraction=float(train_raw.get("validation_fraction", 0.1)),
+            train_pol=bool(train_raw.get("train_pol", True)),
+            train_spectra=bool(train_raw.get("train_spectra", False)),
             device=str(train_raw.get("device", "cuda")),
             save_dir=str(train_raw.get("save_dir", "models")),
         )
@@ -429,6 +469,21 @@ class Configuration:
             noise_variation=bool(wa_raw.get("noise_variation", True)),
         )
 
+        # Extract spectral shape config
+        ss_raw = raw.get("spectral_shape", {})
+        spectral_shape = SpectralShapeConfig(
+            log_F0_min=float(ss_raw.get("log_F0_min", -3.0)),
+            log_F0_max=float(ss_raw.get("log_F0_max", 3.0)),
+            alpha_min=float(ss_raw.get("alpha_min", -3.0)),
+            alpha_max=float(ss_raw.get("alpha_max", 1.0)),
+            beta_min=float(ss_raw.get("beta_min", -1.0)),
+            beta_max=float(ss_raw.get("beta_max", 1.0)),
+            gamma_min=float(ss_raw.get("gamma_min", -0.5)),
+            gamma_max=float(ss_raw.get("gamma_max", 0.5)),
+            sigma_min=float(ss_raw.get("sigma_min", 0.001)),
+            sigma_max=float(ss_raw.get("sigma_max", 0.05)),
+        )
+
         return cls(
             freq_file=str(raw.get("freq_file", "freq.txt")),
             priors=priors,
@@ -441,6 +496,7 @@ class Configuration:
             sbi=sbi,
             classifier=classifier,
             weight_augmentation=weight_aug,
+            spectral_shape=spectral_shape,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -461,6 +517,9 @@ class Configuration:
                 },
             },
             "noise": {
+                "mode": self.noise.mode,
+                "sigma_min": self.noise.sigma_min,
+                "sigma_max": self.noise.sigma_max,
                 "base_percent": self.noise.base_percent,
                 "augmentation": {
                     "enable": self.noise.augmentation_enable,
@@ -477,9 +536,23 @@ class Configuration:
                 "training_batch_size": self.training.training_batch_size,
                 "learning_rate": self.training.learning_rate,
                 "stop_after_epochs": self.training.stop_after_epochs,
+                "train_pol": self.training.train_pol,
+                "train_spectra": self.training.train_spectra,
                 "device": self.training.device,
                 "validation_fraction": self.training.validation_fraction,
                 "save_dir": self.training.save_dir,
+            },
+            "spectral_shape": {
+                "log_F0_min": self.spectral_shape.log_F0_min,
+                "log_F0_max": self.spectral_shape.log_F0_max,
+                "alpha_min": self.spectral_shape.alpha_min,
+                "alpha_max": self.spectral_shape.alpha_max,
+                "beta_min": self.spectral_shape.beta_min,
+                "beta_max": self.spectral_shape.beta_max,
+                "gamma_min": self.spectral_shape.gamma_min,
+                "gamma_max": self.spectral_shape.gamma_max,
+                "sigma_min": self.spectral_shape.sigma_min,
+                "sigma_max": self.spectral_shape.sigma_max,
             },
             "hardware": {
                 "vram_gb": self.hardware.vram_gb,
