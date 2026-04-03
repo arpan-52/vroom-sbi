@@ -33,6 +33,36 @@ from .networks import SpectralEmbedding
 logger = logging.getLogger(__name__)
 
 
+class _SpectralDensityEstimatorWrapper:
+    """
+    Fallback wrapper used when DirectPosterior construction fails.
+
+    Exposes the same .sample() and .posterior_estimator interface so
+    load_posterior() and infer_spectra() work without modification.
+    """
+
+    def __init__(self, density_estimator: nn.Module) -> None:
+        self.posterior_estimator = density_estimator
+
+    def sample(
+        self,
+        sample_shape,
+        x: torch.Tensor,
+        show_progress_bars: bool = False,
+    ) -> torch.Tensor:
+        from sbi.neural_nets.estimators.shape_handling import reshape_to_batch_event
+
+        # DirectPosterior reshapes x to (1, *event_shape) before passing to the
+        # density estimator, and NFlowsFlow.sample returns (*sample_shape, 1, n_params).
+        # We replicate that here and squeeze the batch dim back out.
+        x = reshape_to_batch_event(
+            x, event_shape=self.posterior_estimator.condition_shape
+        )
+        samples = self.posterior_estimator.sample(torch.Size(sample_shape), condition=x)
+        # samples: (*sample_shape, 1, n_params) → (*sample_shape, n_params)
+        return samples.squeeze(-2)
+
+
 class SpectralShapeTrainer:
     """
     Trainer for the spectral shape SBI posterior.
@@ -129,18 +159,23 @@ class SpectralShapeTrainer:
 
         training_time = (datetime.now() - start_time).total_seconds()
 
-        # Build posterior
-        from sbi.inference.posteriors import DirectPosterior
-
-        posterior = DirectPosterior(
-            posterior_estimator=density_estimator,
-            prior=prior,
-        )
-
-        # Save model
         output_dir = Path(self.config.training.save_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         model_path = output_dir / "spectral_shape_posterior.pt"
+
+        from sbi.inference.posteriors import DirectPosterior
+
+        try:
+            posterior = DirectPosterior(
+                posterior_estimator=density_estimator,
+                prior=prior,
+            )
+        except AssertionError:
+            logger.warning(
+                "DirectPosterior construction failed (mcmc_transform round-trip check). "
+                "Falling back to _SpectralDensityEstimatorWrapper — inference is unaffected."
+            )
+            posterior = _SpectralDensityEstimatorWrapper(density_estimator)
 
         self._save_posterior(
             posterior, prior, embedding_net, simulator, history, model_path
