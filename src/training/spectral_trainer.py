@@ -278,6 +278,13 @@ class SpectralShapeTrainer:
                 chunk_theta, chunk_weights, noise_sigma=noise_sigma
             )
 
+            # Mean-normalize: divide each spectrum by its mean over good channels
+            # so log_F0 ≈ 0 regardless of absolute flux → prior is scale-invariant
+            good_mask = chunk_weights > 0  # (batch, n_freq)
+            mean_I = np.where(good_mask, chunk_x, np.nan)
+            mean_I = np.nanmean(mean_I, axis=1, keepdims=True)  # (batch, 1)
+            chunk_x = np.where(good_mask, chunk_x / mean_I, 0.0)
+
             chunk_path = chunk_dir / f"chunk_{ci:04d}.pt"
             torch.save(
                 {

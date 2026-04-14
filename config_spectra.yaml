@@ -24,8 +24,8 @@ noise:
 # =============================================================================
 
 spectral_shape:
-  log_F0_min: -3.0    # log flux at reference frequency
-  log_F0_max: 3.0
+  log_F0_min: -0.3    # log of mean-normalised flux at ν₀ (≈0 by construction)
+  log_F0_max:  0.3
   alpha_min: -3.0     # spectral index
   alpha_max: 1.0
   beta_min: -1.0      # curvature

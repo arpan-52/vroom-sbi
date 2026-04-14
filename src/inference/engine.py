@@ -961,10 +961,17 @@ class InferenceEngine(InferenceEngineInterface):
         else:
             obs[~np.isfinite(obs)] = 0.0
 
+        # Mean-normalize matching training: divide by mean over good channels
+        good = obs != 0.0
+        mean_I = float(obs[good].mean()) if good.any() else 1.0
+        obs = obs / mean_I
+
         x_t = torch.tensor(obs, dtype=torch.float32, device=self.device)
         posterior = self.posteriors["spectral_shape"]
         samples = posterior.sample((n_samples,), x=x_t)
-        return samples.cpu().numpy()
+        # Return mean_I as second element so caller can reconstruct absolute I_model:
+        #   I_model(ν) = exp(log_F0 + α·x + β·x² + γ·x³) × mean_I
+        return samples.detach().cpu().numpy(), mean_I
 
     def run_spectral_shape_cube(
         self,

@@ -66,3 +66,15 @@ Thumbs.db
 # Data files (optional - uncomment if needed)
 # *.fits
 # *.csv
+# Added by code-review-graph
+.code-review-graph/
+
+# Agentic / AI assistant files
+.claude/
+.cursorrules
+.mcp.json
+.opencode.json
+.windsurfrules
+AGENTS.md
+CLAUDE.md
+GEMINI.md
