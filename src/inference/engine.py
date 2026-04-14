@@ -167,6 +167,32 @@ class InferenceEngine(InferenceEngineInterface):
         """Get posterior for given configuration."""
         return self.posteriors.get(f"{model_type}_n{n_components}")
 
+    def _get_input_channels(self, key: str) -> int:
+        """Return expected input channels (2 or 3) for a model key."""
+        meta = self.posterior_metadata.get(key, {})
+        return int(meta.get("input_channels", 2))
+
+    def _build_observation(
+        self, qu_obs: np.ndarray, weights: np.ndarray | None, key: str
+    ) -> np.ndarray:
+        """
+        Build the observation vector for the posterior.
+
+        For new 3-channel models ([Q, U, w]): append per-channel weights.
+        For legacy 2-channel models ([Q, U]):  return qu_obs unchanged.
+        Weights are clipped to [0,1] and zero where flagged.
+        """
+        n_chan = self._get_input_channels(key)
+        if n_chan == 3:
+            n_freq = len(qu_obs) // 2
+            if weights is not None and len(weights) >= n_freq:
+                w = np.clip(weights[:n_freq], 0.0, 1.0).astype(np.float32)
+            else:
+                # No weights provided — assume all good channels equally weighted
+                w = (np.abs(qu_obs[:n_freq]) > 0).astype(np.float32)
+            return np.concatenate([qu_obs, w])
+        return qu_obs
+
     def run_inference(
         self,
         qu_obs: np.ndarray,
@@ -177,7 +203,7 @@ class InferenceEngine(InferenceEngineInterface):
     ) -> tuple[dict[str, InferenceResult], str]:
         """Run inference on observed spectrum."""
         start_time = datetime.now()
-        qu_obs_t = torch.tensor(qu_obs, dtype=torch.float32, device=self.device)
+        # qu_obs_t built per-key below (may append weights for 3-ch models)
 
         if use_classifier and self.classifier is not None:
             classifier_result = self._run_classifier(qu_obs, weights)
@@ -202,6 +228,10 @@ class InferenceEngine(InferenceEngineInterface):
             n_components = int(key.rsplit("_n", 1)[1])
 
             logger.debug(f"Running inference for {key}...")
+
+            # Build per-key observation (appends weights for 3-channel models)
+            obs = self._build_observation(qu_obs, weights, key)
+            qu_obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device)
 
             samples = posterior.sample((n_samples,), x=qu_obs_t)
             samples_np = samples.cpu().numpy()

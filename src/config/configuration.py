@@ -287,6 +287,9 @@ class WeightAugmentationConfig:
     gap_prob: float = 0.3
     large_block_prob: float = 0.1
     noise_variation: bool = True
+    # Continuous per-channel weights (new scheme)
+    continuous_weights: bool = True   # if True, weights are lognormal [w_min, 1]
+    w_min: float = 0.001              # minimum weight for surviving channels
 
 
 @dataclass
@@ -467,6 +470,8 @@ class Configuration:
             gap_prob=float(wa_raw.get("gap_prob", 0.3)),
             large_block_prob=float(wa_raw.get("large_block_prob", 0.1)),
             noise_variation=bool(wa_raw.get("noise_variation", True)),
+            continuous_weights=bool(wa_raw.get("continuous_weights", True)),
+            w_min=float(wa_raw.get("w_min", 0.001)),
         )
 
         # Extract spectral shape config

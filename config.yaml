@@ -47,15 +47,17 @@ priors:
 # =============================================================================
 # NOISE CONFIGURATION
 # =============================================================================
-# Noise as percentage of signal amplitude
-# sigma = noise_percent/100 * |P| at each channel
+# Additive per-channel noise: sigma_k = sigma_base / sqrt(w_k)
+# sigma_base is drawn uniformly from [sigma_min*min_factor, sigma_max*max_factor]
 
 noise:
-  base_percent: 10.0      # 10% noise relative to signal amplitude
+  mode: "additive"        # additive sigma (physically motivated)
+  sigma_min: 0.001        # minimum base noise std dev
+  sigma_max: 0.05         # maximum base noise std dev
   augmentation:
     enable: true
-    min_factor: 0.5       # Minimum: 5% noise (0.5 × 10%)
-    max_factor: 2.0       # Maximum: 20% noise (2.0 × 10%)
+    min_factor: 0.5       # draw sigma_base >= sigma_min * 0.5
+    max_factor: 2.0       # draw sigma_base <= sigma_max * 2.0
 
 # =============================================================================
 # TRAINING SETTINGS
@@ -116,7 +118,9 @@ weight_augmentation:
   scattered_prob: 0.3     # Probability of scattered missing channels
   gap_prob: 0.3           # Probability of contiguous gaps
   large_block_prob: 0.1   # Probability of large RFI blocks
-  noise_variation: true   # Add noise variation to weights
+  noise_variation: true   # Add noise variation to weights (legacy binary mode)
+  continuous_weights: true  # Use lognormal continuous weights in [w_min, 1]
+  w_min: 0.001              # Minimum weight for surviving channels
 
 # =============================================================================
 # CLASSIFIER (Model Selection)

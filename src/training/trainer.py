@@ -31,7 +31,7 @@ from ..config import Configuration
 from ..core.checkpoint import CheckpointManager, save_training_plots
 from ..core.result import TrainingMetrics, TrainingResult
 from ..simulator import RMSimulator, build_prior, sample_prior
-from ..simulator.augmentation import augment_weights_combined
+from ..simulator.augmentation import augment_weights_combined, augment_weights_continuous
 from .networks import SpectralEmbedding
 
 logger = logging.getLogger(__name__)
@@ -152,8 +152,9 @@ class SBITrainer:
         # PHASE 2: Train on chunks
         # ============================================================
 
-        # Build embedding network
-        input_dim = 2 * simulator.n_freq
+        # Build embedding network — 3 channels: [Q/I, U/I, weights]
+        use_weights = getattr(self.config.weight_augmentation, "continuous_weights", True)
+        input_dim = 3 * simulator.n_freq if use_weights else 2 * simulator.n_freq
         embedding_dim = self.config.sbi.embedding_dim
         embedding_net = SpectralEmbedding(
             input_dim=input_dim,
@@ -332,36 +333,79 @@ class SBITrainer:
                 this_chunk_size, n_components, flat_priors, model_type=model_type
             )
 
-            # Generate augmented weights
-            chunk_weights = np.array(
-                [
-                    augment_weights_combined(
-                        simulator.weights,
-                        scattered_prob=self.config.weight_augmentation.scattered_prob,
-                        gap_prob=self.config.weight_augmentation.gap_prob,
-                        large_block_prob=self.config.weight_augmentation.large_block_prob,
-                        noise_variation=self.config.weight_augmentation.noise_variation,
-                    )
-                    for _ in range(this_chunk_size)
-                ],
-                dtype=np.float32,
-            )
+            # Generate augmented weights — continuous or binary
+            wa = self.config.weight_augmentation
+            use_cont = getattr(wa, "continuous_weights", True)
+            w_min = getattr(wa, "w_min", 0.001)
 
-            # Get noise level (with optional augmentation)
-            if self.config.noise.mode == "additive":
-                if self.config.noise.augmentation_enable:
-                    noise_sigma = np.random.uniform(
-                        self.config.noise.sigma_min
-                        * self.config.noise.augmentation_min_factor,
-                        self.config.noise.sigma_max
-                        * self.config.noise.augmentation_max_factor,
-                    )
-                else:
-                    noise_sigma = (
-                        self.config.noise.sigma_min + self.config.noise.sigma_max
-                    ) / 2.0
+            if use_cont:
+                chunk_weights = np.array(
+                    [
+                        augment_weights_continuous(
+                            simulator.weights,
+                            w_min=w_min,
+                            scattered_prob=wa.scattered_prob,
+                            gap_prob=wa.gap_prob,
+                            large_block_prob=wa.large_block_prob,
+                        )
+                        for _ in range(this_chunk_size)
+                    ],
+                    dtype=np.float32,
+                )
+            else:
+                chunk_weights = np.array(
+                    [
+                        augment_weights_combined(
+                            simulator.weights,
+                            scattered_prob=wa.scattered_prob,
+                            gap_prob=wa.gap_prob,
+                            large_block_prob=wa.large_block_prob,
+                            noise_variation=wa.noise_variation,
+                        )
+                        for _ in range(this_chunk_size)
+                    ],
+                    dtype=np.float32,
+                )
+
+            # Draw base noise sigma
+            if self.config.noise.augmentation_enable:
+                sigma_base = np.random.uniform(
+                    self.config.noise.sigma_min * self.config.noise.augmentation_min_factor,
+                    self.config.noise.sigma_max * self.config.noise.augmentation_max_factor,
+                )
+            else:
+                sigma_base = (self.config.noise.sigma_min + self.config.noise.sigma_max) / 2.0
+
+            if use_cont:
+                # Per-channel additive noise: sigma_k = sigma_base / sqrt(w_k)
+                # Low-weight channels are noisier; zero-weight channels stay zero.
+                good_mask = chunk_weights > 0  # (batch, n_freq)
+                sigma_per_chan = np.where(
+                    good_mask,
+                    sigma_base / np.sqrt(chunk_weights + 1e-12),
+                    0.0,
+                )  # (batch, n_freq)
+
+                # Simulate noiseless Q, U then add per-channel noise
+                qu_noiseless = simulator.simulate_batch(
+                    chunk_theta,
+                    (chunk_weights > 0).astype(np.float32),
+                    noise_sigma=0.0,
+                )  # (batch, 2*n_freq)
+                Q_nl = qu_noiseless[:, :n_freq]
+                U_nl = qu_noiseless[:, n_freq:]
+
+                noise_Q = np.random.normal(0, 1, (this_chunk_size, n_freq)) * sigma_per_chan
+                noise_U = np.random.normal(0, 1, (this_chunk_size, n_freq)) * sigma_per_chan
+                Q_obs = np.where(good_mask, Q_nl + noise_Q, 0.0)
+                U_obs = np.where(good_mask, U_nl + noise_U, 0.0)
+
+                # Observation = [Q, U, weights] — weights carry noise quality info
+                chunk_x = np.hstack([Q_obs, U_obs, chunk_weights]).astype(np.float32)
+
+            elif self.config.noise.mode == "additive":
                 chunk_x = simulator.simulate_batch(
-                    chunk_theta, chunk_weights, noise_sigma=noise_sigma
+                    chunk_theta, chunk_weights, noise_sigma=sigma_base
                 )
             else:
                 # Legacy percentage-based noise
@@ -631,12 +675,14 @@ class SBITrainer:
                 "high": high.tolist(),
             }
 
+        use_cont = getattr(self.config.weight_augmentation, "continuous_weights", True)
         save_dict = {
             # Model info
             "model_type": model_type,
             "n_components": n_components,
             "n_params": simulator.n_params,
             "n_freq": simulator.n_freq,
+            "input_channels": 3 if use_cont else 2,  # 3 = [Q, U, weights]
             "params_per_comp": simulator.params_per_comp,
             "param_names": simulator.get_param_names(),  # Save parameter names
             # Network states

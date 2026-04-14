@@ -190,6 +190,54 @@ def augment_weights_combined(
     return aug_weights
 
 
+def augment_weights_continuous(
+    weights: np.ndarray,
+    w_min: float = 0.001,
+    scattered_prob: float = 0.3,
+    gap_prob: float = 0.3,
+    large_block_prob: float = 0.1,
+) -> np.ndarray:
+    """
+    Generate continuous per-channel weights in [w_min, 1].
+
+    Step 1: apply binary RFI flagging (same as augment_weights_combined).
+    Step 2: assign lognormal quality weights to surviving channels so the
+            network sees realistic per-channel noise variation, not just
+            binary present/absent.
+
+    Parameters
+    ----------
+    weights : np.ndarray
+        Base channel weights (1=good, 0=flagged).
+    w_min : float
+        Minimum weight for surviving channels (sets max noise inflation).
+    scattered_prob, gap_prob, large_block_prob : float
+        RFI flagging probabilities (same as augment_weights_combined).
+
+    Returns
+    -------
+    np.ndarray
+        Weights in [0, 1]: 0 for flagged, lognormal in [w_min, 1] for good.
+    """
+    aug = weights.copy()
+
+    # Step 1: binary flagging
+    if np.random.random() < scattered_prob:
+        aug = augment_weights_scattered(aug, missing_prob=0.1)
+    if np.random.random() < gap_prob:
+        aug = augment_weights_contiguous_gap(aug)
+    if np.random.random() < large_block_prob:
+        aug = augment_weights_large_rfi_block(aug)
+
+    # Step 2: lognormal continuous quality for surviving channels
+    good = aug > 0
+    if good.any():
+        log_w = np.random.uniform(np.log(w_min), 0.0, int(good.sum()))
+        aug[good] = np.exp(log_w)
+
+    return aug
+
+
 def generate_augmented_weights_batch(
     base_weights: np.ndarray, batch_size: int, **kwargs
 ) -> np.ndarray:
