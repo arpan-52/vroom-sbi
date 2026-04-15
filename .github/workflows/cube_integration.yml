@@ -1,0 +1,36 @@
+name: Cube Integration Tests
+
+on:
+  push:
+    branches: [main, spectral_cube]
+    paths:
+      - 'src/io/**'
+      - 'src/inference/engine.py'
+      - 'src/cli/main.py'
+      - 'tests/test_cube_io.py'
+      - 'tests/test_cube_inference.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - '.github/workflows/cube_integration.yml'
+  pull_request:
+    branches: [main]
+
+jobs:
+  cube-integration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pixi
+        uses: prefix-dev/setup-pixi@v0.8.0
+        with:
+          pixi-version: v0.41.4
+          environments: cube-dev
+          cache: true
+
+      - name: Run cube I/O tests
+        run: pixi run -e cube-dev pytest tests/test_cube_io.py -v --tb=short
+
+      - name: Run cube inference tests
+        run: pixi run -e cube-dev pytest tests/test_cube_inference.py -v --tb=short

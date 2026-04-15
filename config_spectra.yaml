@@ -1,0 +1,89 @@
+# =============================================================================
+# VROOM-SBI — Spectral Shape Training Config
+# Trains log F(ν) = log_F0 + α·x + β·x² + γ·x³, x = log(ν/ν₀)
+# =============================================================================
+
+freq_file: "freq.txt"
+
+# =============================================================================
+# NOISE — additive (physically motivated)
+# =============================================================================
+
+noise:
+  mode: "additive"
+  sigma_min: 0.001    # minimum additive noise std dev
+  sigma_max: 0.05     # maximum additive noise std dev
+  augmentation:
+    enable: true
+    min_factor: 0.5
+    max_factor: 2.0
+
+# =============================================================================
+# SPECTRAL SHAPE PRIOR
+# Parameters: [log_F0, alpha, beta, gamma]
+# =============================================================================
+
+spectral_shape:
+  log_F0_min: -0.3    # log of mean-normalised flux at ν₀ (≈0 by construction)
+  log_F0_max:  0.3
+  alpha_min: -3.0     # spectral index
+  alpha_max: 1.0
+  beta_min: -1.0      # curvature
+  beta_max: 1.0
+  gamma_min: -0.5     # third-order
+  gamma_max: 0.5
+  sigma_min: 0.001    # additive noise range for this model
+  sigma_max: 0.05
+
+# =============================================================================
+# TRAINING
+# =============================================================================
+
+training:
+  n_simulations: 50000
+  simulation_batch_size: 10000
+  training_batch_size: 1024
+  learning_rate: 0.0005
+  validation_fraction: 0.1
+  stop_after_epochs: 20
+  train_pol: false      # skip RM/polarization models
+  train_spectra: true   # train spectral shape model
+  device: "cuda"
+  save_dir: "models"
+
+# =============================================================================
+# WEIGHT AUGMENTATION (same as pol training)
+# =============================================================================
+
+weight_augmentation:
+  enable: true
+  scattered_prob: 0.3
+  gap_prob: 0.3
+  large_block_prob: 0.1
+  noise_variation: true
+
+# =============================================================================
+# SBI ARCHITECTURE
+# =============================================================================
+
+sbi:
+  model: "nsf"
+  num_bins: 16
+  embedding_dim: 64
+  architecture_scaling:
+    1:
+      hidden_features: 256
+      num_transforms: 15
+
+# =============================================================================
+# Unused sections (required by Configuration.from_dict defaults)
+# =============================================================================
+
+model_selection:
+  min_components: 1
+  max_components: 1
+  use_classifier: false
+
+physics:
+  model_types:
+    - "faraday_thin"
