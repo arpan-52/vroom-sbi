@@ -336,14 +336,16 @@ class SBITrainer:
             # Generate augmented weights — continuous or binary
             wa = self.config.weight_augmentation
             use_cont = getattr(wa, "continuous_weights", True)
-            w_min = getattr(wa, "w_min", 0.001)
+            noise_ratio_min = getattr(wa, "noise_ratio_min", 2.0)
+            noise_ratio_max = getattr(wa, "noise_ratio_max", 300.0)
 
             if use_cont:
                 chunk_weights = np.array(
                     [
                         augment_weights_continuous(
                             simulator.weights,
-                            w_min=w_min,
+                            noise_ratio_min=noise_ratio_min,
+                            noise_ratio_max=noise_ratio_max,
                             scattered_prob=wa.scattered_prob,
                             gap_prob=wa.gap_prob,
                             large_block_prob=wa.large_block_prob,
