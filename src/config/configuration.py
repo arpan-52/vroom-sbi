@@ -170,6 +170,8 @@ class TrainingConfig:
     training_batch_size: int = 1024  # Mini-batch size for GPU training
     stop_after_epochs: int = 20
     validation_fraction: float = 0.1
+    risk_alpha: float = 0.0        # Weight on posterior-mean MSE risk term (0 = disabled)
+    risk_n_samples: int = 32       # Posterior samples used to estimate mean for risk
 
     # What to train
     train_pol: bool = True      # train RM / polarization models (Q/U)
@@ -390,6 +392,8 @@ class Configuration:
             training_batch_size=int(train_raw.get("training_batch_size", 1024)),
             stop_after_epochs=int(train_raw.get("stop_after_epochs", 20)),
             validation_fraction=float(train_raw.get("validation_fraction", 0.1)),
+            risk_alpha=float(train_raw.get("risk_alpha", 0.0)),
+            risk_n_samples=int(train_raw.get("risk_n_samples", 32)),
             train_pol=bool(train_raw.get("train_pol", True)),
             train_spectra=bool(train_raw.get("train_spectra", False)),
             device=str(train_raw.get("device", "cuda")),
@@ -541,6 +545,8 @@ class Configuration:
                 "training_batch_size": self.training.training_batch_size,
                 "learning_rate": self.training.learning_rate,
                 "stop_after_epochs": self.training.stop_after_epochs,
+                "risk_alpha": self.training.risk_alpha,
+                "risk_n_samples": self.training.risk_n_samples,
                 "train_pol": self.training.train_pol,
                 "train_spectra": self.training.train_spectra,
                 "device": self.training.device,

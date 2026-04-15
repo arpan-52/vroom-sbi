@@ -173,10 +173,14 @@ class SBITrainer:
         learning_rate = self.config.training.learning_rate
         training_batch_size = self.config.training.training_batch_size
         stop_after_epochs = self.config.training.stop_after_epochs
+        risk_alpha = self.config.training.risk_alpha
+        risk_n_samples = self.config.training.risk_n_samples
 
         logger.info(
             f"Training: batch_size={training_batch_size}, lr={learning_rate}, patience={stop_after_epochs}"
         )
+        if risk_alpha > 0:
+            logger.info(f"Risk term: alpha={risk_alpha}, n_samples={risk_n_samples}")
 
         # Train on chunks
         start_time = datetime.now()
@@ -190,6 +194,8 @@ class SBITrainer:
             training_batch_size=training_batch_size,
             stop_after_epochs=stop_after_epochs,
             validation_fraction=self.config.training.validation_fraction,
+            risk_alpha=risk_alpha,
+            risk_n_samples=risk_n_samples,
         )
 
         training_time = (datetime.now() - start_time).total_seconds()
@@ -468,6 +474,8 @@ class SBITrainer:
         training_batch_size: int,
         stop_after_epochs: int,
         validation_fraction: float,
+        risk_alpha: float = 0.0,
+        risk_n_samples: int = 32,
     ) -> tuple:
         """
         Train on chunked .pt files using custom streaming training.
@@ -505,6 +513,8 @@ class SBITrainer:
             stop_after_epochs=stop_after_epochs,
             clip_grad_norm=5.0,
             show_progress=True,
+            risk_alpha=risk_alpha,
+            risk_n_samples=risk_n_samples,
         )
 
         # Store the trainer for building posterior later

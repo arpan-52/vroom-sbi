@@ -197,6 +197,7 @@ class StreamingNPETrainer:
             "train_loss": [],
             "val_loss": [],
             "learning_rates": [],
+            "risk_loss": [],    # posterior-mean MSE per epoch (0.0 when risk_alpha=0)
         }
 
     def build_density_estimator(
@@ -310,6 +311,8 @@ class StreamingNPETrainer:
         stop_after_epochs: int = 20,
         clip_grad_norm: float | None = 5.0,
         show_progress: bool = True,
+        risk_alpha: float = 0.0,
+        risk_n_samples: int = 32,
     ) -> tuple[nn.Module, dict[str, list[float]]]:
         """
         Train NPE with async chunk streaming.
@@ -350,6 +353,13 @@ class StreamingNPETrainer:
             Gradient clipping (None to disable)
         show_progress : bool
             Show progress bars
+        risk_alpha : float
+            Weight on the posterior-mean MSE risk term.  0 = disabled (pure NLL).
+            Adds ``alpha * E[||E_q[theta|x] - theta_true||^2]`` to the loss.
+            Directly penalises bias in the posterior mean.  Start with 0.1–0.5.
+        risk_n_samples : int
+            Number of flow samples used to estimate the posterior mean each step.
+            32 is cheap; increase to 64–128 for a less noisy gradient estimate.
 
         Returns
         -------
@@ -466,6 +476,8 @@ class StreamingNPETrainer:
         logger.info(f"  Max epochs: {max_epochs}, Patience: {stop_after_epochs}")
         logger.info(f"  Batch size: {training_batch_size}, LR: {learning_rate}")
         logger.info(f"  Device: {self.device}")
+        if risk_alpha > 0:
+            logger.info(f"  Risk term: alpha={risk_alpha}, n_samples={risk_n_samples}")
 
         # ================================================================
         # Step 4: Training loop with async chunk streaming
@@ -476,6 +488,7 @@ class StreamingNPETrainer:
             # ----------------------------------------------------------
             self.density_estimator.train()
             train_loss_sum = 0.0
+            risk_loss_sum  = 0.0
             n_train_samples = 0
 
             # Create async streamer for this epoch
@@ -499,9 +512,26 @@ class StreamingNPETrainer:
             for theta_batch, x_batch in pbar:
                 optimizer.zero_grad()
 
-                # Forward pass
+                # Forward pass — NLL loss
                 losses = self.density_estimator.loss(theta_batch, condition=x_batch)
                 loss = losses.mean()
+
+                # Risk term: penalise bias in the posterior mean
+                # E_q[theta|x] ≈ mean of flow samples; MSE vs true theta penalises bias.
+                # Samples drawn without grad so only the flow parameters that shift
+                # the mean receive a gradient through the NLL path.
+                if risk_alpha > 0:
+                    self.density_estimator.eval()
+                    with torch.no_grad():
+                        # sample: (risk_n_samples, batch, n_params)
+                        samp = self.density_estimator.sample(
+                            (risk_n_samples,), condition=x_batch
+                        )
+                    self.density_estimator.train()
+                    theta_mean_est = samp.mean(dim=0)          # (batch, n_params)
+                    risk_loss = ((theta_mean_est - theta_batch) ** 2).mean()
+                    loss = loss + risk_alpha * risk_loss
+                    risk_loss_sum += risk_loss.item() * len(losses)
 
                 # Backward pass
                 loss.backward()
@@ -519,9 +549,10 @@ class StreamingNPETrainer:
                 pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
             train_loss = train_loss_sum / n_train_samples
+            epoch_risk  = risk_loss_sum / n_train_samples if risk_alpha > 0 else 0.0
 
             # ----------------------------------------------------------
-            # Validation phase
+            # Validation phase  (pure NLL — no risk term so val is comparable)
             # ----------------------------------------------------------
             val_loss = self._compute_validation_loss(val_chunks, training_batch_size)
 
@@ -533,8 +564,9 @@ class StreamingNPETrainer:
             self.training_history["learning_rates"].append(
                 optimizer.param_groups[0]["lr"]
             )
+            self.training_history["risk_loss"].append(epoch_risk)
 
-            # LR scheduling
+            # LR scheduling (on val NLL so LR decay is unaffected by risk scale)
             scheduler.step(val_loss)
 
             # ----------------------------------------------------------
@@ -547,9 +579,11 @@ class StreamingNPETrainer:
             else:
                 epochs_without_improvement += 1
 
+            risk_str = f", risk={epoch_risk:.4f}" if risk_alpha > 0 else ""
             logger.info(
                 f"Epoch {epoch + 1}: train={train_loss:.4f}, val={val_loss:.4f}, "
                 f"best={best_val_loss:.4f}, patience={epochs_without_improvement}/{stop_after_epochs}"
+                f"{risk_str}"
             )
 
             if epochs_without_improvement >= stop_after_epochs:
