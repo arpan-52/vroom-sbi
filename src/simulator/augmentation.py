@@ -192,32 +192,43 @@ def augment_weights_combined(
 
 def augment_weights_continuous(
     weights: np.ndarray,
-    w_min: float = 0.001,
+    noise_ratio_min: float = 2.0,
+    noise_ratio_max: float = 300.0,
     scattered_prob: float = 0.3,
     gap_prob: float = 0.3,
     large_block_prob: float = 0.1,
 ) -> np.ndarray:
     """
-    Generate continuous per-channel weights in [w_min, 1].
+    Generate continuous per-channel weights using the same formula as inference.
 
-    Step 1: apply binary RFI flagging (same as augment_weights_combined).
-    Step 2: assign lognormal quality weights to surviving channels so the
-            network sees realistic per-channel noise variation, not just
-            binary present/absent.
+    Mirrors the inference weight equation:
+        w_k = min(1, (sigma_median / sigma_k)^2)
+
+    Step 1: apply binary RFI flagging.
+    Step 2: sample a realistic per-channel noise profile by drawing a noise
+            ratio R ~ LogUniform[noise_ratio_min, noise_ratio_max], then
+            assigning sigma_k ~ LogUniform[1, R] per surviving channel.
+    Step 3: compute w_k = min(1, (sigma_median / sigma_k)^2).
+
+    This means:
+    - R~2   (nearly uniform noise): most w_k close to 1
+    - R~74  (like G71): ~50% at w=1, rest down to ~0.14
+    - R~300 (very variable): large spread, some channels near 0.01
 
     Parameters
     ----------
     weights : np.ndarray
         Base channel weights (1=good, 0=flagged).
-    w_min : float
-        Minimum weight for surviving channels (sets max noise inflation).
+    noise_ratio_min, noise_ratio_max : float
+        Range of noise ratio R (sigma_max / sigma_min) to sample from.
     scattered_prob, gap_prob, large_block_prob : float
-        RFI flagging probabilities (same as augment_weights_combined).
+        RFI flagging probabilities.
 
     Returns
     -------
     np.ndarray
-        Weights in [0, 1]: 0 for flagged, lognormal in [w_min, 1] for good.
+        Weights in [0, 1]: 0 for flagged, w_k = min(1,(sigma_med/sigma_k)^2)
+        for good channels.
     """
     aug = weights.copy()
 
@@ -229,11 +240,18 @@ def augment_weights_continuous(
     if np.random.random() < large_block_prob:
         aug = augment_weights_large_rfi_block(aug)
 
-    # Step 2: lognormal continuous quality for surviving channels
+    # Step 2 & 3: simulate noise profile → compute weights same as inference
     good = aug > 0
     if good.any():
-        log_w = np.random.uniform(np.log(w_min), 0.0, int(good.sum()))
-        aug[good] = np.exp(log_w)
+        n_good = int(good.sum())
+        # sample noise ratio for this training example
+        log_R = np.random.uniform(np.log(noise_ratio_min), np.log(noise_ratio_max))
+        R = np.exp(log_R)
+        # per-channel sigma (relative, sigma_min = 1)
+        sigma_k = np.exp(np.random.uniform(0.0, np.log(R), n_good))
+        sigma_med = np.median(sigma_k)
+        # same formula as inference
+        aug[good] = np.minimum(1.0, (sigma_med / sigma_k) ** 2)
 
     return aug
 

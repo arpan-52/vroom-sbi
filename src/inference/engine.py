@@ -789,13 +789,13 @@ class InferenceEngine(InferenceEngineInterface):
         mean_q = noise_sum / n_pix_total
         var_q = noise_sum2 / n_pix_total - mean_q ** 2
         noise_per_chan = np.sqrt(np.maximum(var_q, 0.0))
-        with np.errstate(divide="ignore", invalid="ignore"):
-            weights = np.where(noise_per_chan > 0, 1.0 / noise_per_chan ** 2, 0.0)
-        w_max = weights.max()
-        if w_max > 0:
-            weights /= w_max
-        n_flagged = int((weights == 0).sum())
-        good_chans = weights > 0
+        chan_good = noise_per_chan > 0
+        weights = np.zeros_like(noise_per_chan)
+        if chan_good.any():
+            sigma_med = np.median(noise_per_chan[chan_good])
+            weights[chan_good] = np.minimum(1.0, (sigma_med / noise_per_chan[chan_good]) ** 2)
+        n_flagged = int((~chan_good).sum())
+        good_chans = chan_good
         logger.info(f"Weights: {n_flagged}/{n_freq} channels flagged (weight=0)")
 
         # ------------------------------------------------------------------
@@ -1198,13 +1198,13 @@ class InferenceEngine(InferenceEngineInterface):
         mean_i = noise_sum / n_pix_total
         var_i = noise_sum2 / n_pix_total - mean_i**2
         noise_per_chan = np.sqrt(np.maximum(var_i, 0.0))
-        with np.errstate(divide="ignore", invalid="ignore"):
-            weights = np.where(noise_per_chan > 0, 1.0 / noise_per_chan**2, 0.0)
-        w_max = weights.max()
-        if w_max > 0:
-            weights /= w_max
-        good_chans = weights > 0
-        logger.info(f"Weights: {int((~good_chans).sum())}/{n_freq} channels flagged")
+        chan_good = noise_per_chan > 0
+        weights = np.zeros_like(noise_per_chan)
+        if chan_good.any():
+            sigma_med = np.median(noise_per_chan[chan_good])
+            weights[chan_good] = np.minimum(1.0, (sigma_med / noise_per_chan[chan_good]) ** 2)
+        good_chans = chan_good
+        logger.info(f"Weights: {int((~chan_good).sum())}/{n_freq} channels flagged")
 
         # Pass 2: collapsed I map for masking
         logger.info("Pass 2: building I map for SNR masking...")
