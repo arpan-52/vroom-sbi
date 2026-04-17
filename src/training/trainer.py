@@ -367,14 +367,18 @@ class SBITrainer:
                     dtype=np.float32,
                 )
 
-            # Draw base noise sigma
+            # Draw base noise sigma — per-sample so every row sees an
+            # independent noise floor within the chunk (prevents θ/noise
+            # correlation at chunk boundaries).
             if self.config.noise.augmentation_enable:
                 sigma_base = np.random.uniform(
                     self.config.noise.sigma_min * self.config.noise.augmentation_min_factor,
                     self.config.noise.sigma_max * self.config.noise.augmentation_max_factor,
-                )
+                    size=this_chunk_size,
+                ).astype(np.float32)
             else:
-                sigma_base = (self.config.noise.sigma_min + self.config.noise.sigma_max) / 2.0
+                mid = (self.config.noise.sigma_min + self.config.noise.sigma_max) / 2.0
+                sigma_base = np.full(this_chunk_size, mid, dtype=np.float32)
 
             if use_cont:
                 # Per-channel additive noise: sigma_k = sigma_base / sqrt(w_k)
@@ -382,7 +386,7 @@ class SBITrainer:
                 good_mask = chunk_weights > 0  # (batch, n_freq)
                 sigma_per_chan = np.where(
                     good_mask,
-                    sigma_base / np.sqrt(chunk_weights + 1e-12),
+                    sigma_base[:, None] / np.sqrt(chunk_weights + 1e-12),
                     0.0,
                 )  # (batch, n_freq)
 
@@ -404,9 +408,19 @@ class SBITrainer:
                 chunk_x = np.hstack([Q_obs, U_obs, chunk_weights]).astype(np.float32)
 
             elif self.config.noise.mode == "additive":
-                chunk_x = simulator.simulate_batch(
-                    chunk_theta, chunk_weights, noise_sigma=sigma_base
+                # Per-sample additive noise, constant across channels within a row.
+                qu_noiseless = simulator.simulate_batch(
+                    chunk_theta, chunk_weights, noise_sigma=0.0
                 )
+                Q_nl = qu_noiseless[:, :n_freq]
+                U_nl = qu_noiseless[:, n_freq:]
+                good_mask = chunk_weights > 0
+                sigma_per_chan = sigma_base[:, None]  # (batch, 1) → broadcast
+                noise_Q = np.random.normal(0, 1, (this_chunk_size, n_freq)) * sigma_per_chan
+                noise_U = np.random.normal(0, 1, (this_chunk_size, n_freq)) * sigma_per_chan
+                Q_obs = np.where(good_mask, Q_nl + noise_Q, 0.0)
+                U_obs = np.where(good_mask, U_nl + noise_U, 0.0)
+                chunk_x = np.hstack([Q_obs, U_obs]).astype(np.float32)
             else:
                 # Legacy percentage-based noise
                 base_noise_percent = self.config.noise.base_percent

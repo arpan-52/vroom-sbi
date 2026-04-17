@@ -7,6 +7,8 @@ Handles:
 - Sorting posterior samples to break label switching
 """
 
+import warnings
+
 import numpy as np
 import torch
 
@@ -136,8 +138,18 @@ def sample_prior(
     params_per_comp = get_params_per_component(model_type)
     n_params = params_per_comp * n_components
 
-    # Sample uniformly
-    theta = np.random.uniform(low, high, size=(n_samples, n_params))
+    # Low-discrepancy Sobol sampling for better coverage of the prior box
+    # than plain np.random.uniform. Scrambled → still unbiased across calls.
+    from scipy.stats import qmc
+
+    with warnings.catch_warnings():
+        # Suppress "n is not a power of 2" balance warning; scrambled Sobol
+        # is still well-distributed at arbitrary n.
+        warnings.simplefilter("ignore", UserWarning)
+        sampler = qmc.Sobol(d=n_params, scramble=True)
+        u = sampler.random(n_samples).astype(np.float64)  # (n_samples, n_params) in [0,1)
+
+    theta = low + u * (high - low)
 
     # Sort components by RM/phi (descending) to break label switching
     if n_components >= 2:
