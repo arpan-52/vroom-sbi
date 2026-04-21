@@ -41,12 +41,14 @@ class SpectralShapeSimulator(BaseSimulator):
         self.freq, self._weights = load_frequencies(freq_file)
         self._n_freq = len(self.freq)
         # Reference frequency: middle channel of the grid
-        mid_idx = self._n_freq // 2
-        self.nu0 = self.freq[mid_idx]
+        self.mid_idx = self._n_freq // 2
+        self.nu0 = self.freq[self.mid_idx]
         # Precompute log(ν/ν₀) for all channels — shape (n_freq,)
         self._log_nu_ratio = np.log(self.freq / self.nu0)
-        self._n_params = 4
-        self._params_per_comp = 4
+        # log_F0 is NOT a network parameter — normalise by F(ν₀) so it's
+        # always 1 at the reference channel.  Only [alpha, beta, gamma] are inferred.
+        self._n_params = 3
+        self._params_per_comp = 3
 
     # ------------------------------------------------------------------
     # BaseSimulator interface
@@ -69,7 +71,7 @@ class SpectralShapeSimulator(BaseSimulator):
         return self._weights
 
     def get_param_names(self) -> list[str]:
-        return ["log_F0", "alpha", "beta", "gamma"]
+        return ["alpha", "beta", "gamma"]
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -90,12 +92,12 @@ class SpectralShapeSimulator(BaseSimulator):
         theta = np.atleast_2d(theta)
         x = self._log_nu_ratio  # (n_freq,)
 
-        log_F0 = theta[:, 0:1]  # (batch, 1)
-        alpha = theta[:, 1:2]
-        beta = theta[:, 2:3]
-        gamma = theta[:, 3:4]
+        alpha = theta[:, 0:1]  # (batch, 1)
+        beta  = theta[:, 1:2]
+        gamma = theta[:, 2:3]
 
-        log_F = log_F0 + alpha * x + beta * x**2 + gamma * x**3  # (batch, n_freq)
+        # F(ν₀) = exp(0) = 1 by construction
+        log_F = alpha * x + beta * x**2 + gamma * x**3  # (batch, n_freq)
         return np.exp(log_F)
 
     # ------------------------------------------------------------------

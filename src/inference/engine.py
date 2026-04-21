@@ -991,17 +991,29 @@ class InferenceEngine(InferenceEngineInterface):
         else:
             obs[~np.isfinite(obs)] = 0.0
 
-        # Mean-normalize matching training: divide by mean over good channels
-        good = obs != 0.0
-        mean_I = float(obs[good].mean()) if good.any() else 1.0
-        obs = obs / mean_I
+        good = np.isfinite(obs) & (obs != 0.0)
+
+        # Normalise by F(ν₀): use the reference channel (mid index).
+        # If that channel is flagged, fall back to nearest good channels.
+        mid = len(obs) // 2
+        if good[mid]:
+            f_nu0 = float(obs[mid])
+        else:
+            window = slice(max(0, mid - 10), min(len(obs), mid + 11))
+            nearby = good[window]
+            if nearby.any():
+                f_nu0 = float(obs[window][nearby].mean())
+            else:
+                f_nu0 = float(obs[good].mean()) if good.any() else 1.0
+
+        obs = np.where(good, obs / f_nu0, 0.0)
 
         x_t = torch.tensor(obs, dtype=torch.float32, device=self.device)
         posterior = self.posteriors["spectral_shape"]
         samples = posterior.sample((n_samples,), x=x_t)
-        # Return mean_I as second element so caller can reconstruct absolute I_model:
-        #   I_model(ν) = exp(log_F0 + α·x + β·x² + γ·x³) × mean_I
-        return samples.detach().cpu().numpy(), mean_I
+        # Return f_nu0 so caller can reconstruct absolute flux:
+        #   F(ν) = exp(α·x + β·x² + γ·x³) × f_nu0
+        return samples.detach().cpu().numpy(), f_nu0
 
     def run_spectral_shape_cube(
         self,
@@ -1052,11 +1064,12 @@ class InferenceEngine(InferenceEngineInterface):
         shape2d = (n_dec, n_ra)
 
         # Pre-allocate output arrays
-        param_names = ["log_F0", "alpha", "beta", "gamma"]
+        param_names = ["alpha", "beta", "gamma"]
         results: dict[str, np.ndarray] = {}
         for name in param_names:
             for stat in ("mean", "std", "p16", "p84"):
                 results[f"{name}_{stat}"] = np.full(shape2d, np.nan, dtype=np.float32)
+        results["f_nu0"] = np.full(shape2d, np.nan, dtype=np.float32)
 
         # Build pixel mask
         if weights is not None:
@@ -1113,12 +1126,12 @@ class InferenceEngine(InferenceEngineInterface):
                 i_pix[~np.isfinite(i_pix)] = 0.0
 
             try:
-                samples = self.infer_spectra(i_pix, weights=pix_weights, n_samples=n_samples)
+                samples, f_nu0 = self.infer_spectra(i_pix, weights=pix_weights, n_samples=n_samples)
             except Exception as exc:
                 logger.warning(f"Pixel ({dec_idx}, {ra_idx}) failed: {exc}")
                 continue
 
-            # samples: (n_samples, 4) — [log_F0, alpha, beta, gamma]
+            results["f_nu0"][dec_idx, ra_idx] = f_nu0
             for pi, name in enumerate(param_names):
                 col = samples[:, pi]
                 results[f"{name}_mean"][dec_idx, ra_idx] = np.mean(col)
@@ -1173,11 +1186,12 @@ class InferenceEngine(InferenceEngineInterface):
         )
 
         # Pre-allocate output arrays
-        param_names = ["log_F0", "alpha", "beta", "gamma"]
+        param_names = ["alpha", "beta", "gamma"]
         results: dict[str, np.ndarray] = {}
         for name in param_names:
             for stat in ("mean", "std", "p16", "p84"):
                 results[f"{name}_{stat}"] = np.full(shape2d, np.nan, dtype=np.float32)
+        results["f_nu0"] = np.full(shape2d, np.nan, dtype=np.float32)
 
         # Pass 1: per-channel noise → weights → good_chans
         logger.info("Pass 1: estimating per-channel noise from I cube...")
@@ -1254,13 +1268,14 @@ class InferenceEngine(InferenceEngineInterface):
                         i_pix[~np.isfinite(i_pix)] = 0.0
 
                         try:
-                            samples = self.infer_spectra(
+                            samples, f_nu0 = self.infer_spectra(
                                 i_pix, weights=weights, n_samples=n_samples
                             )
                         except Exception as exc:
                             logger.warning(f"Pixel ({dec_idx}, {ra_idx}) failed: {exc}")
                             continue
 
+                        results["f_nu0"][dec_idx, ra_idx] = f_nu0
                         for pi, name in enumerate(param_names):
                             col = samples[:, pi]
                             results[f"{name}_mean"][dec_idx, ra_idx] = np.mean(col)

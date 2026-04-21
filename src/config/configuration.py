@@ -137,12 +137,14 @@ class HardwareConfig:
 class SpectralShapeConfig:
     """Prior bounds and noise settings for the spectral shape model.
 
-    Models: log F(ν) = log_F0 + alpha*x + beta*x^2 + gamma*x^3
+    Models: F(ν) = F(ν₀) · exp(alpha*x + beta*x^2 + gamma*x^3)
     where x = log(ν/ν₀), ν₀ = middle frequency.
+
+    log_F0 is NOT a network parameter.  The input spectrum is normalised
+    by its value at ν₀ before inference, so F(ν₀)=1 by construction and is
+    recovered analytically after inference.
     """
 
-    log_F0_min: float = -3.0  # log flux at reference frequency (lower bound)
-    log_F0_max: float = 3.0
     alpha_min: float = -3.0   # spectral index
     alpha_max: float = 1.0
     beta_min: float = -1.0    # spectral curvature
@@ -477,8 +479,6 @@ class Configuration:
         # Extract spectral shape config
         ss_raw = raw.get("spectral_shape", {})
         spectral_shape = SpectralShapeConfig(
-            log_F0_min=float(ss_raw.get("log_F0_min", -3.0)),
-            log_F0_max=float(ss_raw.get("log_F0_max", 3.0)),
             alpha_min=float(ss_raw.get("alpha_min", -3.0)),
             alpha_max=float(ss_raw.get("alpha_max", 1.0)),
             beta_min=float(ss_raw.get("beta_min", -1.0)),
