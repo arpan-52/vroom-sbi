@@ -1,5 +1,12 @@
 # VROOM-SBI
 
+[![CI](https://github.com/arpan-52/vroom-sbi/actions/workflows/cube_integration.yml/badge.svg)](https://github.com/arpan-52/vroom-sbi/actions/workflows/cube_integration.yml)
+[![Lint](https://github.com/arpan-52/vroom-sbi/actions/workflows/lint.yml/badge.svg)](https://github.com/arpan-52/vroom-sbi/actions/workflows/lint.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![sbi](https://img.shields.io/badge/sbi-0.18%2B-blueviolet)](https://sbi-dev.github.io/sbi/)
+[![HuggingFace](https://img.shields.io/badge/HuggingFace-arpan--52%2Fvroom--sbi-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/arpan-52/vroom-sbi)
+
 Simulation-Based Inference for Rotation Measure Synthesis. Given observed Q(λ²) and U(λ²) spectra, VROOM-SBI returns a full posterior probability distribution over Faraday depth structure using pre-trained neural posterior estimators.
 
 Pre-trained models: [huggingface.co/arpan-52/vroom-sbi](https://huggingface.co/arpan-52/vroom-sbi)

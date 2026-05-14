@@ -15,10 +15,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.simulator import RMSimulator, sample_prior
-from src.simulator.spectral_simulator import SpectralShapeSimulator
-from src.simulator.prior import sample_spectral_shape_prior
 from src.config.configuration import SpectralShapeConfig
+from src.simulator import RMSimulator, sample_prior
+from src.simulator.prior import sample_spectral_shape_prior
+from src.simulator.spectral_simulator import SpectralShapeSimulator
 
 FREQ_FILE = str(Path(__file__).parent.parent / "freq.txt")
 

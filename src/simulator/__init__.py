@@ -11,7 +11,6 @@ from .augmentation import (
     augment_weights_scattered,
 )
 from .base_simulator import RMSimulator
-from .spectral_simulator import SpectralShapeSimulator
 from .physics import (
     compute_rmsf,
     freq_to_lambda_sq,
@@ -26,6 +25,7 @@ from .prior import (
     sort_components_by_rm,
     sort_posterior_samples,
 )
+from .spectral_simulator import SpectralShapeSimulator
 
 __all__ = [
     "load_frequencies",

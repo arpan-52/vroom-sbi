@@ -464,7 +464,7 @@ vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
 
     # Download
     dl_p = subparsers.add_parser(
-        "download", help=f"Download pre-trained models from HuggingFace"
+        "download", help="Download pre-trained models from HuggingFace"
     )
     dl_p.add_argument(
         "--model-dir", default="models", help="Local directory to save models (default: models/)"

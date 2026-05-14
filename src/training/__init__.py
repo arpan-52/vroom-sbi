@@ -18,12 +18,12 @@ from .networks import (
     SpectralClassifier,
     SpectralEmbedding,
 )
+from .spectral_trainer import SpectralShapeTrainer
 from .streaming_trainer import (
     AsyncChunkStreamer,
     StreamingNPETrainer,
     train_streaming_npe,
 )
-from .spectral_trainer import SpectralShapeTrainer
 from .trainer import (
     SBITrainer,
     train_all_models,

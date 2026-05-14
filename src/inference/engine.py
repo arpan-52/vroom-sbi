@@ -50,8 +50,9 @@ def _rebuild_posterior_from_statedict(data: dict, device: str) -> "_SafePosterio
     Reconstruct a posterior from saved state dicts and architecture config.
     Used for the new safe (non-pickle) save format.
     """
-    from ..training.networks import SpectralEmbedding
     from sbi.neural_nets.net_builders import build_maf, build_nsf
+
+    from ..training.networks import SpectralEmbedding
 
     arch = data["architecture"]
     n_params = data["n_params"]
@@ -784,6 +785,7 @@ class InferenceEngine(InferenceEngineInterface):
         """
         import psutil
         from tqdm import tqdm
+
         from ..io import load_spatial_chunk
 
         n_freq, n_dec, n_ra = shape
@@ -917,7 +919,6 @@ class InferenceEngine(InferenceEngineInterface):
 
         # Noise in the 2D P map via MAD (robust against bright sources)
         p_median = np.nanmedian(p_map)
-        sigma_p = 1.4826 * np.nanmedian(np.abs(p_map - p_median))
         p_threshold = snr_threshold * p_median
         logger.info(
             f"P map: median={p_median:.6f}, threshold ({snr_threshold}x median)={p_threshold:.6f}"
@@ -1330,7 +1331,6 @@ class InferenceEngine(InferenceEngineInterface):
             for x0 in range(0, n_ra, chunk_side):
                 x1 = min(x0 + chunk_side, n_ra)
                 i_chunk = load_i_chunk(i_cube, y0, y1, x0, x1)
-                finite = np.isfinite(i_chunk[good_chans])
                 i_map[y0:y1, x0:x1] += np.nanmean(i_chunk[good_chans], axis=0)
                 i_count[y0:y1, x0:x1] += 1
 

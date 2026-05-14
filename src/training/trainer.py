@@ -31,7 +31,10 @@ from ..config import Configuration
 from ..core.checkpoint import CheckpointManager, save_training_plots
 from ..core.result import TrainingMetrics, TrainingResult
 from ..simulator import RMSimulator, build_prior, sample_prior
-from ..simulator.augmentation import augment_weights_combined, augment_weights_continuous
+from ..simulator.augmentation import (
+    augment_weights_combined,
+    augment_weights_continuous,
+)
 from .networks import SpectralEmbedding
 
 logger = logging.getLogger(__name__)
