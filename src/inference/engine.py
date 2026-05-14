@@ -20,38 +20,115 @@ from ..simulator.prior import get_params_per_component, sort_posterior_samples
 logger = logging.getLogger(__name__)
 
 
+class _SafePosteriorWrapper:
+    """
+    Wraps a density estimator (normalizing flow) and exposes the same
+    .sample() interface as SBI's DirectPosterior, without pickling any
+    live Python objects.  Used when loading the new state-dict-only format.
+    """
+
+    def __init__(self, density_estimator: torch.nn.Module):
+        self.posterior_estimator = density_estimator
+
+    def sample(
+        self,
+        sample_shape: tuple,
+        x: torch.Tensor,
+        show_progress_bars: bool = False,
+    ) -> torch.Tensor:
+        from sbi.neural_nets.estimators.shape_handling import reshape_to_batch_event
+
+        x = reshape_to_batch_event(
+            x, event_shape=self.posterior_estimator.condition_shape
+        )
+        samples = self.posterior_estimator.sample(sample_shape, condition=x)
+        return samples.squeeze(1)
+
+
+def _rebuild_posterior_from_statedict(data: dict, device: str) -> "_SafePosteriorWrapper":
+    """
+    Reconstruct a posterior from saved state dicts and architecture config.
+    Used for the new safe (non-pickle) save format.
+    """
+    from ..training.networks import SpectralEmbedding
+    from sbi.neural_nets.net_builders import build_maf, build_nsf
+
+    arch = data["architecture"]
+    n_params = data["n_params"]
+
+    # Rebuild embedding net and load weights
+    embedding_net = SpectralEmbedding(
+        input_dim=arch["input_dim"],
+        output_dim=arch["embedding_dim"],
+    )
+    embedding_net.load_state_dict(data["embedding_net_state"])
+    embedding_net.eval()
+
+    # Rebuild density estimator using dummy data of the right shapes
+    dummy_theta = torch.zeros(2, n_params)
+    dummy_x = torch.zeros(2, arch["input_dim"])
+    build_kwargs = {
+        "hidden_features": arch["hidden_features"],
+        "num_transforms": arch["num_transforms"],
+        "embedding_net": embedding_net,
+    }
+    flow_type = arch["sbi_model"].lower()
+    if flow_type == "nsf":
+        build_kwargs["num_bins"] = arch.get("num_bins", 8)
+        density_estimator = build_nsf(dummy_theta, dummy_x, **build_kwargs)
+    elif flow_type == "maf":
+        density_estimator = build_maf(dummy_theta, dummy_x, **build_kwargs)
+    else:
+        raise ValueError(f"Unknown flow type in saved architecture: {flow_type}")
+
+    density_estimator.load_state_dict(data["density_estimator_state"])
+    density_estimator.to(device)
+    density_estimator.eval()
+
+    return _SafePosteriorWrapper(density_estimator)
+
+
 def load_posterior(model_path: Path, device: str = "cpu") -> tuple[Any, dict[str, Any]]:
     """
     Load a trained posterior from disk and move to device.
 
-    CRITICAL: For SBI posteriors with rejection sampling, we need to move:
-    1. The posterior's neural network
-    2. The prior's bounds (used for rejection sampling support check)
+    Supports two formats:
+    - New format (safe): state dicts + architecture config only. No pickle objects.
+    - Legacy format: contains a full pickled SBI posterior object under "posterior" key.
     """
     model_path = Path(model_path)
 
-    # Always load to CPU first, then move
     if model_path.suffix == ".pt":
-        data = torch.load(model_path, map_location="cpu", weights_only=False)
+        # Try loading with weights_only=True first (new safe format)
+        try:
+            data = torch.load(model_path, map_location="cpu", weights_only=True)
+        except Exception:
+            # Legacy files contain pickle objects; fall back to weights_only=False
+            data = torch.load(model_path, map_location="cpu", weights_only=False)
+
+        if "density_estimator_state" in data and "architecture" in data:
+            # New safe format: reconstruct from state dicts
+            posterior = _rebuild_posterior_from_statedict(data, device)
+            return posterior, data
+
+        # Legacy format: unpickled posterior object
         posterior = data.get("posterior") or data.get("posterior_object")
         if posterior is None:
             raise ValueError(f"No posterior object found in {model_path}")
+
     else:
         import pickle
-
         with open(model_path, "rb") as f:
             data = pickle.load(f)
         posterior = data["posterior"]
 
-    # Move everything to device
+    # Legacy path: move everything to device
     if device != "cpu":
-        # 1. Move neural network
         if hasattr(posterior, "posterior_estimator"):
             posterior.posterior_estimator = posterior.posterior_estimator.to(device)
         if hasattr(posterior, "_neural_net"):
             posterior._neural_net = posterior._neural_net.to(device)
 
-        # 2. Move prior bounds (CRITICAL for rejection sampling)
         def move_prior_to_device(prior, dev):
             if prior is None:
                 return
@@ -69,11 +146,9 @@ def load_posterior(model_path: Path, device: str = "cpu") -> tuple[Any, dict[str
         if hasattr(posterior, "prior"):
             move_prior_to_device(posterior.prior, device)
 
-        # 3. Set device attribute
         if hasattr(posterior, "_device"):
             posterior._device = device
 
-        # 4. Try generic .to() - BUT DON'T reassign if it returns None!
         if hasattr(posterior, "to"):
             try:
                 result = posterior.to(device)
@@ -118,14 +193,36 @@ class InferenceEngine(InferenceEngineInterface):
         self.memory_config = config.memory if config else MemoryConfig()
         self._models_on_device: dict[str, str] = {}
 
+    def _has_local_models(self) -> bool:
+        """Return True if the model directory contains at least one posterior file."""
+        if not self.model_dir.exists():
+            return False
+        return bool(
+            list(self.model_dir.glob("posterior_*.pt"))
+            + list(self.model_dir.glob("posterior_*.pkl"))
+        )
+
     def load_models(
-        self, max_components: int = 5, model_types: list[str] | None = None
+        self,
+        max_components: int = 5,
+        model_types: list[str] | None = None,
+        auto_download: bool = True,
     ):
-        """Load trained posterior models."""
+        """Load trained posterior models, auto-fetching from HuggingFace if needed."""
         if model_types is None:
             model_types = (
                 self.config.physics.model_types if self.config else ["faraday_thin"]
             )
+
+        # Auto-fetch from HuggingFace when no local models exist
+        if auto_download and not self._has_local_models():
+            from ..utils import DEFAULT_HF_REPO, download_from_huggingface
+
+            logger.info(
+                f"No local models found in '{self.model_dir}'. "
+                f"Downloading from HuggingFace ({DEFAULT_HF_REPO})..."
+            )
+            download_from_huggingface(DEFAULT_HF_REPO, model_dir=str(self.model_dir))
 
         logger.info(f"Loading models from {self.model_dir}")
 

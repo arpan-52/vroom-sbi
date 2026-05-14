@@ -222,11 +222,13 @@ class SBITrainer:
 
         self._save_posterior(
             posterior,
+            density_estimator,
             prior,
             embedding_net,
             simulator,
             model_type,
             n_components,
+            arch_config,
             training_history,
             model_path,
         )
@@ -640,11 +642,13 @@ class SBITrainer:
     def _save_posterior(
         self,
         posterior,
+        density_estimator: nn.Module,
         prior,
         embedding_net: nn.Module,
         simulator: RMSimulator,
         model_type: str,
         n_components: int,
+        arch_config,
         training_history: dict[str, list[float]],
         save_path: Path,
     ):
@@ -692,42 +696,38 @@ class SBITrainer:
             }
 
         use_cont = getattr(self.config.weight_augmentation, "continuous_weights", True)
+        input_channels = 3 if use_cont else 2
+        input_dim = input_channels * simulator.n_freq
         save_dict = {
             # Model info
             "model_type": model_type,
             "n_components": n_components,
             "n_params": simulator.n_params,
             "n_freq": simulator.n_freq,
-            "input_channels": 3 if use_cont else 2,  # 3 = [Q, U, weights]
+            "input_channels": input_channels,
             "params_per_comp": simulator.params_per_comp,
-            "param_names": simulator.get_param_names(),  # Save parameter names
-            # Network states
-            "posterior_state": posterior.state_dict()
-            if hasattr(posterior, "state_dict")
-            else None,
+            "param_names": simulator.get_param_names(),
+            # Network state dicts only — no live Python objects (avoids pickle scan)
+            "density_estimator_state": density_estimator.state_dict(),
             "embedding_net_state": embedding_net.state_dict(),
-            # For SBI posterior reconstruction - save the full object
-            "posterior": posterior,
+            # Full architecture needed to reconstruct at load time
+            "architecture": {
+                "input_dim": input_dim,
+                "embedding_dim": self.config.sbi.embedding_dim,
+                "sbi_model": self.config.sbi.model,
+                "hidden_features": arch_config.hidden_features,
+                "num_transforms": arch_config.num_transforms,
+                "num_bins": self.config.sbi.num_bins,
+            },
             # Prior info
             "prior_bounds": prior_bounds,
             # Training info
             "training_history": training_history,
             "lambda_sq": simulator.lambda_sq.tolist(),
-            # Config
-            "config_used": {
-                "sbi_model": self.config.sbi.model,
-                "embedding_dim": self.config.sbi.embedding_dim,
-                "hidden_features": self.config.sbi.get_architecture(
-                    n_components
-                ).hidden_features,
-                "num_transforms": self.config.sbi.get_architecture(
-                    n_components
-                ).num_transforms,
-            },
             # Metadata
             "save_timestamp": datetime.now().isoformat(),
             "torch_version": torch.__version__,
-            "training_type": "streaming_npe",  # Mark as streaming trained
+            "training_type": "streaming_npe",
         }
 
         torch.save(save_dict, save_path)

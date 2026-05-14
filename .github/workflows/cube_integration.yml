@@ -2,7 +2,7 @@ name: Cube Integration Tests
 
 on:
   push:
-    branches: [main, spectral_cube]
+    branches: [main]
     paths:
       - 'src/io/**'
       - 'src/inference/engine.py'
@@ -11,6 +11,7 @@ on:
       - 'tests/test_cube_inference.py'
       - 'tests/conftest.py'
       - 'pyproject.toml'
+      - 'pixi.lock'
       - '.github/workflows/cube_integration.yml'
   pull_request:
     branches: [main]

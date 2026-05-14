@@ -10,7 +10,10 @@ from .validation import validate_all_models
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_HF_REPO = "arpan-52/vroom-sbi"
+
 __all__ = [
+    "DEFAULT_HF_REPO",
     "get_huggingface_token",
     "push_to_huggingface",
     "download_from_huggingface",

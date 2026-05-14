@@ -202,6 +202,15 @@ def cube_infer_spectra(args):
     write_results_maps(results, wcs_2d, args.output_dir)
 
 
+def download_command(args):
+    from ..utils import DEFAULT_HF_REPO, download_from_huggingface
+
+    repo_id = args.repo_id or DEFAULT_HF_REPO
+    print(f"Downloading models from {repo_id} → {args.model_dir}/")
+    download_from_huggingface(repo_id, model_dir=args.model_dir, token=args.token)
+    print("Done.")
+
+
 def push_command(args):
     from ..utils import push_to_huggingface
 
@@ -452,6 +461,19 @@ vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
     spectra_p.add_argument("--device", default=None)
     spectra_p.add_argument("--n-samples", type=int, default=1000)
     spectra_p.set_defaults(func=cube_infer_spectra)
+
+    # Download
+    dl_p = subparsers.add_parser(
+        "download", help=f"Download pre-trained models from HuggingFace"
+    )
+    dl_p.add_argument(
+        "--model-dir", default="models", help="Local directory to save models (default: models/)"
+    )
+    dl_p.add_argument(
+        "--repo-id", default=None, help="HuggingFace repo ID (default: arpan-52/vroom-sbi)"
+    )
+    dl_p.add_argument("--token", default=None, help="HF token for private repos")
+    dl_p.set_defaults(func=download_command)
 
     # Push
     push_p = subparsers.add_parser("push")
