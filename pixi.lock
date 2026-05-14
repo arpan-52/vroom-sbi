@@ -17203,7 +17203,7 @@ packages:
 - pypi: ./
   name: vroom-sbi
   version: 2.0.0
-  sha256: 054ca2fce405053c9b8136e02a414f9d2d294d4d4c12c6a2b80f909afb4c7ffa
+  sha256: 693897b68592d08c4d18199c33030497861996b6d4110021f4c94b268d19b9b8
   requires_dist:
   - numpy>=1.20
   - torch>=2.0

@@ -80,9 +80,9 @@ corner          = ">=2.2"
 huggingface_hub = ">=0.10"
 
 # PyPI-only packages installed alongside conda deps
+# sbi is pulled in transitively via the editable vroom-sbi install
 [tool.pixi.pypi-dependencies]
 vroom-sbi = { path = ".", editable = true }
-sbi       = ">=0.18"
 
 # ---------------------------------------------------------------------------
 # Feature: io  (spectral_cube for FITS cube I/O)
