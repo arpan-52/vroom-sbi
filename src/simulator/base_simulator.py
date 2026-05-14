@@ -104,167 +104,90 @@ class RMSimulator(BaseSimulator):
         """
         Faraday-thin model: P = Σⱼ pⱼ exp[2i(χ₀,ⱼ + φⱼλ²)]
 
-        This is pure external Faraday rotation with no depolarization.
-
+        Vectorized over (batch, component, freq).
         Parameters: [RM, amp, chi0] per component (3N total)
         """
         batch_size = theta.shape[0]
-        P = np.zeros((batch_size, self._n_freq), dtype=complex)
+        theta_r = theta.reshape(batch_size, self.n_components, 3)
+        rm = theta_r[:, :, 0]    # (B, C)
+        amp = theta_r[:, :, 1]
+        chi0 = theta_r[:, :, 2]
 
-        for b in range(batch_size):
-            for i in range(self.n_components):
-                rm = theta[b, 3 * i]
-                amp = theta[b, 3 * i + 1]
-                chi0 = theta[b, 3 * i + 2]
-
-                # Phase rotation: 2 * (chi0 + RM * lambda^2)
-                phase = 2 * (chi0 + rm * self.lambda_sq)
-                P[b] += amp * np.exp(1j * phase)
-
-        return P
+        lsq = self.lambda_sq[None, None, :]  # (1, 1, F)
+        phase = 2.0 * (chi0[:, :, None] + rm[:, :, None] * lsq)  # (B, C, F)
+        return (amp[:, :, None] * np.exp(1j * phase)).sum(axis=1)  # (B, F)
 
     def _compute_polarization_burn_slab(self, theta: np.ndarray) -> np.ndarray:
         """
-        Burn slab model (uniform Faraday-rotating medium):
+        Burn slab model: P = p₀ × sinc(Δφ × λ²) × exp[2i(χ₀ + φ_c × λ²)]
+        where sinc(x) = sin(x)/x.
 
-        P = p₀ × sinc(Δφ × λ²) × exp[2i(χ₀ + φ_c × λ²)]
-
-        where sinc(x) = sin(x) / x
-
-        The sinc depolarization arises from a uniform slab of
-        thickness Δφ in Faraday depth.
-
+        Vectorized over (batch, component, freq).
         Parameters: [phi_c, delta_phi, amp, chi0] per component (4N total)
-        - phi_c: Central RM (rad/m²)
-        - delta_phi: Slab thickness / 2 (rad/m²), so full width = 2*delta_phi
-        - amp: Intrinsic polarized intensity
-        - chi0: Intrinsic polarization angle (rad)
         """
         batch_size = theta.shape[0]
-        P = np.zeros((batch_size, self._n_freq), dtype=complex)
+        theta_r = theta.reshape(batch_size, self.n_components, 4)
+        phi_c = theta_r[:, :, 0]
+        delta_phi = theta_r[:, :, 1]
+        amp = theta_r[:, :, 2]
+        chi0 = theta_r[:, :, 3]
 
-        for b in range(batch_size):
-            for i in range(self.n_components):
-                phi_c = theta[b, 4 * i]  # Central RM
-                delta_phi = theta[b, 4 * i + 1]  # Slab half-width
-                amp = theta[b, 4 * i + 2]
-                chi0 = theta[b, 4 * i + 3]
+        lsq = self.lambda_sq[None, None, :]  # (1, 1, F)
+        arg = delta_phi[:, :, None] * lsq    # (B, C, F)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sinc_term = np.where(np.abs(arg) < 1e-10, 1.0, np.sin(arg) / arg)
 
-                # Sinc depolarization: sinc(delta_phi * lambda^2)
-                arg = delta_phi * self.lambda_sq
-                # Use np.sinc which computes sin(pi*x)/(pi*x), so we need arg/pi
-                # Actually sinc(x) = sin(x)/x, np.sinc(x) = sin(pi*x)/(pi*x)
-                # So we want sin(arg)/arg
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    sinc_term = np.where(np.abs(arg) < 1e-10, 1.0, np.sin(arg) / arg)
-
-                # Rotation phase: 2 * (chi0 + phi_c * lambda^2)
-                phase = 2 * (chi0 + phi_c * self.lambda_sq)
-
-                P[b] += amp * sinc_term * np.exp(1j * phase)
-
-        return P
+        phase = 2.0 * (chi0[:, :, None] + phi_c[:, :, None] * lsq)
+        return (amp[:, :, None] * sinc_term * np.exp(1j * phase)).sum(axis=1)
 
     def _compute_polarization_external_dispersion(
         self, theta: np.ndarray
     ) -> np.ndarray:
         """
-        External Faraday dispersion (turbulent foreground screen):
+        External Faraday dispersion: P = p₀ × exp(-2σ_φ² × λ⁴) × exp[2i(χ₀ + φλ²)].
 
-        P = p₀ × exp(-2σ_φ² × λ⁴) × exp[2i(χ₀ + φ × λ²)]
-
-        This models depolarization from a turbulent foreground with
-        Gaussian RM distribution of width σ_φ.
-
-        The exp(-2σ²λ⁴) term is the Fourier transform of a Gaussian
-        RM distribution convolved with the source.
-
-        FIXED: The formula uses λ⁴ = (λ²)², not λ²
-
+        Vectorized over (batch, component, freq).
         Parameters: [phi, sigma_phi, amp, chi0] per component (4N total)
-        - phi: Mean RM (rad/m²)
-        - sigma_phi: RM dispersion (rad/m²)
-        - amp: Intrinsic polarized intensity
-        - chi0: Intrinsic polarization angle (rad)
         """
         batch_size = theta.shape[0]
-        P = np.zeros((batch_size, self._n_freq), dtype=complex)
+        theta_r = theta.reshape(batch_size, self.n_components, 4)
+        phi = theta_r[:, :, 0]
+        sigma_phi = theta_r[:, :, 1]
+        amp = theta_r[:, :, 2]
+        chi0 = theta_r[:, :, 3]
 
-        for b in range(batch_size):
-            for i in range(self.n_components):
-                phi = theta[b, 4 * i]  # Mean RM
-                sigma_phi = theta[b, 4 * i + 1]  # RM dispersion
-                amp = theta[b, 4 * i + 2]
-                chi0 = theta[b, 4 * i + 3]
-
-                # FIXED: Gaussian depolarization uses λ⁴ = (λ²)²
-                # Formula: exp(-2 * sigma^2 * lambda^4)
-                lambda_sq_squared = self.lambda_sq**2  # This is λ⁴
-                depol = np.exp(-2 * sigma_phi**2 * lambda_sq_squared)
-
-                # Rotation phase: 2 * (chi0 + phi * lambda^2)
-                phase = 2 * (chi0 + phi * self.lambda_sq)
-
-                P[b] += amp * depol * np.exp(1j * phase)
-
-        return P
+        lsq = self.lambda_sq[None, None, :]  # (1, 1, F)
+        lsq4 = lsq**2  # λ⁴
+        depol = np.exp(-2.0 * sigma_phi[:, :, None] ** 2 * lsq4)  # (B, C, F)
+        phase = 2.0 * (chi0[:, :, None] + phi[:, :, None] * lsq)
+        return (amp[:, :, None] * depol * np.exp(1j * phase)).sum(axis=1)
 
     def _compute_polarization_internal_dispersion(
         self, theta: np.ndarray
     ) -> np.ndarray:
         """
-        Internal Faraday dispersion (Sokoloff model):
+        Internal Faraday dispersion (Sokoloff):
+            P = p₀ × [(1 - exp(-S)) / S] × exp(2i × χ₀)
+        with S = 2σ_φ²λ⁴ - 2iφλ² (complex).
 
-        P = p₀ × [(1 - exp(-S)) / S] × exp(2i × χ₀)
-
-        where S = 2σ_φ²λ⁴ - 2iφλ² (complex!)
-
-        This models a source with internal turbulence where Faraday
-        rotation and emission are mixed along the line of sight.
-
-        Note: The Sokoloff formula doesn't have an exp(2i*phi*lambda^2)
-        term because the RM variation is internal, not external.
-
-        FIXED:
-        1. Use λ⁴ = (λ²)² in the real part of S
-        2. Properly handle complex S and the limit S → 0
-
+        Vectorized over (batch, component, freq).
         Parameters: [phi, sigma_phi, amp, chi0] per component (4N total)
-        - phi: Mean RM (rad/m²)
-        - sigma_phi: RM dispersion (rad/m²)
-        - amp: Intrinsic polarized intensity
-        - chi0: Intrinsic polarization angle (rad)
         """
         batch_size = theta.shape[0]
-        P = np.zeros((batch_size, self._n_freq), dtype=complex)
+        theta_r = theta.reshape(batch_size, self.n_components, 4)
+        phi = theta_r[:, :, 0]
+        sigma_phi = theta_r[:, :, 1]
+        amp = theta_r[:, :, 2]
+        chi0 = theta_r[:, :, 3]
 
-        for b in range(batch_size):
-            for i in range(self.n_components):
-                phi = theta[b, 4 * i]  # Mean RM
-                sigma_phi = theta[b, 4 * i + 1]  # RM dispersion
-                amp = theta[b, 4 * i + 2]
-                chi0 = theta[b, 4 * i + 3]
+        lsq = self.lambda_sq[None, None, :]  # (1, 1, F)
+        lsq4 = lsq**2
+        S = 2.0 * sigma_phi[:, :, None] ** 2 * lsq4 - 2j * phi[:, :, None] * lsq
+        abs_S = np.abs(S)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            depol = np.where(abs_S < 1e-10, 1.0 + 0j, (1 - np.exp(-S)) / S)
 
-                # Complex depolarization parameter S
-                # S = 2σ²λ⁴ - 2iφλ²
-                # FIXED: λ⁴ = (λ²)², not (λ²)
-                lambda_sq_squared = self.lambda_sq**2  # This is λ⁴
-                S = 2 * sigma_phi**2 * lambda_sq_squared - 2j * phi * self.lambda_sq
-
-                # Depolarization function: (1 - exp(-S)) / S
-                # Handle S → 0 limit where (1-exp(-S))/S → 1
-                abs_S = np.abs(S)
-                depol = np.where(
-                    abs_S < 1e-10,
-                    np.ones_like(S),  # Limit as S → 0
-                    (1 - np.exp(-S)) / S,
-                )
-
-                # Note: Internal dispersion includes intrinsic angle only
-                # The RM rotation is already encoded in the complex S
-                P[b] += amp * depol * np.exp(2j * chi0)
-
-        return P
+        return (amp[:, :, None] * depol * np.exp(2j * chi0[:, :, None])).sum(axis=1)
 
     def simulate(
         self,

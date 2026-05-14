@@ -7,6 +7,8 @@ Handles:
 - Sorting posterior samples to break label switching
 """
 
+import warnings
+
 import numpy as np
 import torch
 
@@ -136,8 +138,18 @@ def sample_prior(
     params_per_comp = get_params_per_component(model_type)
     n_params = params_per_comp * n_components
 
-    # Sample uniformly
-    theta = np.random.uniform(low, high, size=(n_samples, n_params))
+    # Low-discrepancy Sobol sampling for better coverage of the prior box
+    # than plain np.random.uniform. Scrambled → still unbiased across calls.
+    from scipy.stats import qmc
+
+    with warnings.catch_warnings():
+        # Suppress "n is not a power of 2" balance warning; scrambled Sobol
+        # is still well-distributed at arbitrary n.
+        warnings.simplefilter("ignore", UserWarning)
+        sampler = qmc.Sobol(d=n_params, scramble=True)
+        u = sampler.random(n_samples).astype(np.float64)  # (n_samples, n_params) in [0,1)
+
+    theta = low + u * (high - low)
 
     # Sort components by RM/phi (descending) to break label switching
     if n_components >= 2:
@@ -231,26 +243,16 @@ def build_spectral_shape_prior(config, device: str = "cpu"):
     """
     Build SBI BoxUniform prior for the spectral shape model.
 
-    Parameters: [log_F0, alpha, beta, gamma]
-
-    Parameters
-    ----------
-    config : SpectralShapeConfig
-        Spectral shape configuration with prior bounds
-    device : str
-        Torch device
-
-    Returns
-    -------
-    BoxUniform
-        SBI prior distribution
+    Parameters: [alpha, beta, gamma]
+    log_F0 is NOT a network parameter — the spectrum is normalised by F(ν₀)
+    at inference time, so absolute flux is recovered analytically.
     """
     from sbi.utils import BoxUniform
 
-    low = [config.log_F0_min, config.alpha_min, config.beta_min, config.gamma_min]
-    high = [config.log_F0_max, config.alpha_max, config.beta_max, config.gamma_max]
+    low  = [config.alpha_min, config.beta_min, config.gamma_min]
+    high = [config.alpha_max, config.beta_max, config.gamma_max]
 
-    low_t = torch.tensor(low, dtype=torch.float32, device=device)
+    low_t  = torch.tensor(low,  dtype=torch.float32, device=device)
     high_t = torch.tensor(high, dtype=torch.float32, device=device)
 
     return BoxUniform(low=low_t, high=high_t)
@@ -258,27 +260,23 @@ def build_spectral_shape_prior(config, device: str = "cpu"):
 
 def sample_spectral_shape_prior(n_samples: int, config) -> np.ndarray:
     """
-    Sample from the spectral shape prior.
-
-    Parameters
-    ----------
-    n_samples : int
-        Number of samples
-    config : SpectralShapeConfig
-        Spectral shape configuration with prior bounds
+    Sample from the spectral shape prior using Sobol quasi-random sampling.
 
     Returns
     -------
-    np.ndarray
-        Parameter samples of shape (n_samples, 4): [log_F0, alpha, beta, gamma]
+    np.ndarray, shape (n_samples, 3): [alpha, beta, gamma]
     """
-    low = np.array(
-        [config.log_F0_min, config.alpha_min, config.beta_min, config.gamma_min]
-    )
-    high = np.array(
-        [config.log_F0_max, config.alpha_max, config.beta_max, config.gamma_max]
-    )
-    return np.random.uniform(low, high, size=(n_samples, 4))
+    from scipy.stats import qmc
+
+    low  = np.array([config.alpha_min, config.beta_min, config.gamma_min])
+    high = np.array([config.alpha_max, config.beta_max, config.gamma_max])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        sampler = qmc.Sobol(d=3, scramble=True)
+        u = sampler.random(n_samples).astype(np.float64)
+
+    return low + u * (high - low)
 
 
 def get_param_names(model_type: str, n_components: int) -> list:
