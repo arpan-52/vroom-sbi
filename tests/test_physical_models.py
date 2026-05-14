@@ -1,222 +1,183 @@
-#!/usr/bin/env python3
 """
-Test script to verify all physical models work correctly.
+Tests for physical simulators, prior sampling, and RM sorting.
 
-Tests:
-1. All physical models can be instantiated
-2. Simulation produces expected output shapes
-3. Prior sampling works for all model types
-4. RM sorting works correctly
-5. Depolarization formulas are correct
+Covers:
+- All four RM model types x component counts: instantiation, output shape, NaN/Inf
+- RM sorting (label-switching fix) for multi-component priors
+- Sobol quasi-random prior sampling: bounds compliance and coverage
+- Depolarization formula correctness (external and internal dispersion)
+- Spectral shape simulator: 3-param model, F(nu0)=1 normalization
+- Spectral shape prior: Sobol sampling, correct parameter names
 """
 
-import sys
 from pathlib import Path
 
 import numpy as np
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import pytest
 
 from src.simulator import RMSimulator, sample_prior
+from src.simulator.spectral_simulator import SpectralShapeSimulator
+from src.simulator.prior import sample_spectral_shape_prior
+from src.config.configuration import SpectralShapeConfig
 
-# Absolute path to freq.txt so tests pass regardless of working directory
 FREQ_FILE = str(Path(__file__).parent.parent / "freq.txt")
 
+ALL_MODELS = ["faraday_thin", "burn_slab", "external_dispersion", "internal_dispersion"]
+COMPONENT_COUNTS = [1, 2, 3, 5]
 
-def _check_model(model_type: str, n_components: int = 2):
-    """Helper (not a pytest test) — verifies a specific physical model."""
-    print(f"\n{'=' * 60}")
-    print(f"Testing: {model_type} with {n_components} components")
-    print(f"{'=' * 60}")
-
-    # Create simulator
-    try:
-        simulator = RMSimulator(
-            freq_file=FREQ_FILE, n_components=n_components, model_type=model_type
-        )
-        print("✓ Simulator created")
-        print(f"  n_params: {simulator.n_params}")
-        print(f"  params_per_comp: {simulator.params_per_comp}")
-        print(f"  n_freq: {simulator.n_freq}")
-    except Exception as e:
-        print(f"✗ Failed to create simulator: {e}")
-        return False
-
-    # Sample from prior
-    config = {"rm_min": 0.0, "rm_max": 500.0, "amp_min": 0.01, "amp_max": 1.0}
-
-    try:
-        theta = sample_prior(10, n_components, config, model_type=model_type)
-        print("✓ Prior sampling successful")
-        print(f"  theta shape: {theta.shape}")
-
-        if theta.shape[1] != simulator.n_params:
-            print("✗ Shape mismatch!")
-            return False
-    except Exception as e:
-        print(f"✗ Failed to sample prior: {e}")
-        return False
-
-    # Simulate
-    try:
-        simulations = simulator(theta)
-        print("✓ Simulation successful")
-        print(f"  Output shape: {simulations.shape}")
-
-        if simulations.shape != (10, 2 * simulator.n_freq):
-            print("✗ Simulation output shape mismatch!")
-            return False
-    except Exception as e:
-        print(f"✗ Failed to simulate: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return False
-
-    # Check for NaN or Inf
-    if np.any(np.isnan(simulations)) or np.any(np.isinf(simulations)):
-        print("✗ Simulation contains NaN or Inf values!")
-        return False
-    else:
-        print("✓ No NaN/Inf values detected")
-
-    # Verify RM sorting
-    if n_components >= 2:
-        try:
-            first_params = theta[
-                :, [i * simulator.params_per_comp for i in range(n_components)]
-            ]
-            is_sorted = np.all(np.diff(first_params, axis=1) <= 0)
-            if is_sorted:
-                print("✓ RM/phi properly sorted (descending)")
-            else:
-                print("✗ RM/phi not properly sorted!")
-                return False
-        except Exception as e:
-            print(f"✗ Failed to verify sorting: {e}")
-            return False
-
-    print(f"✓ All tests passed for {model_type}!")
-    return True
+PRIOR_CONFIG = {"rm_min": -500.0, "rm_max": 500.0, "amp_min": 0.01, "amp_max": 1.0}
 
 
-def test_depolarization_formulas():
-    """Test that depolarization formulas are implemented correctly."""
-    print(f"\n{'=' * 60}")
-    print("Testing depolarization formula correctness")
-    print(f"{'=' * 60}")
+# ---------------------------------------------------------------------------
+# 1. Simulator instantiation and output shape
+# ---------------------------------------------------------------------------
 
-    # Test external dispersion: should use λ⁴ = (λ²)²
-    simulator = RMSimulator(
-        freq_file=FREQ_FILE, n_components=1, model_type="external_dispersion"
+@pytest.mark.parametrize("model_type", ALL_MODELS)
+@pytest.mark.parametrize("n_components", COMPONENT_COUNTS)
+def test_simulator_output_shape(model_type, n_components):
+    sim = RMSimulator(freq_file=FREQ_FILE, n_components=n_components, model_type=model_type)
+    theta = sample_prior(8, n_components, PRIOR_CONFIG, model_type=model_type)
+    assert theta.shape == (8, sim.n_params)
+    out = sim(theta)
+    assert out.shape == (8, 2 * sim.n_freq)
+
+
+# ---------------------------------------------------------------------------
+# 2. No NaN or Inf in simulated output
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("model_type", ALL_MODELS)
+@pytest.mark.parametrize("n_components", COMPONENT_COUNTS)
+def test_simulator_no_nan_inf(model_type, n_components):
+    sim = RMSimulator(freq_file=FREQ_FILE, n_components=n_components, model_type=model_type)
+    theta = sample_prior(20, n_components, PRIOR_CONFIG, model_type=model_type)
+    out = sim(theta)
+    assert np.all(np.isfinite(out)), f"NaN/Inf in {model_type} N={n_components}"
+
+
+# ---------------------------------------------------------------------------
+# 3. RM sorting: multi-component priors must have RM1 >= RM2 >= ...
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("model_type", ALL_MODELS)
+@pytest.mark.parametrize("n_components", [2, 3, 5])
+def test_prior_rm_sorted_descending(model_type, n_components):
+    theta = sample_prior(200, n_components, PRIOR_CONFIG, model_type=model_type)
+    params_per_comp = theta.shape[1] // n_components
+    rm_cols = theta[:, [i * params_per_comp for i in range(n_components)]]
+    # Each row: RM values should be non-increasing left to right
+    assert np.all(np.diff(rm_cols, axis=1) <= 0), (
+        f"RM not sorted descending for {model_type} N={n_components}"
     )
 
-    # Parameters: [phi, sigma_phi, amp, chi0]
-    theta = np.array([[100.0, 50.0, 1.0, 0.0]])  # phi=100, sigma=50, amp=1, chi0=0
 
-    # Get noiseless simulation
-    P_sim = simulator.simulate_noiseless(theta)
-    Q_sim = P_sim[: simulator.n_freq]
-    U_sim = P_sim[simulator.n_freq :]
+# ---------------------------------------------------------------------------
+# 4. Sobol prior sampling: samples stay within declared bounds
+# ---------------------------------------------------------------------------
 
-    # Compute expected manually
-    lambda_sq = simulator.lambda_sq
-    lambda_sq_squared = lambda_sq**2  # λ⁴
+@pytest.mark.parametrize("model_type", ALL_MODELS)
+def test_sobol_prior_within_bounds(model_type):
+    from src.simulator.prior import _build_bounds_from_dict
+    n = 512
+    theta = sample_prior(n, 1, PRIOR_CONFIG, model_type=model_type)
+    low, high = _build_bounds_from_dict(PRIOR_CONFIG, model_type, 1)
+    assert np.all(theta >= low - 1e-9), "Sobol samples below lower bound"
+    assert np.all(theta <= high + 1e-9), "Sobol samples above upper bound"
 
-    phi = 100.0
-    sigma = 50.0
 
-    # External dispersion: P = exp(-2σ²λ⁴) × exp(2iφλ²)
-    depol = np.exp(-2 * sigma**2 * lambda_sq_squared)
-    phase = 2 * phi * lambda_sq
-
-    Q_expected = depol * np.cos(phase)
-    U_expected = depol * np.sin(phase)
-
-    # Check agreement
-    Q_error = np.max(np.abs(Q_sim - Q_expected))
-    U_error = np.max(np.abs(U_sim - U_expected))
-
-    print(f"External dispersion Q error: {Q_error:.2e}")
-    print(f"External dispersion U error: {U_error:.2e}")
-
-    if Q_error < 1e-10 and U_error < 1e-10:
-        print("✓ External dispersion formula correct (uses λ⁴)")
-    else:
-        print("✗ External dispersion formula may be incorrect")
-        return False
-
-    # Test internal dispersion
-    simulator_int = RMSimulator(
-        freq_file=FREQ_FILE, n_components=1, model_type="internal_dispersion"
+def test_sobol_prior_covers_space_better_than_uniform():
+    """Sobol discrepancy should be lower than uniform random at n=256."""
+    from scipy.stats import qmc
+    n, d = 256, 3
+    theta_sobol = sample_prior(n, 1, PRIOR_CONFIG, model_type="faraday_thin")
+    # Normalise to [0,1]^d for discrepancy calculation
+    low = np.array([PRIOR_CONFIG["rm_min"], PRIOR_CONFIG["amp_min"], 0.0])
+    high = np.array([PRIOR_CONFIG["rm_max"], PRIOR_CONFIG["amp_max"], np.pi])
+    u_sobol = (theta_sobol - low) / (high - low)
+    rng = np.random.default_rng(0)
+    u_uniform = rng.uniform(size=(n, d))
+    disc_sobol = qmc.discrepancy(u_sobol)
+    disc_uniform = qmc.discrepancy(u_uniform)
+    assert disc_sobol < disc_uniform, (
+        f"Sobol discrepancy {disc_sobol:.4f} not better than uniform {disc_uniform:.4f}"
     )
 
-    # For small sigma, should approach Faraday-thin behavior
-    theta_thin = np.array([[100.0, 0.01, 1.0, 0.0]])  # Very small sigma
-    simulator_int.simulate_noiseless(theta_thin)
 
-    # Compare with Faraday-thin
-    # Internal dispersion with sigma→0 should give P ≈ exp(2iφλ²)
-    # But note internal dispersion has exp(2iχ₀) not exp(2i(χ₀ + φλ²))
-    # So it's a different formula altogether
+# ---------------------------------------------------------------------------
+# 5. Depolarization formula correctness
+# ---------------------------------------------------------------------------
 
-    print("✓ Internal dispersion simulation runs without errors")
+def test_external_dispersion_formula():
+    """P = amp * exp(-2 sigma^2 lambda^4) * exp(2i (chi0 + phi lambda^2))"""
+    sim = RMSimulator(freq_file=FREQ_FILE, n_components=1, model_type="external_dispersion")
+    phi, sigma, amp, chi0 = 100.0, 50.0, 1.0, 0.0
+    theta = np.array([[phi, sigma, amp, chi0]])
+    P_sim = sim.simulate_noiseless(theta)
+    Q_sim, U_sim = P_sim[:sim.n_freq], P_sim[sim.n_freq:]
 
-    return True
-
-
-def main():
-    """Run all tests."""
-    print("=" * 60)
-    print("TESTING PHYSICAL MODELS (VROOM-SBI v2.0)")
-    print("=" * 60)
-
-    models_to_test = [
-        "faraday_thin",
-        "burn_slab",
-        "external_dispersion",
-        "internal_dispersion",
-    ]
-
-    component_counts = [1, 2, 3, 5]
-
-    results = {}
-
-    for model_type in models_to_test:
-        results[model_type] = {}
-        for n_comp in component_counts:
-            success = _check_model(model_type, n_comp)
-            results[model_type][n_comp] = success
-
-    # Test depolarization formulas
-    depol_ok = test_depolarization_formulas()
-
-    # Summary
-    print("\n" + "=" * 60)
-    print("TEST SUMMARY")
-    print("=" * 60)
-
-    all_passed = True
-    for model_type in models_to_test:
-        print(f"\n{model_type}:")
-        for n_comp in component_counts:
-            status = "✓ PASS" if results[model_type][n_comp] else "✗ FAIL"
-            print(f"  {n_comp} components: {status}")
-            if not results[model_type][n_comp]:
-                all_passed = False
-
-    print(f"\nDepolarization formulas: {'✓ PASS' if depol_ok else '✗ FAIL'}")
-
-    print("\n" + "=" * 60)
-    if all_passed and depol_ok:
-        print("ALL TESTS PASSED! ✓")
-        print("=" * 60)
-        return 0
-    else:
-        print("SOME TESTS FAILED! ✗")
-        print("=" * 60)
-        return 1
+    lsq = sim.lambda_sq
+    depol = np.exp(-2.0 * sigma**2 * lsq**2)
+    phase = 2.0 * (chi0 + phi * lsq)
+    assert np.max(np.abs(Q_sim - depol * np.cos(phase))) < 1e-10
+    assert np.max(np.abs(U_sim - depol * np.sin(phase))) < 1e-10
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+def test_internal_dispersion_limit_no_nan():
+    """Sokoloff model with near-zero sigma should produce finite output."""
+    sim = RMSimulator(freq_file=FREQ_FILE, n_components=1, model_type="internal_dispersion")
+    theta = np.array([[100.0, 1e-12, 1.0, 0.0]])  # sigma_phi -> 0
+    out = sim.simulate_noiseless(theta)
+    assert np.all(np.isfinite(out)), "Internal dispersion blows up near sigma=0"
+
+
+def test_faraday_thin_noiseless_amplitude():
+    """Single component faraday_thin: |P| should equal amp at all frequencies."""
+    sim = RMSimulator(freq_file=FREQ_FILE, n_components=1, model_type="faraday_thin")
+    amp = 0.7
+    theta = np.array([[200.0, amp, 0.5]])
+    out = sim.simulate_noiseless(theta)
+    Q, U = out[:sim.n_freq], out[sim.n_freq:]
+    pol_intensity = np.sqrt(Q**2 + U**2)
+    np.testing.assert_allclose(pol_intensity, amp, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# 6. Spectral shape simulator: 3-param model, F(nu0) = 1
+# ---------------------------------------------------------------------------
+
+def test_spectral_shape_param_count():
+    sim = SpectralShapeSimulator(FREQ_FILE)
+    assert sim.n_params == 3
+    assert sim.get_param_names() == ["alpha", "beta", "gamma"]
+
+
+def test_spectral_shape_f_nu0_equals_one():
+    """Noiseless output at the reference channel must equal 1 for any theta."""
+    sim = SpectralShapeSimulator(FREQ_FILE)
+    rng = np.random.default_rng(42)
+    theta = rng.uniform([-3, -1, -0.5], [1, 1, 0.5], size=(50, 3))
+    out = sim.simulate_noiseless(theta)  # (50, n_freq) — F values
+    mid = sim.mid_idx
+    np.testing.assert_allclose(out[:, mid], 1.0, atol=1e-10,
+                               err_msg="F(nu0) != 1 for spectral shape model")
+
+
+def test_spectral_shape_output_shape():
+    sim = SpectralShapeSimulator(FREQ_FILE)
+    rng = np.random.default_rng(0)
+    theta = rng.uniform([-1, -0.5, -0.1], [0.5, 0.5, 0.1], size=(12, 3))
+    out = sim.simulate_noiseless(theta)
+    assert out.shape == (12, sim.n_freq)
+    assert np.all(np.isfinite(out))
+
+
+def test_spectral_shape_prior_sobol_bounds():
+    config = SpectralShapeConfig()
+    samples = sample_spectral_shape_prior(256, config)
+    assert samples.shape == (256, 3)
+    assert np.all(samples[:, 0] >= config.alpha_min)
+    assert np.all(samples[:, 0] <= config.alpha_max)
+    assert np.all(samples[:, 1] >= config.beta_min)
+    assert np.all(samples[:, 1] <= config.beta_max)
+    assert np.all(samples[:, 2] >= config.gamma_min)
+    assert np.all(samples[:, 2] <= config.gamma_max)
