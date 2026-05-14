@@ -565,9 +565,12 @@ class InferenceEngine(InferenceEngineInterface):
         logger.info(f"P map noise (MAD): {sigma_p:.4f}")
 
         if snr_threshold is not None:
-            valid = valid & (p_map >= snr_threshold * sigma_p)
+            if sigma_p > 0:
+                valid = valid & (p_map >= snr_threshold * sigma_p)
+            else:
+                valid = valid & (p_map > 0)
         else:
-            valid = valid & (p_map > sigma_p)
+            valid = valid & (p_map > max(sigma_p, 0.0))
 
         pixel_list = np.argwhere(valid)  # shape (N_valid, 2)
         n_valid = len(pixel_list)
