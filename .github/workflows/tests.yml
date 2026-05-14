@@ -1,4 +1,4 @@
-name: Cube Integration Tests
+name: Tests
 
 on:
   push:
@@ -12,7 +12,7 @@ on:
       - 'tests/conftest.py'
       - 'pyproject.toml'
       - 'pixi.lock'
-      - '.github/workflows/cube_integration.yml'
+      - '.github/workflows/tests.yml'
   pull_request:
     branches: [main]
 
