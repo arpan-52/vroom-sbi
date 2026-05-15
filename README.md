@@ -62,9 +62,40 @@ These translate to the following RM synthesis figures of merit:
 
 ## Quickstart: inference on FITS cubes
 
-See [`notebooks/quickstart_fits_cube.ipynb`](notebooks/quickstart_fits_cube.ipynb) for a
-self-contained worked example that builds a synthetic IQUV cube, runs inference, and
-plots the recovered RM map against the injected truth.
+[`notebooks/quickstart_fits_cube.ipynb`](notebooks/quickstart_fits_cube.ipynb) is a
+self-contained worked example. It builds a synthetic 64x64 IQUV cube (VLA L-band,
+128 channels) with a single-pixel Faraday-thin point source injected at the centre,
+runs masked inference on that pixel, and plots the results. All outputs below come
+from running the notebook as-is.
+
+**Cube quick-look** -- Stokes I, Q, and U at the midband channel. The source is a
+single pixel at centre; the rest of the map is noise (σ = 0.02 in fractional
+polarization units, peak SNR = 15 per channel).
+
+![Cube preview](notebooks/cube_preview.png)
+
+**RM recovery** -- recovered RM map, posterior uncertainty, residual, and SNR map.
+Only the masked source pixel was processed (1 of 4096). Injected RM = +25 rad/m²,
+recovered 25.5 ± 0.7 rad/m².
+
+![RM recovery](notebooks/rm_recovery.png)
+
+**Reconstructed QU spectra** -- posterior median and 1σ envelope overlaid on the
+observed (noisy) data and the noiseless injected truth.
+
+![QU spectrum reconstruction](notebooks/qu_spectrum_reconstruction.png)
+
+**Posterior corner plot** -- marginal posteriors for RM, p₀, and χ₀ at the source
+pixel, with injected truth marked in red.
+
+![Corner plot](notebooks/corner_source_pixel.png)
+
+To run the notebook yourself:
+
+```bash
+pixi run -e notebooks notebook          # opens JupyterLab
+pixi run -e notebooks execute-notebook  # non-interactive execution
+```
 
 Models download automatically from HuggingFace the first time you run inference --
 no separate download step required. To pre-fetch explicitly:
