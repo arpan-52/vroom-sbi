@@ -63,6 +63,13 @@ Thumbs.db
 .ipynb_checkpoints/
 *.ipynb
 
+# Notebook-generated outputs (run artefacts, not source)
+notebooks/inference_output/
+notebooks/synthetic_cubes/
+notebooks/p_map.fits
+notebooks/noise_per_chan.fits
+notebooks/weights.fits
+
 # Data files (optional - uncomment if needed)
 # *.fits
 # *.csv

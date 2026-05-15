@@ -123,40 +123,42 @@ def load_posterior(model_path: Path, device: str = "cpu") -> tuple[Any, dict[str
             data = pickle.load(f)
         posterior = data["posterior"]
 
-    # Legacy path: move everything to device
-    if device != "cpu":
-        if hasattr(posterior, "posterior_estimator"):
-            posterior.posterior_estimator = posterior.posterior_estimator.to(device)
-        if hasattr(posterior, "_neural_net"):
-            posterior._neural_net = posterior._neural_net.to(device)
+    # Legacy path: move everything to the requested device.
+    # Always run this block -- a pickled posterior may have _device="cuda"
+    # baked in from training, which causes sbi to call torch.cuda even when
+    # the caller requests device="cpu".
+    if hasattr(posterior, "posterior_estimator"):
+        posterior.posterior_estimator = posterior.posterior_estimator.to(device)
+    if hasattr(posterior, "_neural_net"):
+        posterior._neural_net = posterior._neural_net.to(device)
 
-        def move_prior_to_device(prior, dev):
-            if prior is None:
-                return
-            if hasattr(prior, "base_dist"):
-                bd = prior.base_dist
-                if hasattr(bd, "low") and hasattr(bd, "high"):
-                    bd.low = bd.low.to(dev)
-                    bd.high = bd.high.to(dev)
-            elif hasattr(prior, "low") and hasattr(prior, "high"):
-                prior.low = prior.low.to(dev)
-                prior.high = prior.high.to(dev)
+    def move_prior_to_device(prior, dev):
+        if prior is None:
+            return
+        if hasattr(prior, "base_dist"):
+            bd = prior.base_dist
+            if hasattr(bd, "low") and hasattr(bd, "high"):
+                bd.low = bd.low.to(dev)
+                bd.high = bd.high.to(dev)
+        elif hasattr(prior, "low") and hasattr(prior, "high"):
+            prior.low = prior.low.to(dev)
+            prior.high = prior.high.to(dev)
 
-        if hasattr(posterior, "_prior"):
-            move_prior_to_device(posterior._prior, device)
-        if hasattr(posterior, "prior"):
-            move_prior_to_device(posterior.prior, device)
+    if hasattr(posterior, "_prior"):
+        move_prior_to_device(posterior._prior, device)
+    if hasattr(posterior, "prior"):
+        move_prior_to_device(posterior.prior, device)
 
-        if hasattr(posterior, "_device"):
-            posterior._device = device
+    if hasattr(posterior, "_device"):
+        posterior._device = device
 
-        if hasattr(posterior, "to"):
-            try:
-                result = posterior.to(device)
-                if result is not None:
-                    posterior = result
-            except Exception:
-                pass
+    if hasattr(posterior, "to"):
+        try:
+            result = posterior.to(device)
+            if result is not None:
+                posterior = result
+        except Exception:
+            pass
 
     return posterior, data
 
@@ -762,6 +764,7 @@ class InferenceEngine(InferenceEngineInterface):
         n_samples: int = 1000,
         mem_fraction: float = 0.5,
         i_cube=None,
+        mask: np.ndarray | None = None,
     ) -> dict[str, np.ndarray]:
         """
         Chunked cube inference — never loads the full cube into RAM.
@@ -782,6 +785,9 @@ class InferenceEngine(InferenceEngineInterface):
         n_samples : int
         mem_fraction : float
             Fraction of available RAM to use per chunk (default 0.5)
+        mask : np.ndarray, optional
+            Boolean 2D array shape ``(n_dec, n_ra)``.  Only pixels where
+            ``mask == True`` are processed (ANDed with the SNR threshold).
         """
         import psutil
         from tqdm import tqdm
@@ -937,7 +943,14 @@ class InferenceEngine(InferenceEngineInterface):
         # Pass 2: inference on active pixels
         # Re-read available RAM now that results arrays and P map are allocated
         # ------------------------------------------------------------------
-        n_active = int((p_map >= p_threshold).sum())
+        active_map = p_map >= p_threshold
+        if mask is not None:
+            if mask.shape != (n_dec, n_ra):
+                raise ValueError(
+                    f"mask shape {mask.shape} does not match spatial dimensions ({n_dec}, {n_ra})"
+                )
+            active_map = active_map & mask.astype(bool)
+        n_active = int(active_map.sum())
         logger.info(f"Pass 2: inference on {n_active}/{n_dec*n_ra} active pixels...")
 
         available_p2 = psutil.virtual_memory().available
@@ -958,8 +971,8 @@ class InferenceEngine(InferenceEngineInterface):
                 x1 = min(x0 + chunk_side, n_ra)
 
                 # Skip chunks with no active pixels
-                chunk_p = p_map[y0:y1, x0:x1]
-                if not np.any(chunk_p >= p_threshold):
+                chunk_active = active_map[y0:y1, x0:x1]
+                if not np.any(chunk_active):
                     continue
 
                 q_chunk, u_chunk = load_spatial_chunk(q_cube, u_cube, y0, y1, x0, x1)
@@ -974,7 +987,7 @@ class InferenceEngine(InferenceEngineInterface):
                         i_chunk = i_chunk[freq_sort_idx]
                     q_chunk, u_chunk = normalize_qu_by_i(q_chunk, u_chunk, i_chunk)
 
-                active_local = np.argwhere(chunk_p >= p_threshold)
+                active_local = np.argwhere(chunk_active)
                 for dec_local, ra_local in active_local:
                     dec_idx = y0 + dec_local
                     ra_idx = x0 + ra_local

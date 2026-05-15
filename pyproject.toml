@@ -26,8 +26,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-io  = ["spectral-cube>=0.4"]
-dev = ["pytest>=7.0", "pytest-cov"]
+io        = ["spectral-cube>=0.4"]
+dev       = ["pytest>=7.0", "pytest-cov"]
+notebooks = ["jupyterlab>=4.0", "ipykernel>=6.0", "spectral-cube>=0.4"]
 
 [project.scripts]
 vroom-sbi = "src.cli.main:main"
@@ -102,21 +103,35 @@ ruff        = ">=0.9"
 pre-commit  = ">=3.0"
 
 # ---------------------------------------------------------------------------
+# Feature: notebooks  (JupyterLab + kernel + FITS I/O)
+# ---------------------------------------------------------------------------
+
+[tool.pixi.feature.notebooks.dependencies]
+jupyterlab    = ">=4.0"
+ipykernel     = ">=6.0"
+spectral-cube = ">=0.4"
+nbconvert     = ">=7.0"
+nbclient      = ">=0.9"
+
+# ---------------------------------------------------------------------------
 # Environments
 # ---------------------------------------------------------------------------
 
 [tool.pixi.environments]
 # Core only — train, infer, validate
-default  = { solve-group = "default" }
+default   = { solve-group = "default" }
 
 # Core + FITS I/O
-io       = { features = ["io"],        solve-group = "io"  }
+io        = { features = ["io"],                    solve-group = "io"        }
 
 # Core + testing
-dev      = { features = ["dev"],       solve-group = "dev" }
+dev       = { features = ["dev"],                   solve-group = "dev"       }
 
-# Core + FITS I/O + testing  (used in cube-integration CI)
-cube-dev = { features = ["io", "dev"], solve-group = "cube-dev" }
+# Core + FITS I/O + testing  (used in CI)
+cube-dev  = { features = ["io", "dev"],             solve-group = "cube-dev"  }
+
+# Core + FITS I/O + JupyterLab  (for notebooks/)
+notebooks = { features = ["notebooks"],             solve-group = "notebooks" }
 
 # ---------------------------------------------------------------------------
 # Tasks (run with: pixi run <task>  or  pixi run -e <env> <task>)
@@ -135,3 +150,7 @@ test-all   = "pytest tests/ -v --tb=short --cov=src --cov-report=term-missing"
 lint       = "ruff check src tests"
 lint-fix   = "ruff check --fix src tests && ruff format src tests"
 hooks-install = "pre-commit install"
+
+# Notebooks
+notebook         = "jupyter lab notebooks/"
+execute-notebook = "jupyter nbconvert --to notebook --execute --inplace notebooks/quickstart_fits_cube.ipynb"

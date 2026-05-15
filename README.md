@@ -62,28 +62,60 @@ These translate to the following RM synthesis figures of merit:
 
 ## Quickstart: inference on FITS cubes
 
-Models download automatically from HuggingFace the first time you run inference.
+See [`notebooks/quickstart_fits_cube.ipynb`](notebooks/quickstart_fits_cube.ipynb) for a
+self-contained worked example that builds a synthetic IQUV cube, runs inference, and
+plots the recovered RM map against the injected truth.
+
+Models download automatically from HuggingFace the first time you run inference --
+no separate download step required. To pre-fetch explicitly:
 
 ```bash
-# Download models explicitly (optional; also happens automatically on first infer)
 vroom-sbi download
+```
 
-# Infer RM over all polarized pixels in a Q/U/I cube
+### Polarimetric inference (RM and depolarization)
+
+```bash
 vroom-sbi cube-infer-pol \
     --cube-q Q.fits \
     --cube-u U.fits \
     --cube-i I.fits \
     --output-dir results/
+```
 
-# Infer spectral index over a Stokes I cube
-vroom-sbi cube-infer-spectra \
+Providing `--cube-i` fits the total-intensity spectral shape per pixel first, then divides Q and U by the posterior mean I(ν) model before RM inference. This suppresses per-channel noise amplification from dividing by the raw noisy I spectrum. Without it, the input is assumed to already be in fractional polarization units.
+
+Active pixels are selected where the frequency-collapsed polarized intensity exceeds 5σ_P (adjustable with `--snr-threshold`). All other pixels are set to NaN in the output maps.
+
+### Supplying a mask
+
+If you already have a region file or source catalog defining which pixels to process, pass a 2D FITS mask -- non-zero pixels are processed, all others are skipped regardless of SNR:
+
+```bash
+vroom-sbi cube-infer-pol \
+    --cube-q Q.fits \
+    --cube-u U.fits \
     --cube-i I.fits \
+    --mask source_mask.fits \
+    --snr-threshold 3.0 \
     --output-dir results/
 ```
 
-Providing `--cube-i` divides Q and U by the posterior mean I(ν) model per channel before inference, converting to fractional polarization while suppressing per-channel noise amplification (see Section 3.4 of the paper). Without it, the input is assumed to already be in fractional units.
+The mask and SNR threshold are applied together: a pixel must be both non-zero in the mask and above the SNR threshold to be processed. Using a mask is the recommended approach when you have a clean source catalog, because it avoids spending inference time on empty sky.
 
-Output directory contains FITS maps for each physical parameter:
+### Spectral index inference (total intensity only)
+
+```bash
+vroom-sbi cube-infer-spectra \
+    --fits I.fits \
+    --model models/spectral_shape_posterior.pt \
+    --snr-threshold 5.0 \
+    --output-dir spectra_results/
+```
+
+### Output maps
+
+Both modes write one FITS file per parameter per component:
 
 ```
 results/
@@ -93,11 +125,9 @@ results/
   rm_p84_comp1.fits       # 84th percentile
   amp_mean_comp1.fits
   chi0_mean_comp1.fits
-  sigma_phi_mean_comp1.fits   # if dispersion model selected
-  delta_phi_mean_comp1.fits   # if Burn slab model selected
+  sigma_phi_mean_comp1.fits   # dispersion models only
+  delta_phi_mean_comp1.fits   # Burn slab only
 ```
-
-Unprocessed pixels (below the polarized intensity threshold, default 5σ_P) are set to NaN.
 
 ---
 
