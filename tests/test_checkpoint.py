@@ -5,8 +5,6 @@ Tests for src/core/checkpoint.py.
 from datetime import datetime
 from unittest.mock import patch
 
-import pytest
-
 from src.core.checkpoint import CheckpointManager, ModelCheckpoint
 
 

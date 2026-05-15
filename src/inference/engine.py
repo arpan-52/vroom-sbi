@@ -402,8 +402,6 @@ class InferenceEngine(InferenceEngineInterface):
             if model_type == "faraday_thin":
                 amp_samples = samples[:, base_idx + 1]
                 chi0_samples = samples[:, base_idx + 2]
-                q_samples = amp_samples * np.cos(2 * chi0_samples)
-                u_samples = amp_samples * np.sin(2 * chi0_samples)
 
                 component = ComponentResult(
                     rm_mean=np.mean(rm_samples),
@@ -418,8 +416,6 @@ class InferenceEngine(InferenceEngineInterface):
                 second_param = samples[:, base_idx + 1]
                 amp_samples = samples[:, base_idx + 2]
                 chi0_samples = samples[:, base_idx + 3]
-                q_samples = amp_samples * np.cos(2 * chi0_samples)
-                u_samples = amp_samples * np.sin(2 * chi0_samples)
 
                 component = ComponentResult(
                     rm_mean=np.mean(rm_samples),

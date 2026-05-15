@@ -2,9 +2,9 @@
 Tests for src/simulator/augmentation.py.
 """
 
-import numpy as np
-import pytest
 from unittest.mock import patch
+
+import numpy as np
 
 import src.simulator.augmentation as aug_mod
 

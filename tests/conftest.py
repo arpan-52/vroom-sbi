@@ -273,10 +273,8 @@ def make_fake_inference_result(rm_true=GT_RM, n_samples=50):
     comp = ComponentResult(
         rm_mean=float(np.mean(rm_samp)),
         rm_std=float(np.std(rm_samp)),
-        q_mean=float(np.mean(amp_samp * np.cos(2 * chi0_samp))),
-        q_std=0.05,
-        u_mean=float(np.mean(amp_samp * np.sin(2 * chi0_samp))),
-        u_std=0.05,
+        amp_mean=float(np.mean(amp_samp)),
+        amp_std=float(np.std(amp_samp)),
         samples=np.column_stack([rm_samp, amp_samp, chi0_samp]),
         chi0_mean=float(np.mean(chi0_samp)),
         chi0_std=float(np.std(chi0_samp)),

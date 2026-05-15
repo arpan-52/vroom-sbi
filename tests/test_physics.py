@@ -7,7 +7,6 @@ Covers:
 - compute_faraday_spectrum_vec: vectorized implementation matches loop reference
 """
 
-from pathlib import Path
 
 import numpy as np
 import pytest
