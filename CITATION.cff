@@ -1,0 +1,47 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the software and the paper."
+title: "VROOM-SBI: Simulation-Based Inference for Rotation Measure Synthesis"
+version: 1.0.0
+date-released: 2026-05-14
+license: MIT
+repository-code: "https://github.com/arpan-52/vroom-sbi"
+
+authors:
+  - family-names: Pal
+    given-names: Arpan
+    affiliation: "National Radio Astronomy Observatory; National Centre for Radio Astrophysics"
+  - family-names: Jagannathan
+    given-names: Preshanth
+    affiliation: "National Radio Astronomy Observatory"
+    orcid: "https://orcid.org/0000-0002-2112-2163"
+
+abstract: >
+  VROOM-SBI performs Bayesian inference on Faraday rotation measures from
+  polarized radio spectra (Q and U as functions of frequency) using
+  simulation-based inference with pre-trained neural posterior estimators.
+  Given observed Q(lambda^2) and U(lambda^2) spectra, it returns full
+  posterior probability distributions over Faraday depth structure without
+  requiring likelihood evaluations or classical QU-fitting.
+
+keywords:
+  - radio astronomy
+  - polarimetry
+  - rotation measure synthesis
+  - simulation-based inference
+  - neural posterior estimation
+  - Faraday rotation
+
+preferred-citation:
+  type: article
+  title: "VROOM-SBI: Simulation-Based Inference for Rotation Measure Synthesis"
+  authors:
+    - family-names: Pal
+      given-names: Arpan
+      affiliation: "National Radio Astronomy Observatory; National Centre for Radio Astrophysics"
+    - family-names: Jagannathan
+      given-names: Preshanth
+      affiliation: "National Radio Astronomy Observatory"
+      orcid: "https://orcid.org/0000-0002-2112-2163"
+  year: 2026
+  status: submitted
+  # arxiv-id: "XXXX.XXXXX"  # update when arXiv ID is assigned

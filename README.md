@@ -321,3 +321,12 @@ vroom-sbi push --model-dir models/ --repo-id your-org/your-repo
 - numpy, astropy, matplotlib, corner, tqdm, pyyaml, scipy
 - huggingface-hub (auto-download and push)
 - spectral-cube (optional, FITS cube inference only)
+
+---
+
+## Use of AI assistance
+
+Parts of this codebase and documentation were developed with the assistance of
+AI coding tools, including Claude (Anthropic) and Codex (OpenAI). All code and
+text were reviewed, tested, and revised by the authors, who take full
+responsibility for the correctness and integrity of the final work.
