@@ -132,8 +132,7 @@ def plot_inference_result(
     for i, comp in enumerate(result.components):
         summary_text += f"Component {i + 1}:\n"
         summary_text += f"  RM = {comp.rm_mean:.2f} ± {comp.rm_std:.2f}\n"
-        summary_text += f"  q = {comp.q_mean:.4f} ± {comp.q_std:.4f}\n"
-        summary_text += f"  u = {comp.u_mean:.4f} ± {comp.u_std:.4f}\n"
+        summary_text += f"  amp = {comp.amp_mean:.4f} ± {comp.amp_std:.4f}\n"
 
     ax4.text(
         0.1,

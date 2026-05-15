@@ -53,10 +53,10 @@ def validate_config(config: Configuration) -> list[str]:
         )
 
     # Validate noise config
-    if config.noise.base_level <= 0:
+    if config.noise.sigma_min <= 0:
         raise ConfigurationError(
-            f"Invalid noise base_level: {config.noise.base_level}\n"
-            f"base_level must be positive"
+            f"Invalid noise sigma_min: {config.noise.sigma_min}\n"
+            f"sigma_min must be positive"
         )
 
     if config.noise.augmentation_min_factor >= config.noise.augmentation_max_factor:
@@ -188,7 +188,8 @@ def print_config_summary(config: Configuration):
     )
 
     print("\nNoise:")
-    print(f"  Base level: {config.noise.base_level}")
+    print(f"  Sigma range: [{config.noise.sigma_min}, {config.noise.sigma_max}]")
+    print(f"  Mode: {config.noise.mode}")
     print(f"  Augmentation: {config.noise.augmentation_enable}")
     if config.noise.augmentation_enable:
         print(

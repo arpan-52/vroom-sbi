@@ -29,18 +29,15 @@ def load_frequencies(freq_file: str) -> tuple[np.ndarray, np.ndarray]:
     """
     try:
         data = np.loadtxt(freq_file)
-        if data.ndim == 1:
-            # Single column - frequencies only
-            frequencies = data
-            weights = np.ones_like(frequencies)
-        else:
-            # Two columns - frequencies and weights
-            frequencies = data[:, 0]
-            weights = data[:, 1]
-    except Exception:
-        # Fallback: try single column
-        frequencies = np.loadtxt(freq_file)
+    except Exception as exc:
+        raise ValueError(f"Could not read frequency file '{freq_file}': {exc}") from exc
+
+    if data.ndim == 1:
+        frequencies = data
         weights = np.ones_like(frequencies)
+    else:
+        frequencies = data[:, 0]
+        weights = data[:, 1]
 
     return frequencies, weights
 
@@ -108,6 +105,28 @@ def compute_rmsf(
         rmsf[i] = (
             np.sum(weights * np.exp(-2j * phi_val * (lambda_sq - lambda_sq_mean))) / K
         )
+
+    return rmsf
+
+
+def compute_rmsf_vec(
+    lambda_sq: np.ndarray, phi: np.ndarray, weights: np.ndarray = None
+) -> np.ndarray:
+    """Vectorized equivalent of compute_rmsf; output is identical."""
+    if weights is None:
+        weights = np.ones_like(lambda_sq)
+
+    good_mask = weights > 0
+    if not np.any(good_mask):
+        raise ValueError("No valid channels (all weights are zero)")
+
+    lambda_sq_mean = np.average(lambda_sq[good_mask], weights=weights[good_mask])
+    K = np.sum(weights[good_mask])
+
+    # (n_phi, 1) broadcast against (1, n_freq)
+    phi_grid = phi[:, None]
+    lsq_grid = (lambda_sq - lambda_sq_mean)[None, :]
+    rmsf = (weights[None, :] * np.exp(-2j * phi_grid * lsq_grid)).sum(axis=1) / K
 
     return rmsf
 
@@ -206,5 +225,32 @@ def compute_faraday_spectrum(
             np.sum(weights * P * np.exp(-2j * phi_val * (lambda_sq - lambda_sq_mean)))
             / K
         )
+
+    return F
+
+
+def compute_faraday_spectrum_vec(
+    qu_obs: np.ndarray,
+    lambda_sq: np.ndarray,
+    phi: np.ndarray,
+    weights: np.ndarray = None,
+) -> np.ndarray:
+    """Vectorized equivalent of compute_faraday_spectrum; output is identical."""
+    if weights is None:
+        weights = np.ones_like(lambda_sq)
+
+    n_freq = len(lambda_sq)
+    Q = qu_obs[:n_freq]
+    U = qu_obs[n_freq:]
+    P = Q + 1j * U
+
+    good_mask = weights > 0
+    lambda_sq_mean = np.average(lambda_sq[good_mask], weights=weights[good_mask])
+    K = np.sum(weights)
+
+    # (n_phi, 1) broadcast against (1, n_freq)
+    phi_grid = phi[:, None]
+    lsq_grid = (lambda_sq - lambda_sq_mean)[None, :]
+    F = (weights[None, :] * P[None, :] * np.exp(-2j * phi_grid * lsq_grid)).sum(axis=1) / K
 
     return F

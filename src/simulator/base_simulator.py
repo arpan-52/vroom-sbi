@@ -9,7 +9,6 @@ Supports multiple physical models:
 - external_dispersion: External Faraday dispersion (turbulent foreground)
 - internal_dispersion: Internal Faraday dispersion (Sokoloff model)
 
-FIXED: The external and internal dispersion models now use correct formulas.
 """
 
 import warnings

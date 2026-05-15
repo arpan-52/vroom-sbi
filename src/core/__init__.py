@@ -5,7 +5,6 @@ Core components for VROOM-SBI.
 from .base_classes import (
     BaseSimulator,
     InferenceEngineInterface,
-    PosteriorInterface,
 )
 from .checkpoint import (
     CheckpointManager,
@@ -20,7 +19,6 @@ from .result import (
 
 __all__ = [
     "BaseSimulator",
-    "PosteriorInterface",
     "InferenceEngineInterface",
     "ComponentResult",
     "InferenceResult",

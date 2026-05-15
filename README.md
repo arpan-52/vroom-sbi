@@ -14,7 +14,27 @@ Paper: Pal & Jagannathan (submitted)
 
 ---
 
+## Table of contents
+
+- [Installation](#installation)
+- [Frequency setup and observing constraints](#frequency-setup-and-observing-constraints)
+- [Quickstart: inference on FITS cubes](#quickstart-inference-on-fits-cubes)
+- [Worked example: two-component Faraday-thin source](#worked-example-two-component-faraday-thin-source)
+- [Posterior validation summary](#posterior-validation-summary)
+- [Interpreting results](#interpreting-results)
+- [Computational performance](#computational-performance)
+- [Training your own models](#training-your-own-models)
+- [Requirements](#requirements)
+- [Contributing](#contributing)
+- [Use of AI assistance](#use-of-ai-assistance)
+
+---
+
 ## Installation
+
+### Inference only (pip)
+
+If you just want to run inference with the pre-trained models:
 
 ```bash
 git clone https://github.com/arpan-52/vroom-sbi
@@ -22,10 +42,44 @@ cd vroom-sbi
 pip install -e .
 ```
 
-For FITS cube inference, add the IO extras:
+For FITS cube inference, also install the IO extras:
 
 ```bash
 pip install -e ".[io]"
+```
+
+### Development (pixi)
+
+We develop with [pixi](https://pixi.sh), a fast cross-platform package manager built on conda-forge. It handles the full environment including PyTorch and all dependencies without requiring a separate conda installation.
+
+```bash
+# Install pixi (if you don't have it)
+curl -fsSL https://pixi.sh/install.sh | sh
+
+# Clone and set up
+git clone https://github.com/arpan-52/vroom-sbi
+cd vroom-sbi
+pixi install        # installs all environments defined in pixi.toml
+pixi shell          # activates the default environment
+```
+
+Available environments:
+
+| Environment | Use |
+|-------------|-----|
+| `default` | train, infer, validate |
+| `io` | default + FITS cube I/O ([spectral-cube](https://spectral-cube.readthedocs.io)) |
+| `dev` | default + testing tools |
+| `cube-dev` | io + testing (used in CI) |
+| `notebooks` | io + [JupyterLab](https://jupyter.org) + nbconvert |
+
+Common tasks:
+
+```bash
+pixi run test               # run tests
+pixi run lint               # check linting
+pixi run -e notebooks notebook          # open JupyterLab
+pixi run -e notebooks execute-notebook  # run the quickstart notebook
 ```
 
 ---
@@ -54,7 +108,7 @@ These translate to the following RM synthesis figures of merit:
 
 **Why the prior range matters.** The RMSF FWHM of ~51 rad/m² sets the minimum separation at which two RM components can be independently resolved. Components closer than ~25 rad/m² will produce degenerate posteriors with large uncertainties.
 
-**Channel flagging.** The weight augmentation during training simulates scattered flagging (30% probability), contiguous RFI gaps (30%), and large RFI blocks (10%), using continuous inverse-variance weights rather than binary masks. The trained posteriors degrade gracefully under realistic flagging -- the MACS J1752+4440 analysis below used 78 of 128 channels (50 excised for RFI) without retraining.
+**Channel flagging.** The weight augmentation during training simulates scattered flagging (30% probability), contiguous RFI gaps (30%), and large RFI blocks (10%), using continuous inverse-variance weights rather than binary masks. The trained posteriors degrade gracefully under realistic flagging -- the MACS J1752+4440 science case in the paper used 78 of 128 channels (50 excised for RFI) without retraining.
 
 **Using different frequency coverage.** To train on a different array or subband, replace `freq.txt` with your own channel list (one frequency in Hz per line, optional second column for per-channel weights), update the prior ranges in `config.yaml` if your RM range differs, and retrain. The network architecture does not change.
 
@@ -90,13 +144,6 @@ pixel, with injected truth marked in red.
 
 ![Corner plot](notebooks/corner_source_pixel.png)
 
-To run the notebook yourself:
-
-```bash
-pixi run -e notebooks notebook          # opens JupyterLab
-pixi run -e notebooks execute-notebook  # non-interactive execution
-```
-
 Models download automatically from HuggingFace the first time you run inference --
 no separate download step required. To pre-fetch explicitly:
 
@@ -111,7 +158,7 @@ vroom-sbi cube-infer-pol \
     --cube-q Q.fits \
     --cube-u U.fits \
     --cube-i I.fits \
-    --output-dir results/
+    --output-dir cube_results/
 ```
 
 Providing `--cube-i` fits the total-intensity spectral shape per pixel first, then divides Q and U by the posterior mean I(ν) model before RM inference. This suppresses per-channel noise amplification from dividing by the raw noisy I spectrum. Without it, the input is assumed to already be in fractional polarization units.
@@ -129,7 +176,7 @@ vroom-sbi cube-infer-pol \
     --cube-i I.fits \
     --mask source_mask.fits \
     --snr-threshold 3.0 \
-    --output-dir results/
+    --output-dir cube_results/
 ```
 
 The mask and SNR threshold are applied together: a pixel must be both non-zero in the mask and above the SNR threshold to be processed. Using a mask is the recommended approach when you have a clean source catalog, because it avoids spending inference time on empty sky.
@@ -149,7 +196,7 @@ vroom-sbi cube-infer-spectra \
 Both modes write one FITS file per parameter per component:
 
 ```
-results/
+cube_results/
   rm_mean_comp1.fits      # posterior mean RM, component 1
   rm_std_comp1.fits       # posterior std (1-sigma)
   rm_p16_comp1.fits       # 16th percentile
@@ -164,22 +211,20 @@ results/
 
 ## Worked example: two-component Faraday-thin source
 
-This example simulates the case shown in Figure 6 of the paper: two Faraday-thin components with φ₁ = +15 rad/m² and φ₂ = −44.5 rad/m² (Δφ = 59.5 rad/m²).
+This example simulates two Faraday-thin components with φ₁ = +15 rad/m² and φ₂ = −44.5 rad/m² (Δφ = 59.5 rad/m²).
 
 ```python
 import numpy as np
-from src.simulator import RMSimulator
-from src.inference import InferenceEngine
+from vroom_sbi.simulator import RMSimulator
+from vroom_sbi.inference import InferenceEngine
 
-# Simulate a 2-component Faraday-thin source (Fig. 6 of Pal & Jagannathan)
-# phi_1 = +15.0 rad/m², phi_2 = -44.5 rad/m², Delta_phi = 59.5 rad/m²
 sim = RMSimulator("freq.txt", n_components=2, model_type="faraday_thin")
 theta_true = np.array([[15.0, 0.5, 0.8,      # [RM, p0, chi0]  component 1
                         -44.5, 0.4, 1.2]])    # [RM, p0, chi0]  component 2
 
 qu_noiseless = sim.simulate_noiseless(theta_true)  # shape (256,): [Q_0..Q_127, U_0..U_127]
 
-# Add noise (sigma = 0.02, matching ~SNR 25 per channel)
+# Add noise (sigma = 0.02, ~SNR 25 per channel for p0 = 0.5)
 rng = np.random.default_rng(42)
 qu_obs = qu_noiseless + rng.normal(0, 0.02, qu_noiseless.shape)
 
@@ -189,7 +234,7 @@ engine.load_models()
 result, all_results = engine.infer(qu_obs, n_samples=5000)
 ```
 
-The two components are separated by 59.5 rad/m², above the ~51 rad/m² RMSF FWHM, so they are resolved. Both rotation measures recover to within 2 rad/m² of the injected truth (median absolute error across 256 Sobol test cases in the paper: MedAE < 2 rad/m², empirical 68% coverage ~76% for RM).
+The two components are separated by 59.5 rad/m², above the ~51 rad/m² RMSF FWHM, so they are resolved. Both rotation measures recover to within 2 rad/m² of the injected truth (see the paper for full validation statistics).
 
 ---
 
@@ -271,7 +316,7 @@ for key, res in all_results.items():
 
 **`burn_slab`** -- use when the source has a roughly uniform RM gradient along the line of sight, producing sinc-function depolarization.
 
-QU-fitting comparisons in the paper use [RM-Tools](https://github.com/CIRADA-Tools/RM-Tools) with the dynesty nested sampler.
+QU-fitting comparisons in the paper use [RM-Tools](https://github.com/CIRADA-Tools/RM-Tools) with the [dynesty](https://github.com/joshspeagle/dynesty) nested sampler.
 
 ---
 
@@ -286,7 +331,7 @@ From the paper (MACS J1752+4440, 35,700 active pixels, 78 usable channels, 5,000
 | VROOM-SBI (CPU) | ~0.59 s | ~353 min |
 | QU-fitting (dynesty, 300 live points) | 1.5--2 min | ~900--1,200 CPU-hours |
 
-Hardware: NVIDIA GeForce RTX 4060 (Mobile) and Intel Core Ultra 9 185H (22 cores).
+Hardware: NVIDIA GeForce RTX 4060 (Mobile) and Intel Core Ultra 9 185H (22 cores). CPU timings are on a mobile processor; server-class CPU runtimes will differ.
 
 VROOM-SBI delivers a ~500x wall-clock speedup over classical QU-fitting while retaining per-pixel posterior distributions that RM synthesis cannot provide.
 
@@ -300,7 +345,7 @@ Copy and edit `config.yaml` -- at minimum set `freq_file` to your own channel li
 vroom-sbi train --config config.yaml --device cuda
 ```
 
-Training budget scales with the number of components. The baseline is 4,096,000 simulations for N=1, scaling as N² for multi-component models. On a single GPU this takes a few hours per model type. The prior sampler uses scrambled Sobol quasi-random sequences for better parameter-space coverage than uniform Monte Carlo at the same simulation budget.
+Training budget scales with the number of components. The baseline is 4,096,000 simulations for N=1. On a single GPU this takes a few hours per model type. The prior sampler uses scrambled Sobol quasi-random sequences for better parameter-space coverage than uniform Monte Carlo at the same simulation budget.
 
 ```bash
 # Retrain the classifier only (after posteriors already exist)
@@ -315,18 +360,33 @@ vroom-sbi push --model-dir models/ --repo-id your-org/your-repo
 
 ## Requirements
 
-- Python >= 3.10
-- PyTorch >= 2.0
-- sbi >= 0.18
-- numpy, astropy, matplotlib, corner, tqdm, pyyaml, scipy
-- huggingface-hub (auto-download and push)
-- spectral-cube (optional, FITS cube inference only)
+- [Python](https://www.python.org/) >= 3.10
+- [PyTorch](https://pytorch.org/) >= 2.0
+- [sbi](https://github.com/sbi-dev/sbi) >= 0.18
+- [numpy](https://numpy.org/), [astropy](https://www.astropy.org/), [matplotlib](https://matplotlib.org/), [corner](https://github.com/dfm/corner.py), [tqdm](https://github.com/tqdm/tqdm), [pyyaml](https://pyyaml.org/), [scipy](https://scipy.org/)
+- [huggingface-hub](https://github.com/huggingface/huggingface_hub) (auto-download and push)
+- [spectral-cube](https://spectral-cube.readthedocs.io/) (optional, FITS cube inference only)
+
+---
+
+## Contributing
+
+Contributions are welcome. If you find a bug, have a feature request, or want to add support for a new depolarization model, please open an issue or a pull request.
+
+For development, use the `pixi` setup described above. Before submitting a PR:
+
+```bash
+pixi run lint-fix   # auto-format and lint
+pixi run test       # run the test suite
+```
+
+If you are adding a new physical model, the key files to touch are `src/simulator/physics.py` (forward model), `src/simulator/prior.py` (prior definition), and `src/training/trainer.py` (training loop). The classifier in `src/training/classifier_trainer.py` will need retraining once new model types are added.
 
 ---
 
 ## Use of AI assistance
 
 Parts of this codebase and documentation were developed with the assistance of
-AI coding tools, including Claude (Anthropic) and Codex (OpenAI). All code and
+AI coding tools, including [Claude](https://claude.ai) (Anthropic) and [Codex](https://openai.com/blog/openai-codex) (OpenAI). All code and
 text were reviewed, tested, and revised by the authors, who take full
 responsibility for the correctness and integrity of the final work.

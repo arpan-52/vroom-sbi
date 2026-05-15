@@ -257,7 +257,10 @@ def augment_weights_continuous(
 
 
 def generate_augmented_weights_batch(
-    base_weights: np.ndarray, batch_size: int, **kwargs
+    base_weights: np.ndarray,
+    batch_size: int,
+    continuous_weights: bool = True,
+    **kwargs,
 ) -> np.ndarray:
     """
     Generate a batch of augmented weights for training.
@@ -268,18 +271,23 @@ def generate_augmented_weights_batch(
         Original channel weights
     batch_size : int
         Number of augmented weight arrays to generate
+    continuous_weights : bool
+        If True (default), use augment_weights_continuous (per-channel
+        inverse-variance weights). If False, use augment_weights_combined
+        (legacy binary scheme).
     **kwargs
-        Additional arguments passed to augment_weights_combined
+        Additional arguments forwarded to the chosen augmentation function.
 
     Returns
     -------
     np.ndarray
         Array of shape (batch_size, n_channels) with augmented weights
     """
+    augment_fn = augment_weights_continuous if continuous_weights else augment_weights_combined
     augmented_batch = np.zeros((batch_size, len(base_weights)))
 
     for i in range(batch_size):
-        augmented_batch[i] = augment_weights_combined(base_weights, **kwargs)
+        augmented_batch[i] = augment_fn(base_weights, **kwargs)
 
     return augmented_batch
 

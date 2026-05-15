@@ -204,32 +204,6 @@ def sort_components_by_rm(
     return theta_sorted
 
 
-def sort_posterior_samples(
-    samples: np.ndarray, n_components: int, params_per_comp: int = 3
-) -> np.ndarray:
-    """
-    Sort posterior samples to ensure RM1/phi1 > RM2/phi2 > ...
-
-    Use this after sampling from the posterior to ensure consistent ordering.
-    This is needed because even though we train with sorted samples,
-    the posterior might occasionally produce unsorted outputs.
-
-    Parameters
-    ----------
-    samples : np.ndarray
-        Posterior samples of shape (n_samples, n_params)
-    n_components : int
-        Number of components
-    params_per_comp : int
-        Number of parameters per component (3 or 4)
-
-    Returns
-    -------
-    samples_sorted : np.ndarray
-        Sorted samples
-    """
-    return sort_components_by_rm(samples, n_components, params_per_comp)
-
 
 def get_params_per_component(model_type: str) -> int:
     """Get number of parameters per component for a model type."""

@@ -15,7 +15,7 @@ import torch
 from ..config import Configuration, MemoryConfig
 from ..core.base_classes import InferenceEngineInterface
 from ..core.result import ClassifierResult, ComponentResult, InferenceResult
-from ..simulator.prior import get_params_per_component, sort_posterior_samples
+from ..simulator.prior import get_params_per_component, sort_components_by_rm
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +337,7 @@ class InferenceEngine(InferenceEngineInterface):
             samples_np = samples.cpu().numpy()
 
             params_per_comp = get_params_per_component(model_type_key)
-            samples_np = sort_posterior_samples(
+            samples_np = sort_components_by_rm(
                 samples_np, n_components, params_per_comp
             )
 
@@ -408,10 +408,8 @@ class InferenceEngine(InferenceEngineInterface):
                 component = ComponentResult(
                     rm_mean=np.mean(rm_samples),
                     rm_std=np.std(rm_samples),
-                    q_mean=np.mean(q_samples),
-                    q_std=np.std(q_samples),
-                    u_mean=np.mean(u_samples),
-                    u_std=np.std(u_samples),
+                    amp_mean=np.mean(amp_samples),
+                    amp_std=np.std(amp_samples),
                     samples=np.column_stack([rm_samples, amp_samples, chi0_samples]),
                     chi0_mean=np.mean(chi0_samples),
                     chi0_std=np.std(chi0_samples),
@@ -426,10 +424,8 @@ class InferenceEngine(InferenceEngineInterface):
                 component = ComponentResult(
                     rm_mean=np.mean(rm_samples),
                     rm_std=np.std(rm_samples),
-                    q_mean=np.mean(q_samples),
-                    q_std=np.std(q_samples),
-                    u_mean=np.mean(u_samples),
-                    u_std=np.std(u_samples),
+                    amp_mean=np.mean(amp_samples),
+                    amp_std=np.std(amp_samples),
                     samples=np.column_stack(
                         [rm_samples, second_param, amp_samples, chi0_samples]
                     ),
@@ -519,7 +515,7 @@ class InferenceEngine(InferenceEngineInterface):
         # Sort components per pixel (no-op for n_components=1)
         if n_components > 1:
             for i in range(B):
-                samples_np[i] = sort_posterior_samples(
+                samples_np[i] = sort_components_by_rm(
                     samples_np[i], n_components, params_per_comp
                 )
 

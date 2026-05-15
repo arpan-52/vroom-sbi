@@ -171,17 +171,6 @@ class CheckpointManager:
             # Cleanup old checkpoints
             self._cleanup_old_checkpoints(model_key)
 
-        # Save best separately
-        if is_best:
-            best_path = self._get_checkpoint_path(
-                checkpoint.model_type,
-                checkpoint.n_components,
-                checkpoint.epoch,
-                is_best=True,
-            )
-            torch.save(save_dict, best_path)
-            logger.info(f"Saved best model: {best_path}")
-
         return checkpoint_path
 
     def load_checkpoint(

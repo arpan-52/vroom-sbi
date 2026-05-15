@@ -181,3 +181,20 @@ def test_spectral_shape_prior_sobol_bounds():
     assert np.all(samples[:, 1] <= config.beta_max)
     assert np.all(samples[:, 2] >= config.gamma_min)
     assert np.all(samples[:, 2] <= config.gamma_max)
+
+
+# ---------------------------------------------------------------------------
+# RM sorting API
+# ---------------------------------------------------------------------------
+
+
+def test_sort_components_by_rm_is_callable():
+    from src.simulator.prior import sort_components_by_rm
+
+    assert callable(sort_components_by_rm)
+
+
+def test_sort_posterior_samples_wrapper_removed():
+    import src.simulator.prior as prior_mod
+
+    assert not hasattr(prior_mod, "sort_posterior_samples")

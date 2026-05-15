@@ -21,10 +21,8 @@ class ComponentResult:
 
     rm_mean: float
     rm_std: float
-    q_mean: float  # Note: using q instead of 'amp' for Faraday-thin compatibility
-    q_std: float
-    u_mean: float
-    u_std: float
+    amp_mean: float
+    amp_std: float
     samples: np.ndarray = field(repr=False)
 
     # Additional stats for extended models
@@ -56,17 +54,6 @@ class InferenceResult:
     # Metadata
     inference_time_seconds: float | None = None
     n_posterior_samples: int | None = None
-
-    @property
-    def noise_mean(self) -> float:
-        """Mean noise estimate (if available)."""
-        # For backwards compatibility
-        return 0.0
-
-    @property
-    def noise_std(self) -> float:
-        """Noise std estimate (if available)."""
-        return 0.0
 
 
 @dataclass

@@ -188,10 +188,6 @@ class TrainingConfig:
 
         if self.simulation_scaling_mode == "power":
             factor = n_components**self.scaling_power
-        elif self.simulation_scaling_mode == "quadratic":
-            factor = n_components**2
-        elif self.simulation_scaling_mode == "subquadratic":
-            factor = n_components**1.5
         else:  # "linear" or default
             scaling_factors = {1: 1, 2: 2, 3: 4, 4: 6, 5: 8}
             factor = scaling_factors.get(n_components, n_components * 2)
@@ -398,7 +394,7 @@ class Configuration:
             save_dir=str(train_raw.get("save_dir", "models")),
         )
 
-        # Extract memory config (legacy, mostly unused now)
+        # MemoryConfig controls chunked inference RAM/VRAM budgets in engine.py
         mem_raw = raw.get("memory", {})
         memory = MemoryConfig(
             max_ram_gb=float(mem_raw.get("max_ram_gb", 16.0)),
@@ -548,8 +544,6 @@ class Configuration:
                 "save_dir": self.training.save_dir,
             },
             "spectral_shape": {
-                "log_F0_min": self.spectral_shape.log_F0_min,
-                "log_F0_max": self.spectral_shape.log_F0_max,
                 "alpha_min": self.spectral_shape.alpha_min,
                 "alpha_max": self.spectral_shape.alpha_max,
                 "beta_min": self.spectral_shape.beta_min,

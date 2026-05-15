@@ -23,7 +23,6 @@ from .prior import (
     sample_prior,
     sample_spectral_shape_prior,
     sort_components_by_rm,
-    sort_posterior_samples,
 )
 from .spectral_simulator import SpectralShapeSimulator
 
@@ -39,7 +38,6 @@ __all__ = [
     "sample_prior",
     "sample_spectral_shape_prior",
     "sort_components_by_rm",
-    "sort_posterior_samples",
     "augment_weights_combined",
     "augment_base_noise_level",
     "augment_weights_scattered",
