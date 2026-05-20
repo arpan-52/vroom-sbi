@@ -19,6 +19,7 @@ Paper: Pal & Jagannathan (submitted)
 - [Installation](#installation)
 - [Frequency setup and observing constraints](#frequency-setup-and-observing-constraints)
 - [Quickstart: inference on FITS cubes](#quickstart-inference-on-fits-cubes)
+- [Paper figures](#paper-figures)
 - [Worked example: two-component Faraday-thin source](#worked-example-two-component-faraday-thin-source)
 - [Posterior validation summary](#posterior-validation-summary)
 - [Interpreting results](#interpreting-results)
@@ -111,6 +112,16 @@ These translate to the following RM synthesis figures of merit:
 **Channel flagging.** The weight augmentation during training simulates scattered flagging (30% probability), contiguous RFI gaps (30%), and large RFI blocks (10%), using continuous inverse-variance weights rather than binary masks. The trained posteriors degrade gracefully under realistic flagging -- the MACS J1752+4440 science case in the paper used 78 of 128 channels (50 excised for RFI) without retraining.
 
 **Using different frequency coverage.** To train on a different array or subband, replace `freq.txt` with your own channel list (one frequency in Hz per line, optional second column for per-channel weights), update the prior ranges in `config.yaml` if your RM range differs, and retrain. The network architecture does not change.
+
+---
+
+## Paper figures
+
+[`notebooks/paper_figures.ipynb`](notebooks/paper_figures.ipynb) reproduces all figures in Pal & Jagannathan (submitted). Run it with the `notebooks` pixi environment:
+
+```bash
+pixi run -e notebooks notebook
+```
 
 ---
 
