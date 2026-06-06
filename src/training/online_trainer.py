@@ -114,9 +114,27 @@ class OnlineNPETrainer:
         max_epochs: int = 500,
         stop_after_epochs: int = 20,
         clip_grad_norm: float | None = 5.0,
+        tf32: bool = True,
+        amp: str = "none",
         show_progress: bool = True,
     ) -> tuple[nn.Module, dict[str, list[float]]]:
         self.prior = prior
+
+        # --- GPU performance levers -------------------------------------
+        cuda = self.device == "cuda" or str(self.device).startswith("cuda")
+        if tf32 and cuda:
+            torch.set_float32_matmul_precision("high")
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
+        amp = (amp or "none").lower()
+        amp_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16}.get(amp)
+        use_amp = amp_dtype is not None and cuda
+        # fp16 needs loss scaling; bf16 does not.
+        scaler = torch.amp.GradScaler("cuda", enabled=(amp == "fp16" and cuda))
+        if amp != "none" and not cuda:
+            logger.warning("amp=%s requested but device is not CUDA; ignoring", amp)
+        logger.info(f"  TF32: {tf32 and cuda}, AMP: {amp if use_amp else 'none'}")
 
         # Build density estimator from one freshly generated batch
         theta0, x0 = self.simulator.generate_batch(
@@ -164,14 +182,21 @@ class OnlineNPETrainer:
                     training_batch_size
                 )
                 optimizer.zero_grad()
-                losses = self.density_estimator.loss(theta_batch, condition=x_batch)
-                loss = losses.mean()
-                loss.backward()
+                with torch.autocast(
+                    device_type="cuda", dtype=amp_dtype or torch.float16, enabled=use_amp
+                ):
+                    losses = self.density_estimator.loss(
+                        theta_batch, condition=x_batch
+                    )
+                    loss = losses.mean()
+                scaler.scale(loss).backward()
                 if clip_grad_norm is not None:
+                    scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(
                         self.density_estimator.parameters(), clip_grad_norm
                     )
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 train_loss_sum += losses.sum().item()
                 n_train += len(losses)
                 pbar.set_postfix({"loss": f"{loss.item():.4f}"})

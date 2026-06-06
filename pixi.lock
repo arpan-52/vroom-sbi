@@ -22129,7 +22129,7 @@ packages:
 - pypi: ./
   name: vroom-sbi
   version: 2.0.0
-  sha256: 4675600d5ea683a4b5238d25ba4e398e5dc987ee0702a973029e61bcf6cd9a83
+  sha256: 89c59cb49dd468de383f83b20c1d67a7d2abdd41257db38b3d047d534c6af056
   requires_dist:
   - numpy>=1.20
   - torch>=2.0

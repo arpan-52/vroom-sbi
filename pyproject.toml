@@ -117,6 +117,15 @@ cuda = "12"
 [tool.pixi.feature.gpu.dependencies]
 pytorch-gpu = ">=2.0"
 
+# GPU launch tasks (run with: pixi run -e gpu <task>  /  pixi run -e gpu-dev <task>)
+[tool.pixi.feature.gpu.tasks]
+# Full A100 online training (mode/band/batch/amp set in config_a100.yaml)
+train-a100 = "vroom-sbi train --config config_a100.yaml --device cuda"
+# Generate the band frequency grids into freq_bands/
+gen-bands = "python -c 'from pathlib import Path; from src.utils.freq_bands import write_all_bands; print(*[p.name for p in write_all_bands(Path(\"freq_bands\"))], sep=chr(10))'"
+# Short throughput/profiler run (override band/batch via flags)
+profile-gpu = "python -m src.utils.profiling --config config_a100.yaml --steps 50 --warmup 10"
+
 # ---------------------------------------------------------------------------
 # Feature: notebooks  (JupyterLab + kernel + FITS I/O)
 # ---------------------------------------------------------------------------

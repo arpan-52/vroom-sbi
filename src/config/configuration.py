@@ -175,6 +175,10 @@ class TrainingConfig:
     steps_per_epoch: int = 200  # online mode: fresh batches per epoch
     val_size: int = 10000  # online mode: fixed validation set size
 
+    # GPU performance levers (online mode)
+    tf32: bool = True  # enable TF32 matmuls (A100/Ampere+); ignored on older HW
+    amp: str = "none"  # autocast for the flow loss: none|bf16|fp16
+
     # Neural network training parameters
     learning_rate: float = 5e-4
     training_batch_size: int = 1024  # Mini-batch size for GPU training
@@ -396,6 +400,8 @@ class Configuration:
             sampling_method=str(train_raw.get("sampling_method", "uniform")),
             steps_per_epoch=int(train_raw.get("steps_per_epoch", 200)),
             val_size=int(train_raw.get("val_size", 10000)),
+            tf32=bool(train_raw.get("tf32", True)),
+            amp=str(train_raw.get("amp", "none")),
             learning_rate=float(train_raw.get("learning_rate", 5e-4)),
             training_batch_size=int(train_raw.get("training_batch_size", 1024)),
             stop_after_epochs=int(train_raw.get("stop_after_epochs", 20)),

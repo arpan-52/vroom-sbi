@@ -534,6 +534,8 @@ class SBITrainer:
             max_epochs=500,
             stop_after_epochs=stop_after_epochs,
             clip_grad_norm=5.0,
+            tf32=getattr(self.config.training, "tf32", True),
+            amp=getattr(self.config.training, "amp", "none"),
             show_progress=True,
         )
 

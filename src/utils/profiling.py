@@ -61,6 +61,16 @@ def profile_online_training(
         device = "cpu"
     cuda = device == "cuda"
 
+    # GPU performance levers (match the online trainer)
+    tf32 = getattr(config.training, "tf32", True)
+    amp = (getattr(config.training, "amp", "none") or "none").lower()
+    amp_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16}.get(amp)
+    use_amp = amp_dtype is not None and cuda
+    if tf32 and cuda:
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
     batch_size = config.training.training_batch_size
     arch = config.sbi.get_architecture(n_components)
 
@@ -94,7 +104,8 @@ def profile_online_training(
     for _ in range(warmup):
         theta, x = sim.generate_batch(batch_size)
         optimizer.zero_grad()
-        loss = de.loss(theta, condition=x).mean()
+        with torch.autocast(device_type="cuda", dtype=amp_dtype or torch.float16, enabled=use_amp):
+            loss = de.loss(theta, condition=x).mean()
         loss.backward()
         optimizer.step()
     _sync()
@@ -120,7 +131,10 @@ def profile_online_training(
             ts = time.perf_counter()
             with record_function("train_step"):
                 optimizer.zero_grad()
-                loss = de.loss(theta, condition=x).mean()
+                with torch.autocast(
+                    device_type="cuda", dtype=amp_dtype or torch.float16, enabled=use_amp
+                ):
+                    loss = de.loss(theta, condition=x).mean()
                 loss.backward()
                 optimizer.step()
             _sync()
@@ -169,3 +183,41 @@ def format_summary(result: dict) -> str:
     lines.append("")
     lines.append(result["table"])
     return "\n".join(lines)
+
+
+def _main() -> None:
+    import argparse
+
+    from ..config import Configuration
+
+    p = argparse.ArgumentParser(description="Profile the GPU on-the-fly path")
+    p.add_argument("--config", default="config_a100.yaml")
+    p.add_argument("--model", default="faraday_thin")
+    p.add_argument("--n-components", type=int, default=1)
+    p.add_argument("--freq-file", default=None, help="override config freq_file")
+    p.add_argument("--batch-size", type=int, default=None)
+    p.add_argument("--steps", type=int, default=50)
+    p.add_argument("--warmup", type=int, default=10)
+    p.add_argument("--trace", default=None, help="export chrome trace to this path")
+    args = p.parse_args()
+
+    logging.basicConfig(level=logging.WARNING)
+    cfg = Configuration.from_yaml(args.config)
+    if args.freq_file:
+        cfg.freq_file = args.freq_file
+    if args.batch_size:
+        cfg.training.training_batch_size = args.batch_size
+
+    result = profile_online_training(
+        cfg,
+        model_type=args.model,
+        n_components=args.n_components,
+        n_steps=args.steps,
+        warmup=args.warmup,
+        trace_path=Path(args.trace) if args.trace else None,
+    )
+    print(format_summary(result))
+
+
+if __name__ == "__main__":
+    _main()
