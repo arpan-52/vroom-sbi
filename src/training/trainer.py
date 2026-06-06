@@ -144,15 +144,18 @@ class SBITrainer:
             f"Simulator: n_params={simulator.n_params}, n_freq={simulator.n_freq}"
         )
 
-        # ============================================================
-        # PHASE 1: Generate all simulations as chunked .pt files
-        # ============================================================
-        chunk_dir = self._generate_simulation_chunks(
-            simulator, n_simulations, n_components, flat_priors, model_type
-        )
+        online_mode = getattr(self.config.training, "mode", "chunked") == "online"
 
         # ============================================================
-        # PHASE 2: Train on chunks
+        # PHASE 1: Generate simulations (chunked path only)
+        # ============================================================
+        if not online_mode:
+            chunk_dir = self._generate_simulation_chunks(
+                simulator, n_simulations, n_components, flat_priors, model_type
+            )
+
+        # ============================================================
+        # PHASE 2: Train
         # ============================================================
 
         # Build embedding network — 3 channels: [Q/I, U/I, weights]
@@ -181,19 +184,31 @@ class SBITrainer:
             f"Training: batch_size={training_batch_size}, lr={learning_rate}, patience={stop_after_epochs}"
         )
 
-        # Train on chunks
+        # Train
         start_time = datetime.now()
 
-        density_estimator, training_history = self._train_on_chunks(
-            chunk_dir=chunk_dir,
-            prior=prior,
-            embedding_net=embedding_net,
-            arch_config=arch_config,
-            learning_rate=learning_rate,
-            training_batch_size=training_batch_size,
-            stop_after_epochs=stop_after_epochs,
-            validation_fraction=self.config.training.validation_fraction,
-        )
+        if online_mode:
+            density_estimator, training_history = self._train_online(
+                prior=prior,
+                embedding_net=embedding_net,
+                arch_config=arch_config,
+                model_type=model_type,
+                n_components=n_components,
+                learning_rate=learning_rate,
+                training_batch_size=training_batch_size,
+                stop_after_epochs=stop_after_epochs,
+            )
+        else:
+            density_estimator, training_history = self._train_on_chunks(
+                chunk_dir=chunk_dir,
+                prior=prior,
+                embedding_net=embedding_net,
+                arch_config=arch_config,
+                learning_rate=learning_rate,
+                training_batch_size=training_batch_size,
+                stop_after_epochs=stop_after_epochs,
+                validation_fraction=self.config.training.validation_fraction,
+            )
 
         training_time = (datetime.now() - start_time).total_seconds()
 
@@ -476,6 +491,54 @@ class SBITrainer:
 
         logger.info(f"Generated {n_simulations:,} simulations in {n_chunks} chunk(s)")
         return chunk_dir
+
+    def _train_online(
+        self,
+        prior,
+        embedding_net: nn.Module,
+        arch_config,
+        model_type: str,
+        n_components: int,
+        learning_rate: float,
+        training_batch_size: int,
+        stop_after_epochs: int,
+    ) -> tuple:
+        """Train with GPU on-the-fly simulation (no disk round-trip)."""
+        from ..simulator.gpu_simulator import GPUSimulator
+        from .online_trainer import OnlineNPETrainer
+
+        logger.info("Using on-the-fly GPU NPE training (no disk)")
+
+        gpu_sim = GPUSimulator(
+            config=self.config,
+            model_type=model_type,
+            n_components=n_components,
+            device=self.device,
+            sampling_method=getattr(
+                self.config.training, "sampling_method", "uniform"
+            ),
+        )
+
+        trainer = OnlineNPETrainer(simulator=gpu_sim, device=self.device)
+        density_estimator, history = trainer.train(
+            prior=prior,
+            embedding_net=embedding_net,
+            flow_type=self.config.sbi.model,
+            hidden_features=arch_config.hidden_features,
+            num_transforms=arch_config.num_transforms,
+            num_bins=self.config.sbi.num_bins,
+            learning_rate=learning_rate,
+            training_batch_size=training_batch_size,
+            steps_per_epoch=self.config.training.steps_per_epoch,
+            val_size=self.config.training.val_size,
+            max_epochs=500,
+            stop_after_epochs=stop_after_epochs,
+            clip_grad_norm=5.0,
+            show_progress=True,
+        )
+
+        self._streaming_trainer = trainer
+        return density_estimator, history
 
     def _train_on_chunks(
         self,

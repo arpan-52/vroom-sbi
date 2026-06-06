@@ -167,6 +167,14 @@ class TrainingConfig:
     scaling_power: float = 2.0
     simulation_batch_size: int = 10000  # Chunk size for saving simulations to disk
 
+    # Data generation mode
+    #   "chunked": generate to disk, stream back (legacy, default)
+    #   "online":  generate each mini-batch on the GPU, no disk round-trip
+    mode: str = "chunked"
+    sampling_method: str = "uniform"  # prior sampler for online mode: uniform|sobol
+    steps_per_epoch: int = 200  # online mode: fresh batches per epoch
+    val_size: int = 10000  # online mode: fixed validation set size
+
     # Neural network training parameters
     learning_rate: float = 5e-4
     training_batch_size: int = 1024  # Mini-batch size for GPU training
@@ -384,6 +392,10 @@ class Configuration:
             ),
             scaling_power=float(train_raw.get("scaling_power", 2.0)),
             simulation_batch_size=int(train_raw.get("simulation_batch_size", 10000)),
+            mode=str(train_raw.get("mode", "chunked")),
+            sampling_method=str(train_raw.get("sampling_method", "uniform")),
+            steps_per_epoch=int(train_raw.get("steps_per_epoch", 200)),
+            val_size=int(train_raw.get("val_size", 10000)),
             learning_rate=float(train_raw.get("learning_rate", 5e-4)),
             training_batch_size=int(train_raw.get("training_batch_size", 1024)),
             stop_after_epochs=int(train_raw.get("stop_after_epochs", 20)),

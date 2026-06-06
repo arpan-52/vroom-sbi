@@ -70,9 +70,15 @@ training:
   simulation_scaling_mode: "power"  # Options: linear, quadratic, subquadratic, power
   scaling_power: 2.5                # Exponent for power mode (N^2.5)
   
+  # Data generation mode
+  mode: "chunked"                   # "chunked" (disk) or "online" (GPU on-the-fly, no disk)
+  sampling_method: "uniform"        # online prior sampler: "uniform" (default) or "sobol"
+  steps_per_epoch: 200              # online: fresh GPU batches per epoch
+  val_size: 10000                   # online: fixed validation set size
+
   # Chunked streaming (for large datasets)
   simulation_batch_size: 30000      # Samples per chunk file (tune for RAM)
-  
+
   # Neural network training
   training_batch_size: 1024         # Mini-batch size for GPU
   learning_rate: 0.0005             # Adam learning rate
