@@ -14,6 +14,18 @@ def train_command(args):
     config = Configuration.from_yaml(args.config)
     if args.device:
         config.training.device = args.device
+
+    # Single-model mode: train one (model_type, N) posterior. Lets several
+    # models run as separate processes (e.g. one per GPU).
+    n_comp = getattr(args, "n_components", None)
+    if n_comp is not None:
+        from ..training import SBITrainer
+
+        model_type = args.model_type or config.physics.model_types[0]
+        trainer = SBITrainer(config)
+        trainer.train_model(model_type, n_comp)
+        return
+
     train_all_models(config, classifier_only=args.classifier_only)
 
 
@@ -231,6 +243,17 @@ def main():
     train_p.add_argument("--config", default="config.yaml")
     train_p.add_argument("--device", default=None)
     train_p.add_argument("--classifier-only", action="store_true")
+    train_p.add_argument(
+        "--n-components",
+        type=int,
+        default=None,
+        help="train only this single N (one (model_type, N) posterior)",
+    )
+    train_p.add_argument(
+        "--model-type",
+        default=None,
+        help="model type for single-model mode (default: first in config)",
+    )
     train_p.set_defaults(func=train_command)
 
     # Infer
