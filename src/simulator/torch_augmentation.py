@@ -21,23 +21,19 @@ _MIN_GAP, _MAX_GAP = 2, 8
 _MIN_BLOCK, _MAX_BLOCK = 10, 30
 
 
-def _randu(B, F, lo, hi, device, generator):
-    return lo + (hi - lo) * torch.rand(B, F, device=device, generator=generator)
-
-
-def augment_weights_continuous_batch(
+def apply_rfi_flagging_batch(
     base_weights: torch.Tensor,
     batch_size: int,
-    noise_ratio_min: float = 2.0,
-    noise_ratio_max: float = 300.0,
     scattered_prob: float = 0.3,
     gap_prob: float = 0.3,
     large_block_prob: float = 0.1,
     generator: torch.Generator | None = None,
 ) -> torch.Tensor:
-    """Return a (batch_size, F) tensor of augmented per-channel weights.
+    """Apply binary RFI flagging (scattered + contiguous gap + large block).
 
-    Mirrors ``augment_weights_continuous`` applied independently per row.
+    Returns a (batch_size, F) tensor equal to ``base_weights`` per row with
+    flagged channels zeroed. Shared by the continuous-weight scheme (pol
+    models) and the spectral-shape mask.
     """
     device = base_weights.device
     F = base_weights.shape[0]
@@ -47,7 +43,6 @@ def augment_weights_continuous_batch(
 
     aug = base_weights[None, :].expand(B, F).clone()
 
-    # --- Step 1: binary RFI flagging --------------------------------------
     # Scattered missing channels
     apply_scat = torch.rand(B, device=device, generator=g) < scattered_prob
     scat_mask = torch.rand(B, F, device=device, generator=g) < _SCATTERED_MISSING_PROB
@@ -77,6 +72,33 @@ def augment_weights_continuous_batch(
         ).long()
         bmask = (col >= blk_start[:, None]) & (col < (blk_start + blk_size)[:, None])
         aug[apply_blk[:, None] & bmask] = 0.0
+
+    return aug
+
+
+def augment_weights_continuous_batch(
+    base_weights: torch.Tensor,
+    batch_size: int,
+    noise_ratio_min: float = 2.0,
+    noise_ratio_max: float = 300.0,
+    scattered_prob: float = 0.3,
+    gap_prob: float = 0.3,
+    large_block_prob: float = 0.1,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Return a (batch_size, F) tensor of augmented per-channel weights.
+
+    Mirrors ``augment_weights_continuous`` applied independently per row.
+    """
+    device = base_weights.device
+    F = base_weights.shape[0]
+    B = batch_size
+    g = generator
+
+    # --- Step 1: binary RFI flagging --------------------------------------
+    aug = apply_rfi_flagging_batch(
+        base_weights, B, scattered_prob, gap_prob, large_block_prob, generator=g
+    )
 
     # --- Steps 2 & 3: per-channel noise profile -> inverse-variance weights -
     good = aug > 0  # (B, F)

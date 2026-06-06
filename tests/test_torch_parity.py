@@ -80,6 +80,39 @@ def test_augmentation_structure():
     assert not torch.allclose(w, base[None, :].expand_as(w))
 
 
+def test_spectral_flux_parity():
+    from src.simulator.spectral_simulator import SpectralShapeSimulator
+    from src.simulator.torch_physics import spectral_shape_flux
+
+    sim = SpectralShapeSimulator(FREQ_FILE)
+    rng = np.random.default_rng(1)
+    theta = rng.uniform(
+        [-3.0, -1.0, -0.5], [3.0, 1.0, 0.5], size=(64, 3)
+    ).astype(np.float32)
+
+    F_np = sim.simulate_noiseless(theta)  # (64, n_freq)
+    log_nu_ratio = torch.tensor(sim._log_nu_ratio, dtype=torch.float32)
+    F_t = spectral_shape_flux(torch.tensor(theta), log_nu_ratio).numpy()
+
+    np.testing.assert_allclose(F_t, F_np, rtol=1e-4, atol=1e-5)
+
+
+def test_gpu_spectral_simulator_contract():
+    from src.config import Configuration
+    from src.simulator.gpu_simulator import GPUSpectralSimulator
+
+    cfg = Configuration.from_yaml(
+        str(Path(__file__).parent.parent / "config.yaml")
+    )
+    sim = GPUSpectralSimulator(cfg, device="cpu")
+    theta, x = sim.generate_batch(32)
+
+    assert theta.shape == (32, 3)
+    assert x.shape == (32, sim.n_freq)
+    assert torch.all(torch.isfinite(theta))
+    assert torch.all(torch.isfinite(x))
+
+
 def test_gpu_simulator_contract():
     from src.config import Configuration
 

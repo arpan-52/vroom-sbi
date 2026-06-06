@@ -18,8 +18,11 @@ import torch
 from ..config import Configuration
 from .physics import freq_to_lambda_sq, load_frequencies
 from .prior import _build_bounds_from_dict
-from .torch_augmentation import augment_weights_continuous_batch
-from .torch_physics import compute_polarization, params_per_comp
+from .torch_augmentation import (
+    apply_rfi_flagging_batch,
+    augment_weights_continuous_batch,
+)
+from .torch_physics import compute_polarization, params_per_comp, spectral_shape_flux
 from .torch_prior import sample_prior
 
 
@@ -139,3 +142,103 @@ class GPUSimulator:
 
         x = torch.cat([Q_obs, U_obs, weights], dim=1).to(torch.float32)
         return theta.to(torch.float32), x
+
+
+class GPUSpectralSimulator:
+    """On-device generator of (theta, x) batches for the spectral-shape model.
+
+    theta = [alpha, beta, gamma]; x = F(nu) of width ``n_freq`` (real flux),
+    with flagged channels zeroed. Matches the chunked spectral data contract
+    (``SpectralShapeTrainer._generate_chunks``): F(nu0)=1 normalization,
+    binary RFI flagging mask, additive Gaussian noise.
+
+    Noise note: the chunked path draws one sigma per *chunk*; here we draw one
+    per *sample*, which removes within-batch theta/noise correlation (the pol
+    path already does per-sample). SBC remains the calibration arbiter.
+    """
+
+    def __init__(
+        self,
+        config: Configuration,
+        device: str = "cuda",
+        sampling_method: str = "uniform",
+    ):
+        self.config = config
+        self.device = device
+        self.sampling_method = sampling_method
+        self.n_params = 3  # alpha, beta, gamma
+
+        freq, base_w = load_frequencies(config.freq_file)
+        self.n_freq = len(freq)
+        nu0 = freq[len(freq) // 2]
+        log_nu_ratio = np.log(freq / nu0)
+        self.log_nu_ratio = torch.tensor(
+            log_nu_ratio, dtype=torch.float32, device=device
+        )
+        self.base_weights = torch.tensor(base_w, dtype=torch.float32, device=device)
+
+        ss = config.spectral_shape
+        self.low = torch.tensor(
+            [ss.alpha_min, ss.beta_min, ss.gamma_min],
+            dtype=torch.float32,
+            device=device,
+        )
+        self.high = torch.tensor(
+            [ss.alpha_max, ss.beta_max, ss.gamma_max],
+            dtype=torch.float32,
+            device=device,
+        )
+
+    def _sample_theta(self, B, generator):
+        if self.sampling_method == "sobol":
+            seed = None
+            if generator is not None:
+                seed = int(
+                    torch.randint(0, 2**31 - 1, (1,), generator=generator).item()
+                )
+            engine = torch.quasirandom.SobolEngine(
+                dimension=self.n_params, scramble=True, seed=seed
+            )
+            u = engine.draw(B).to(self.device)
+        else:
+            u = torch.rand(B, self.n_params, device=self.device, generator=generator)
+        return self.low + u * (self.high - self.low)
+
+    def _noise_sigma(self, B, generator):
+        ss = self.config.spectral_shape
+        noise = self.config.noise
+        if noise.augmentation_enable:
+            lo = ss.sigma_min * noise.augmentation_min_factor
+            hi = ss.sigma_max * noise.augmentation_max_factor
+            u = torch.rand(B, device=self.device, generator=generator)
+            return lo + (hi - lo) * u
+        mid = (ss.sigma_min + ss.sigma_max) / 2.0
+        return torch.full((B,), mid, device=self.device)
+
+    def generate_batch(
+        self, batch_size: int, generator: torch.Generator | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Generate (theta, x) on device. x width = n_freq."""
+        B = batch_size
+        wa = self.config.weight_augmentation
+
+        theta = self._sample_theta(B, generator)
+
+        weights = apply_rfi_flagging_batch(
+            self.base_weights,
+            B,
+            scattered_prob=wa.scattered_prob,
+            gap_prob=wa.gap_prob,
+            large_block_prob=wa.large_block_prob,
+            generator=generator,
+        )
+        good = weights > 0
+
+        F_nl = spectral_shape_flux(theta, self.log_nu_ratio)  # (B, F)
+        sigma = self._noise_sigma(B, generator)[:, None]  # (B, 1)
+        noise = torch.randn(
+            B, self.n_freq, device=self.device, generator=generator
+        ) * sigma
+        x = torch.where(good, F_nl + noise, torch.zeros_like(F_nl))
+
+        return theta.to(torch.float32), x.to(torch.float32)

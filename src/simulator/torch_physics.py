@@ -117,6 +117,32 @@ def polarization_internal_dispersion(
     return (amp[:, :, None] * depol * torch.exp(2j * chi0[:, :, None])).sum(dim=1)
 
 
+def spectral_shape_flux(
+    theta: torch.Tensor, log_nu_ratio: torch.Tensor
+) -> torch.Tensor:
+    """Log-log polynomial SED flux.
+
+    F(nu) = exp(alpha*x + beta*x^2 + gamma*x^3),  x = log(nu/nu0).
+    F(nu0) = 1 by construction (log_F0 is not a parameter).
+
+    Parameters
+    ----------
+    theta : torch.Tensor, shape (B, 3) -> [alpha, beta, gamma]
+    log_nu_ratio : torch.Tensor, shape (F,)
+        Precomputed log(nu / nu0).
+
+    Returns
+    -------
+    torch.Tensor, shape (B, F)
+    """
+    x = log_nu_ratio[None, :]  # (1, F)
+    alpha = theta[:, 0:1]
+    beta = theta[:, 1:2]
+    gamma = theta[:, 2:3]
+    log_F = alpha * x + beta * x**2 + gamma * x**3  # (B, F)
+    return torch.exp(log_F)
+
+
 _DISPATCH = {
     "faraday_thin": polarization_faraday_thin,
     "burn_slab": polarization_burn_slab,
