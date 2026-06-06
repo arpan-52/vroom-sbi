@@ -185,6 +185,56 @@ def format_summary(result: dict) -> str:
     return "\n".join(lines)
 
 
+def _bare_run(config, model_type, n_components, steps, warmup):
+    """Plain build + train loop with no torch.profiler, for ncu to wrap."""
+    device = config.training.device
+    cuda = device == "cuda" and torch.cuda.is_available()
+    if getattr(config.training, "tf32", True) and cuda:
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+
+    bs = config.training.training_batch_size
+    arch = config.sbi.get_architecture(n_components)
+    sim = GPUSimulator(
+        config, model_type, n_components, device=device,
+        sampling_method=getattr(config.training, "sampling_method", "uniform"),
+    )
+    emb = SpectralEmbedding(
+        input_dim=3 * sim.n_freq, output_dim=config.sbi.embedding_dim
+    ).to(device)
+    trainer = OnlineNPETrainer(sim, device=device)
+    theta0, x0 = sim.generate_batch(bs)
+    trainer.build_density_estimator(
+        theta0, x0, embedding_net=emb, flow_type=config.sbi.model,
+        hidden_features=arch.hidden_features, num_transforms=arch.num_transforms,
+        num_bins=config.sbi.num_bins,
+    )
+    de = trainer.density_estimator
+    opt = torch.optim.Adam(de.parameters(), lr=config.training.learning_rate)
+    de.train()
+
+    def step():
+        theta, x = sim.generate_batch(bs)
+        opt.zero_grad()
+        de.loss(theta, condition=x).mean().backward()
+        opt.step()
+
+    for _ in range(warmup):
+        step()
+    if cuda:
+        torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    for _ in range(steps):
+        step()
+    if cuda:
+        torch.cuda.synchronize()
+    dt = time.perf_counter() - t0
+    print(
+        f"bare bs={bs} n_freq={sim.n_freq} steps={steps} "
+        f"{dt / steps * 1e3:.2f} ms/step {bs * steps / dt:,.0f} samples/sec"
+    )
+
+
 def _main() -> None:
     import argparse
 
@@ -199,6 +249,12 @@ def _main() -> None:
     p.add_argument("--steps", type=int, default=50)
     p.add_argument("--warmup", type=int, default=10)
     p.add_argument("--trace", default=None, help="export chrome trace to this path")
+    p.add_argument(
+        "--bare",
+        action="store_true",
+        help="run plain training steps without torch.profiler (for external "
+        "profilers such as Nsight Compute / ncu)",
+    )
     args = p.parse_args()
 
     logging.basicConfig(level=logging.WARNING)
@@ -207,6 +263,10 @@ def _main() -> None:
         cfg.freq_file = args.freq_file
     if args.batch_size:
         cfg.training.training_batch_size = args.batch_size
+
+    if args.bare:
+        _bare_run(cfg, args.model, args.n_components, args.steps, args.warmup)
+        return
 
     result = profile_online_training(
         cfg,
