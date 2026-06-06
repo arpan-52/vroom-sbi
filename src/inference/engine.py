@@ -379,13 +379,25 @@ class InferenceEngine(InferenceEngineInterface):
         classifier_input_t = torch.tensor(
             classifier_input, dtype=torch.float32, device=self.device
         )
-        n_comp, prob_dict = self.classifier.predict(classifier_input_t)
+        model_type, n_comp, confidence, prob_dict = self.classifier.predict_label(
+            classifier_input_t
+        )
+
+        # Label probabilities by their (model_type, N) when the mapping is known,
+        # else by 1-indexed class number.
+        c2l = getattr(self.classifier, "class_to_label", None)
+        if c2l:
+            prob_labels = {
+                f"{c2l[i][0]}_n{c2l[i][1]}": v for i, v in prob_dict.items()
+            }
+        else:
+            prob_labels = {str(i + 1): v for i, v in prob_dict.items()}
 
         return ClassifierResult(
             predicted_n_components=n_comp,
-            predicted_model_type=None,
-            probabilities={str(k): v for k, v in prob_dict.items()},
-            confidence=max(prob_dict.values()),
+            predicted_model_type=model_type,
+            probabilities=prob_labels,
+            confidence=confidence,
         )
 
     def _parse_components(

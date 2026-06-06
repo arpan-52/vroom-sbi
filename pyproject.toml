@@ -103,6 +103,21 @@ ruff        = ">=0.9"
 pre-commit  = ">=3.0"
 
 # ---------------------------------------------------------------------------
+# Feature: gpu  (CUDA PyTorch build for GPU training / on-the-fly simulation)
+# Scoped to a feature so the cross-platform default solve (incl. osx/win and
+# CI) stays CPU and portable. pytorch-gpu forces the conda-forge CUDA build.
+# ---------------------------------------------------------------------------
+
+[tool.pixi.feature.gpu]
+platforms = ["linux-64"]
+
+[tool.pixi.feature.gpu.system-requirements]
+cuda = "12"
+
+[tool.pixi.feature.gpu.dependencies]
+pytorch-gpu = ">=2.0"
+
+# ---------------------------------------------------------------------------
 # Feature: notebooks  (JupyterLab + kernel + FITS I/O)
 # ---------------------------------------------------------------------------
 
@@ -132,6 +147,10 @@ cube-dev  = { features = ["io", "dev"],             solve-group = "cube-dev"  }
 
 # Core + FITS I/O + JupyterLab  (for notebooks/)
 notebooks = { features = ["notebooks"],             solve-group = "notebooks" }
+
+# GPU (CUDA) training environments — linux-64 only
+gpu       = { features = ["gpu"],                   solve-group = "gpu"       }
+gpu-dev   = { features = ["gpu", "dev"],            solve-group = "gpu"       }
 
 # ---------------------------------------------------------------------------
 # Tasks (run with: pixi run <task>  or  pixi run -e <env> <task>)

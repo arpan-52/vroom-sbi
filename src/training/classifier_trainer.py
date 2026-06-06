@@ -83,6 +83,10 @@ class ClassifierTrainer:
         self.best_state = None
         self.best_val_acc = 0.0
 
+        # class index -> (model_type, n_components); set before save() so the
+        # inference engine can recover the model type, not just the count.
+        self.class_to_label: dict[int, tuple[str, int]] | None = None
+
     def train(
         self,
         train_loader: DataLoader,
@@ -255,6 +259,29 @@ class ClassifierTrainer:
 
         return n_comp, prob_dict
 
+    def predict_label(
+        self, x: torch.Tensor
+    ) -> tuple[str | None, int, float, dict[int, float]]:
+        """Predict (model_type, n_components, confidence, per-class probs).
+
+        Uses ``class_to_label`` when available so cross-model classifiers
+        recover the model type. Falls back to ``(None, class_idx + 1)`` when
+        no mapping was saved (legacy / single-model classifiers).
+        """
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
+        x = x.to(self.device)
+        pred, probs = self.model.predict(x)
+        class_idx = int(pred.item())
+        prob_dict = {i: probs[0, i].item() for i in range(self.n_classes)}
+
+        if self.class_to_label and class_idx in self.class_to_label:
+            model_type, n_comp = self.class_to_label[class_idx]
+        else:
+            model_type, n_comp = None, class_idx + 1
+        confidence = probs[0, class_idx].item()
+        return model_type, n_comp, confidence, prob_dict
+
     def save(self, path: str):
         """Save classifier to file using torch.save()."""
         save_dict = {
@@ -267,6 +294,7 @@ class ClassifierTrainer:
             "conv_channels": self.model.conv_channels,
             "kernel_sizes": self.model.kernel_sizes,
             "dropout": self.model.dropout_rate,
+            "class_to_label": self.class_to_label,
             "save_timestamp": datetime.now().isoformat(),
         }
         torch.save(save_dict, path)
@@ -281,6 +309,7 @@ class ClassifierTrainer:
         self.config = save_dict.get("config", self.config)
         self.history = save_dict.get("history", {})
         self.best_val_acc = save_dict.get("best_val_acc", 0.0)
+        self.class_to_label = save_dict.get("class_to_label", None)
 
         # Rebuild model
         self.model = SpectralClassifier(
@@ -374,6 +403,7 @@ def train_classifier(
     eval_results = trainer.evaluate(val_loader)
 
     # Save
+    trainer.class_to_label = class_to_label
     save_path = output_dir / "classifier.pt"
     trainer.save(str(save_path))
 

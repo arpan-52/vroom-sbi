@@ -163,6 +163,7 @@ def train_classifier_online(
     history = trainer.train(train_loader, val_loader)
     eval_results = trainer.evaluate(val_loader)
 
+    trainer.class_to_label = class_to_label
     save_path = output_dir / "classifier.pt"
     trainer.save(str(save_path))
     _save_classifier_training_plot(history, output_dir)
