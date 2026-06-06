@@ -867,8 +867,6 @@ def train_all_models(
     if config.training.train_pol and config.model_selection.use_classifier and not (
         config.training.train_spectra and not config.training.train_pol
     ):
-        from .classifier_trainer import train_classifier
-
         min_components = config.model_selection.min_components
         max_components = config.model_selection.max_components
         model_types = config.physics.model_types
@@ -877,14 +875,28 @@ def train_all_models(
         logger.info("Training Model Selection Classifier")
         logger.info(f"{'=' * 60}")
 
-        classifier_result = train_classifier(
-            config=config,
-            output_dir=Path(config.training.save_dir),
-            min_components=min_components,
-            max_components=max_components,
-            model_types=model_types,
-            cross_model_training=len(model_types) > 1,
-        )
+        if getattr(config.training, "mode", "chunked") == "online":
+            from .online_classifier_trainer import train_classifier_online
+
+            classifier_result = train_classifier_online(
+                config=config,
+                output_dir=Path(config.training.save_dir),
+                min_components=min_components,
+                max_components=max_components,
+                model_types=model_types,
+                cross_model_training=len(model_types) > 1,
+            )
+        else:
+            from .classifier_trainer import train_classifier
+
+            classifier_result = train_classifier(
+                config=config,
+                output_dir=Path(config.training.save_dir),
+                min_components=min_components,
+                max_components=max_components,
+                model_types=model_types,
+                cross_model_training=len(model_types) > 1,
+            )
         results["classifier"] = classifier_result
 
     # Save training summary

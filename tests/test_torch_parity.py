@@ -113,6 +113,38 @@ def test_gpu_spectral_simulator_contract():
     assert torch.all(torch.isfinite(x))
 
 
+def test_online_classifier_mapping_and_batch():
+    from src.config import Configuration
+    from src.simulator.gpu_simulator import GPUSimulator
+    from src.training.online_classifier_trainer import (
+        OnlineClassifierData,
+        _build_class_mapping,
+    )
+
+    # Single-model: class index == n_comp - min_components
+    c2l, specs = _build_class_mapping(1, 3, ["faraday_thin"], False)
+    assert c2l == {0: ("faraday_thin", 1), 1: ("faraday_thin", 2), 2: ("faraday_thin", 3)}
+
+    # Cross-model: nested model_type then n_comp
+    c2l2, _ = _build_class_mapping(1, 2, ["faraday_thin", "burn_slab"], True)
+    assert c2l2 == {
+        0: ("faraday_thin", 1), 1: ("faraday_thin", 2),
+        2: ("burn_slab", 1), 3: ("burn_slab", 2),
+    }
+
+    cfg = Configuration.from_yaml(str(Path(__file__).parent.parent / "config.yaml"))
+    sims = [GPUSimulator(cfg, "faraday_thin", n, device="cpu") for n in (1, 2, 3)]
+    data = OnlineClassifierData(sims, [0, 1, 2], batch_size=30, steps=2, device="cpu")
+    batches = list(data)
+    assert len(batches) == 2
+    b = batches[0]
+    assert b["x"].shape == (30, 3 * sims[0].n_freq)
+    assert b["label"].shape == (30,)
+    # Balanced across 3 classes (30/3 = 10 each)
+    counts = torch.bincount(b["label"], minlength=3)
+    assert torch.all(counts == 10)
+
+
 def test_gpu_simulator_contract():
     from src.config import Configuration
 
