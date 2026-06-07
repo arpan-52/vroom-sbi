@@ -76,6 +76,10 @@ notebooks/weights.fits
 # Added by code-review-graph
 .code-review-graph/
 
+# Internal session notes and training logs (not for distribution)
+SESSION_SUMMARY*.md
+logs/
+
 # Agentic / AI assistant files
 .claude/
 .cursorrules
