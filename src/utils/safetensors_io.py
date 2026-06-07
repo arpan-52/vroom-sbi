@@ -42,9 +42,12 @@ def _split_tensors_and_meta(
     """Partition a checkpoint dict into flat tensors and JSON-able metadata."""
     tensors: dict[str, torch.Tensor] = {}
     meta: dict[str, Any] = {}
+    # clone() so no two saved entries share storage: online checkpoints keep the
+    # embedding net both standalone (embedding_net_state) and nested inside
+    # density_estimator_state, and safetensors rejects aliased tensors.
     for key, value in data.items():
         if isinstance(value, torch.Tensor):
-            tensors[key] = value.detach().contiguous().cpu()
+            tensors[key] = value.detach().clone().contiguous().cpu()
         elif (
             isinstance(value, dict)
             and value
@@ -53,7 +56,7 @@ def _split_tensors_and_meta(
             # A state-dict group: flatten with a prefixed key.
             for sub_key, sub_val in value.items():
                 tensors[f"{key}{_GROUP_SEP}{sub_key}"] = (
-                    sub_val.detach().contiguous().cpu()
+                    sub_val.detach().clone().contiguous().cpu()
                 )
             meta.setdefault("__tensor_groups__", []).append(key)
         else:
