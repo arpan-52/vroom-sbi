@@ -301,8 +301,13 @@ class ClassifierTrainer:
         logger.info(f"Saved classifier to {path}")
 
     def load(self, path: str):
-        """Load classifier from file."""
-        save_dict = torch.load(path, map_location="cpu", weights_only=False)
+        """Load classifier from file (.pt or pickle-free .safetensors)."""
+        from ..utils.safetensors_io import is_safetensors, load_safetensors_as_dict
+
+        if is_safetensors(path):
+            save_dict = load_safetensors_as_dict(path, device="cpu")
+        else:
+            save_dict = torch.load(path, map_location="cpu", weights_only=False)
 
         self.n_freq = save_dict["n_freq"]
         self.n_classes = save_dict["n_classes"]

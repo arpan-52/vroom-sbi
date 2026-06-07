@@ -84,14 +84,23 @@ class Validator:
             d.mkdir(exist_ok=True)
 
     def _load_posterior(self):
-        logger.info(f"Loading posterior from {self.posterior_path}")
-        checkpoint = torch.load(
-            self.posterior_path, map_location="cpu", weights_only=False
-        )
+        from ..inference.engine import load_posterior
 
-        # Load posterior object and basic info
-        self.posterior = checkpoint["posterior"]
+        logger.info(f"Loading posterior from {self.posterior_path}")
+        # Routes through the shared loader: handles both the safe state-dict
+        # format (online/streaming checkpoints — reconstructed via
+        # _SafePosteriorWrapper) and legacy pickled-posterior files, and places
+        # the estimator on self.device.
+        self.posterior, checkpoint = load_posterior(self.posterior_path, self.device)
         self.n_freq = checkpoint["n_freq"]
+
+        # Expected conditioning width drives the observation contract below:
+        # 3 channels -> [Q, U, weights] (online/streaming); 2 -> [Q*w, U*w] (legacy).
+        arch = checkpoint.get("architecture", {})
+        self.input_dim = arch.get(
+            "input_dim", checkpoint.get("input_channels", 2) * self.n_freq
+        )
+        self.input_channels = self.input_dim // self.n_freq
         self.lambda_sq = np.array(checkpoint["lambda_sq"])
 
         # Resolve model_type: user > checkpoint > error
@@ -161,9 +170,8 @@ class Validator:
                 "Please provide --prior-low and --prior-high"
             )
 
-        # Move posterior to device
-        if self.device == "cuda":
-            self.posterior.to(self.device)
+        # Device placement is handled by load_posterior; the safe wrapper
+        # exposes no .to(), so do not call it here.
 
         # Print summary
         logger.info(f"  Parameters ({self.n_params}): {self.param_names}")
@@ -264,7 +272,13 @@ class Validator:
         """Run VROOM inference."""
         start = datetime.now()
 
-        x = np.concatenate([Q_obs * weights, U_obs * weights])
+        # Match the data contract the model was trained on.
+        if self.input_channels == 3:
+            # Online/streaming: raw [Q, U, weights], zeroed on flagged channels.
+            x = np.concatenate([Q_obs, U_obs, weights])
+        else:
+            # Legacy 2-channel: weight-applied [Q*w, U*w].
+            x = np.concatenate([Q_obs * weights, U_obs * weights])
         x_t = torch.tensor(x, dtype=torch.float32).unsqueeze(0)
 
         if self.device == "cuda":

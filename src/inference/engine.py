@@ -99,6 +99,15 @@ def load_posterior(model_path: Path, device: str = "cpu") -> tuple[Any, dict[str
     """
     model_path = Path(model_path)
 
+    if model_path.suffix == ".safetensors":
+        # Pickle-free distribution format (state-dicts only) — reconstruct
+        # exactly as the safe .pt path does.
+        from ..utils.safetensors_io import load_safetensors_as_dict
+
+        data = load_safetensors_as_dict(model_path, device="cpu")
+        posterior = _rebuild_posterior_from_statedict(data, device)
+        return posterior, data
+
     if model_path.suffix == ".pt":
         # Try loading with weights_only=True first (new safe format)
         try:
