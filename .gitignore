@@ -23,7 +23,7 @@ wheels/
 
 compare_methods.py
 run_rmtools.py
-scripts
+# scripts/  -- removed blanket ignore; sweep_bands.py and other reusable scripts now tracked
 # Virtual environments
 venv/
 env/
