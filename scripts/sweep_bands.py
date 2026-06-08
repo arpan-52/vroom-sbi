@@ -244,6 +244,12 @@ def main():
                     help="Skip coverage probe and plotting")
     ap.add_argument("--sbc", action="store_true",
                     help="Also run SBC rank histograms (slow, ~20 min per band)")
+    ap.add_argument("--tarp", action="store_true",
+                    help="Also run TARP joint calibration test")
+    ap.add_argument("--ppc", action="store_true",
+                    help="Also run posterior predictive checks")
+    ap.add_argument("--ppc-cases", type=int, default=20,
+                    help="Number of cases for PPC (default: 20)")
     args = ap.parse_args()
 
     # Resolve band list
@@ -266,6 +272,8 @@ def main():
     print(f"  train       : {not args.skip_train}")
     print(f"  coverage    : {not args.skip_coverage}")
     print(f"  sbc         : {args.sbc}")
+    print(f"  tarp        : {args.tarp}")
+    print(f"  ppc         : {args.ppc}")
     print(f"{'='*60}\n")
 
     for band_key in band_keys:
@@ -300,6 +308,42 @@ def main():
                 band_key, freq_file, args.config, save_dir, args.device,
                 N_COMPONENTS_RANGE, args.n_cases, args.n_samples,
             )
+
+        # TARP (optional)
+        if args.tarp:
+            for n in N_COMPONENTS_RANGE:
+                pt = Path(save_dir) / f"posterior_{MODEL_TYPE}_n{n}.pt"
+                if not pt.exists():
+                    print(f"[SKIP TARP] {pt} not found", flush=True)
+                    continue
+                run([
+                    "python", "-m", "src.validation.tarp_test",
+                    "--config", args.config,
+                    "--posterior", str(pt),
+                    "--device", args.device,
+                    "--freq-file", freq_file,
+                    "--n-cases", str(args.n_cases),
+                    "--n-samples", str(args.n_samples),
+                    "--output-dir", str(Path(save_dir) / "validation"),
+                ])
+
+        # PPC (optional)
+        if args.ppc:
+            for n in N_COMPONENTS_RANGE:
+                pt = Path(save_dir) / f"posterior_{MODEL_TYPE}_n{n}.pt"
+                if not pt.exists():
+                    print(f"[SKIP PPC] {pt} not found", flush=True)
+                    continue
+                run([
+                    "python", "-m", "src.validation.ppc",
+                    "--config", args.config,
+                    "--posterior", str(pt),
+                    "--device", args.device,
+                    "--freq-file", freq_file,
+                    "--n-cases", str(args.ppc_cases),
+                    "--n-samples", str(args.n_samples),
+                    "--output-dir", str(Path(save_dir) / "validation"),
+                ])
 
     print(f"\n{'='*60}")
     print("Sweep complete.")

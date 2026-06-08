@@ -24,6 +24,7 @@ dependencies = [
     "pyyaml>=6.0",
     "huggingface-hub>=0.10",
     "safetensors>=0.4",
+    "tarp>=0.1",
 ]
 
 [project.optional-dependencies]
