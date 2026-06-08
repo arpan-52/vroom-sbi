@@ -2,9 +2,10 @@
 """
 Full-band training sweep for vroom-sbi faraday_thin posteriors.
 
-Trains N=1..5 for each telescope/band combination, then runs the per-dimension
-coverage probe (online_probe) and plots the bias/rmse/cov68/cov90 summary
-(plot_coverage). SBC histograms are skipped by default; pass --sbc to enable.
+Trains N=1..5 for each telescope/band combination, then runs the calibration
+suite: coverage probe (online_probe + plot_coverage), TARP joint calibration
+test, and posterior predictive checks (PPC). SBC rank histograms are opt-in
+(--sbc) as they are significantly slower.
 
 Bands covered
 -------------
@@ -23,14 +24,14 @@ uGMRT     : Band 3, Band 4, Band 5
 
 Usage
 -----
-    # Full sweep (train + coverage + plot) for all bands:
+    # Full sweep (train + calibration) for all bands:
     pixi run -e gpu python scripts/sweep_bands.py --config config_a100_lrtest.yaml
 
     # Selected bands only:
     pixi run -e gpu python scripts/sweep_bands.py --config config_a100_lrtest.yaml \
         --bands vla_p vla_l meerkat_uhf ugmrt_band3
 
-    # Skip training (re-run coverage + plot on existing models):
+    # Skip training (re-run calibration on existing models):
     pixi run -e gpu python scripts/sweep_bands.py --config config_a100_lrtest.yaml \
         --skip-train
 
@@ -152,7 +153,7 @@ def step_coverage(
     n_samples: int,
 ) -> Path | None:
     """Run online_probe for all N and write a combined coverage log. Returns log path."""
-    log_path = Path(save_dir) / "validation" / f"coverage_{band_key}.log"
+    log_path = Path(save_dir) / "calibration" / f"coverage_{band_key}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w") as fh:
         for n in n_components_range:
@@ -181,7 +182,7 @@ def step_coverage(
 
 def step_plot(band_key: str, save_dir: str, log_path: Path) -> Path | None:
     """Run plot_coverage on the coverage log. Returns output plot path."""
-    out_png = Path(save_dir) / "validation" / f"coverage_{band_key}.png"
+    out_png = Path(save_dir) / "calibration" / f"coverage_{band_key}.png"
     ret = run([
         "python", "-m", "src.validation.plot_coverage",
         str(log_path),
@@ -204,7 +205,7 @@ def step_tarp(
     n_samples: int,
 ) -> None:
     """Run TARP joint calibration test for all N."""
-    out_dir = Path(save_dir) / "validation"
+    out_dir = Path(save_dir) / "calibration"
     out_dir.mkdir(parents=True, exist_ok=True)
     for n in n_components_range:
         pt = Path(save_dir) / f"posterior_{MODEL_TYPE}_n{n}.pt"
@@ -234,7 +235,7 @@ def step_ppc(
     n_samples: int,
 ) -> None:
     """Run posterior predictive checks for all N."""
-    out_dir = Path(save_dir) / "validation"
+    out_dir = Path(save_dir) / "calibration"
     out_dir.mkdir(parents=True, exist_ok=True)
     for n in n_components_range:
         pt = Path(save_dir) / f"posterior_{MODEL_TYPE}_n{n}.pt"
@@ -264,7 +265,7 @@ def step_sbc(
     n_samples: int,
 ) -> None:
     """Run SBC rank histograms for all N (optional, slow)."""
-    out_dir = Path(save_dir) / "validation" / "sbc"
+    out_dir = Path(save_dir) / "calibration" / "sbc"
     out_dir.mkdir(parents=True, exist_ok=True)
     for n in n_components_range:
         pt = Path(save_dir) / f"posterior_{MODEL_TYPE}_n{n}.pt"
@@ -299,9 +300,9 @@ def main():
     ap.add_argument("--n-samples", type=int, default=1000,
                     help="Coverage probe: posterior draws per case")
     ap.add_argument("--skip-train", action="store_true",
-                    help="Skip training; only run coverage + plot on existing models")
-    ap.add_argument("--skip-coverage", action="store_true",
-                    help="Skip coverage probe and plotting")
+                    help="Skip training; only run calibration suite on existing models")
+    ap.add_argument("--skip-calibration", action="store_true",
+                    help="Skip post-training calibration (coverage probe, TARP, PPC)")
     ap.add_argument("--sbc", action="store_true",
                     help="Also run SBC rank histograms (slow, ~20 min per band)")
     args = ap.parse_args()
@@ -324,7 +325,7 @@ def main():
     print(f"  base save   : {base_save_dir}")
     print(f"  bands       : {band_keys}")
     print(f"  train       : {not args.skip_train}")
-    print(f"  validation  : {not args.skip_coverage}  (coverage + TARP + PPC)")
+    print(f"  calibration : {not args.skip_calibration}  (coverage + TARP + PPC)")
     print(f"  sbc         : {args.sbc}")
     print(f"{'='*60}\n")
 
@@ -345,8 +346,8 @@ def main():
                 args.device, N_COMPONENTS_RANGE,
             )
 
-        # Standard validation: coverage probe + TARP + PPC + plot
-        if not args.skip_coverage:
+        # Calibration suite: coverage probe + TARP + PPC + plot
+        if not args.skip_calibration:
             log = step_coverage(
                 band_key, freq_file, args.config, save_dir, args.device,
                 N_COMPONENTS_RANGE, args.n_cases, args.n_samples,
