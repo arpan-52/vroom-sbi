@@ -555,6 +555,7 @@ class InferenceEngine(InferenceEngineInterface):
         mask: np.ndarray | None = None,
         snr_threshold: float | None = None,
         frequencies_hz: np.ndarray | None = None,
+        ci95: bool = False,
         **infer_kwargs,
     ) -> dict[str, np.ndarray]:
         """
@@ -622,9 +623,10 @@ class InferenceEngine(InferenceEngineInterface):
         def _nan():
             return np.full(shape2d, np.nan, dtype=np.float32)
 
+        _stats = ("mean", "std", "p16", "p84") + (("p2", "p97") if ci95 else ())
         for comp in range(1, max_n + 1):
             tag = f"comp{comp}"
-            for stat in ("mean", "std", "p16", "p84"):
+            for stat in _stats:
                 results[f"rm_{stat}_{tag}"] = _nan()
                 results[f"amp_{stat}_{tag}"] = _nan()
                 results[f"chi0_{stat}_{tag}"] = _nan()
@@ -737,6 +739,9 @@ class InferenceEngine(InferenceEngineInterface):
                 results[f"rm_std_{tag}"][dec_idx, ra_idx] = np.std(rm_samp)
                 results[f"rm_p16_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 16)
                 results[f"rm_p84_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 84)
+                if ci95:
+                    results[f"rm_p2_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 2.5)
+                    results[f"rm_p97_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 97.5)
 
                 amp_col = comp.samples.shape[1] - 2
                 amp_samp = comp.samples[:, amp_col]
@@ -744,12 +749,18 @@ class InferenceEngine(InferenceEngineInterface):
                 results[f"amp_std_{tag}"][dec_idx, ra_idx] = np.std(amp_samp)
                 results[f"amp_p16_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 16)
                 results[f"amp_p84_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 84)
+                if ci95:
+                    results[f"amp_p2_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 2.5)
+                    results[f"amp_p97_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 97.5)
 
                 chi0_samp = comp.samples[:, -1]
                 results[f"chi0_mean_{tag}"][dec_idx, ra_idx] = np.mean(chi0_samp)
                 results[f"chi0_std_{tag}"][dec_idx, ra_idx] = np.std(chi0_samp)
                 results[f"chi0_p16_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 16)
                 results[f"chi0_p84_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 84)
+                if ci95:
+                    results[f"chi0_p2_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 2.5)
+                    results[f"chi0_p97_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 97.5)
 
                 if comp.samples.shape[1] >= 4:
                     sec_samp = comp.samples[:, 1]
@@ -763,6 +774,9 @@ class InferenceEngine(InferenceEngineInterface):
                     results[f"{prefix}_std_{tag}"][dec_idx, ra_idx] = np.std(sec_samp)
                     results[f"{prefix}_p16_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 16)
                     results[f"{prefix}_p84_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 84)
+                    if ci95:
+                        results[f"{prefix}_p2_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 2.5)
+                        results[f"{prefix}_p97_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 97.5)
 
         logger.info("Cube inference complete.")
         return results
@@ -778,6 +792,7 @@ class InferenceEngine(InferenceEngineInterface):
         mem_fraction: float = 0.5,
         i_cube=None,
         mask: np.ndarray | None = None,
+        ci95: bool = False,
     ) -> dict[str, np.ndarray]:
         """
         Chunked cube inference — never loads the full cube into RAM.
@@ -875,9 +890,10 @@ class InferenceEngine(InferenceEngineInterface):
             mt = key.rsplit("_n", 1)[0]
             nc = int(key.rsplit("_n", 1)[1])
             ppc = get_params_per_component(mt)
+            _stats2 = ("mean", "std", "p16", "p84") + (("p2", "p97") if ci95 else ())
             for ci in range(1, nc + 1):
                 tag = f"comp{ci}"
-                for stat in ("mean", "std", "p16", "p84"):
+                for stat in _stats2:
                     results[f"rm_{stat}_{tag}"] = _nan2d()
                     results[f"amp_{stat}_{tag}"] = _nan2d()
                     results[f"chi0_{stat}_{tag}"] = _nan2d()
@@ -1033,6 +1049,9 @@ class InferenceEngine(InferenceEngineInterface):
                         results[f"rm_std_{tag}"][dec_idx, ra_idx] = np.std(rm_samp)
                         results[f"rm_p16_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 16)
                         results[f"rm_p84_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 84)
+                        if ci95:
+                            results[f"rm_p2_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 2.5)
+                            results[f"rm_p97_{tag}"][dec_idx, ra_idx] = np.percentile(rm_samp, 97.5)
 
                         amp_col = comp.samples.shape[1] - 2
                         amp_samp = comp.samples[:, amp_col]
@@ -1040,12 +1059,18 @@ class InferenceEngine(InferenceEngineInterface):
                         results[f"amp_std_{tag}"][dec_idx, ra_idx] = np.std(amp_samp)
                         results[f"amp_p16_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 16)
                         results[f"amp_p84_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 84)
+                        if ci95:
+                            results[f"amp_p2_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 2.5)
+                            results[f"amp_p97_{tag}"][dec_idx, ra_idx] = np.percentile(amp_samp, 97.5)
 
                         chi0_samp = comp.samples[:, -1]
                         results[f"chi0_mean_{tag}"][dec_idx, ra_idx] = np.mean(chi0_samp)
                         results[f"chi0_std_{tag}"][dec_idx, ra_idx] = np.std(chi0_samp)
                         results[f"chi0_p16_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 16)
                         results[f"chi0_p84_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 84)
+                        if ci95:
+                            results[f"chi0_p2_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 2.5)
+                            results[f"chi0_p97_{tag}"][dec_idx, ra_idx] = np.percentile(chi0_samp, 97.5)
 
                         if comp.samples.shape[1] >= 4:
                             sec_samp = comp.samples[:, 1]
@@ -1058,6 +1083,9 @@ class InferenceEngine(InferenceEngineInterface):
                             results[f"{prefix}_std_{tag}"][dec_idx, ra_idx] = np.std(sec_samp)
                             results[f"{prefix}_p16_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 16)
                             results[f"{prefix}_p84_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 84)
+                            if ci95:
+                                results[f"{prefix}_p2_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 2.5)
+                                results[f"{prefix}_p97_{tag}"][dec_idx, ra_idx] = np.percentile(sec_samp, 97.5)
 
         logger.info("Chunked cube inference complete.")
         return results

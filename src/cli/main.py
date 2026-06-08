@@ -174,6 +174,7 @@ def cube_infer_pol(args):
         snr_threshold=args.snr_threshold if args.snr_threshold is not None else 5.0,
         n_samples=args.n_samples,
         i_cube=i_cube,
+        ci95=getattr(args, "ci95", False),
     )
 
     write_results_maps(results, wcs_2d, args.output_dir)
@@ -465,6 +466,11 @@ vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
         type=int,
         default=1,
         help="Pixels per progress chunk (default: 1, serial)",
+    )
+    cube_p.add_argument(
+        "--ci95",
+        action="store_true",
+        help="Also write 95%% CI (p2.5/p97.5) uncertainty maps per parameter",
     )
     cube_p.set_defaults(func=cube_infer_pol)
 
