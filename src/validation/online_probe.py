@@ -94,10 +94,13 @@ def run_probe(
     n_samples: int = 1000,
     device: str = "cuda",
     batch_size: int = 8192,
+    freq_file: str | None = None,
 ) -> dict:
     device = device if torch.cuda.is_available() else "cpu"
 
     config = Configuration.from_yaml(config_path)
+    if freq_file:
+        config.freq_file = freq_file
     ckpt = torch.load(posterior_path, map_location="cpu", weights_only=False)
     model_type = ckpt["model_type"]
     n_components = ckpt["n_components"]
@@ -190,6 +193,8 @@ def main():
     ap.add_argument("--n-cases", type=int, default=2000)
     ap.add_argument("--n-samples", type=int, default=1000)
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--freq-file", default=None, metavar="PATH",
+                    help="override freq_file from config")
     args = ap.parse_args()
     run_probe(
         config_path=args.config,
@@ -197,6 +202,7 @@ def main():
         n_cases=args.n_cases,
         n_samples=args.n_samples,
         device=args.device,
+        freq_file=args.freq_file,
     )
 
 

@@ -14,6 +14,10 @@ def train_command(args):
     config = Configuration.from_yaml(args.config)
     if args.device:
         config.training.device = args.device
+    if args.freq_file:
+        config.freq_file = args.freq_file
+    if args.save_dir:
+        config.training.save_dir = args.save_dir
 
     # Single-model mode: train one (model_type, N) posterior. Lets several
     # models run as separate processes (e.g. one per GPU).
@@ -253,6 +257,18 @@ def main():
         "--model-type",
         default=None,
         help="model type for single-model mode (default: first in config)",
+    )
+    train_p.add_argument(
+        "--freq-file",
+        default=None,
+        metavar="PATH",
+        help="override freq_file from config (path to frequency list in Hz)",
+    )
+    train_p.add_argument(
+        "--save-dir",
+        default=None,
+        metavar="DIR",
+        help="override training.save_dir from config",
     )
     train_p.set_defaults(func=train_command)
 

@@ -23,19 +23,22 @@ uGMRT     : Band 3, Band 4, Band 5
 
 Usage
 -----
-    # Full sweep (train + coverage + plot):
+    # Full sweep (train + coverage + plot) for all bands:
     pixi run -e gpu python scripts/sweep_bands.py --config config_a100_lrtest.yaml
 
     # Selected bands only:
     pixi run -e gpu python scripts/sweep_bands.py --config config_a100_lrtest.yaml \
         --bands vla_p vla_l meerkat_uhf ugmrt_band3
 
-    # Skip training (coverage + plot only, models already exist):
+    # Skip training (re-run coverage + plot on existing models):
     pixi run -e gpu python scripts/sweep_bands.py --config config_a100_lrtest.yaml \
         --skip-train
 
-    # Include SBC rank histograms:
+    # Include SBC rank histograms (slow, ~20 min per band):
     pixi run -e gpu python scripts/sweep_bands.py --config config_a100_lrtest.yaml --sbc
+
+The sweep uses --freq-file and --save-dir CLI overrides on vroom-sbi train,
+online_probe, and sbc — no per-band config files are generated.
 """
 
 import argparse
@@ -126,16 +129,10 @@ def step_train(
                 "vroom-sbi", "train",
                 "--config", config_path,
                 "--device", device,
+                "--freq-file", freq_file,
+                "--save-dir", save_dir,
                 "--n-components", str(n),
-                # Override freq_file and save_dir via env isn't supported;
-                # we patch the config at runtime via the two extra flags below.
-                # The CLI reads config.yaml then these flags override it.
-            ]
-            # NOTE: vroom-sbi train doesn't yet accept --freq-file / --save-dir
-            # as CLI flags; the per-band config YAML is generated alongside this
-            # script by generate_band_configs.py.  Update this call if CLI flags
-            # are added later.
-            ,
+            ],
             log_path=log,
         )
         if ret != 0:
@@ -146,6 +143,7 @@ def step_train(
 
 def step_coverage(
     band_key: str,
+    freq_file: str,
     config_path: str,
     save_dir: str,
     device: str,
@@ -169,6 +167,7 @@ def step_coverage(
                 "--config", config_path,
                 "--posterior", str(pt),
                 "--device", device,
+                "--freq-file", freq_file,
                 "--n-cases", str(n_cases),
                 "--n-samples", str(n_samples),
             ]
@@ -196,6 +195,7 @@ def step_plot(band_key: str, save_dir: str, log_path: Path) -> Path | None:
 
 def step_sbc(
     band_key: str,
+    freq_file: str,
     config_path: str,
     save_dir: str,
     device: str,
@@ -216,37 +216,11 @@ def step_sbc(
             "--config", config_path,
             "--posterior", str(pt),
             "--device", device,
+            "--freq-file", freq_file,
             "--n-cases", str(n_cases),
             "--n-samples", str(n_samples),
             "--output-dir", str(out_dir),
         ])
-
-
-# ---------------------------------------------------------------------------
-# Config generation
-# ---------------------------------------------------------------------------
-
-def write_band_config(
-    band_key: str,
-    freq_file: str,
-    base_config_path: str,
-    base_save_dir: str,
-    out_config_path: Path,
-) -> None:
-    """Write a per-band YAML config by patching freq_file and save_dir."""
-    import yaml  # available in all pixi envs that have vroom-sbi
-
-    with open(base_config_path) as fh:
-        cfg = yaml.safe_load(fh)
-
-    cfg["freq_file"] = freq_file
-    cfg["training"]["save_dir"] = band_save_dir(base_save_dir, band_key)
-
-    out_config_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_config_path, "w") as fh:
-        yaml.dump(cfg, fh, default_flow_style=False, sort_keys=False)
-
-    print(f"  wrote config: {out_config_path}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -284,9 +258,6 @@ def main():
         base_cfg = yaml.safe_load(fh)
     base_save_dir = base_cfg.get("training", {}).get("save_dir", "models_sweep")
 
-    # Per-band configs go next to the base config
-    config_dir = Path(args.config).parent / "band_configs"
-
     print(f"\n{'='*60}")
     print(f"vroom-sbi band sweep")
     print(f"  base config : {args.config}")
@@ -300,7 +271,6 @@ def main():
     for band_key in band_keys:
         freq_file, label = BANDS[band_key]
         save_dir = band_save_dir(base_save_dir, band_key)
-        band_config_path = config_dir / f"config_{band_key}.yaml"
 
         print(f"\n{'='*60}")
         print(f"BAND: {label}")
@@ -308,21 +278,17 @@ def main():
         print(f"  save_dir  : {save_dir}")
         print(f"{'='*60}")
 
-        # Generate per-band config
-        write_band_config(band_key, freq_file, args.config, base_save_dir, band_config_path)
-        band_config = str(band_config_path)
-
         # Train
         if not args.skip_train:
             step_train(
-                band_key, freq_file, band_config, save_dir,
+                band_key, freq_file, args.config, save_dir,
                 args.device, N_COMPONENTS_RANGE,
             )
 
         # Coverage probe + plot
         if not args.skip_coverage:
             log = step_coverage(
-                band_key, band_config, save_dir, args.device,
+                band_key, freq_file, args.config, save_dir, args.device,
                 N_COMPONENTS_RANGE, args.n_cases, args.n_samples,
             )
             if log and log.stat().st_size > 0:
@@ -331,7 +297,7 @@ def main():
         # SBC (optional)
         if args.sbc:
             step_sbc(
-                band_key, band_config, save_dir, args.device,
+                band_key, freq_file, args.config, save_dir, args.device,
                 N_COMPONENTS_RANGE, args.n_cases, args.n_samples,
             )
 
