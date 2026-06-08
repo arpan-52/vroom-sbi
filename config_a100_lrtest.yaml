@@ -1,0 +1,181 @@
+# =============================================================================
+# VROOM-SBI Configuration File
+# =============================================================================
+
+# Frequency file path (required)
+# A100 full-band training: point this at the band you want to train, e.g.
+#   freq_bands/freq_vla_l.txt   freq_bands/freq_vla_c.txt   freq_bands/freq_vla_x.txt
+#   freq_bands/freq_vla_p.txt   freq_bands/freq_meerkat_uhf.txt   freq_bands/freq_meerkat_l.txt
+freq_file: "freq_bands/freq_vla_l.txt"
+
+# =============================================================================
+# PRIOR RANGES
+# =============================================================================
+# All parameter bounds for all model types are defined here.
+# Parameters by model type:
+#   - faraday_thin:        [RM, amp, chi0] per component
+#   - burn_slab:           [phi_c, delta_phi, amp, chi0] per component
+#   - external_dispersion: [phi, sigma_phi, amp, chi0] per component
+#   - internal_dispersion: [phi, sigma_phi, amp, chi0] per component
+
+priors:
+  # Rotation Measure / Faraday depth (rad/m²)
+  # Used for RM in faraday_thin, phi/phi_c in other models
+  rm:
+    min: -500.0
+    max: 500.0
+  
+  # Fractional polarization amplitude (dimensionless, 0-1)
+  amp:
+    min: 0.01
+    max: 1.0
+  
+  # Intrinsic polarization angle (radians)
+  # Physical constraint: [0, π]
+  chi0:
+    min: 0.0
+    max: 3.14159265  # π
+  
+  # RM dispersion for external/internal dispersion models (rad/m²)
+  sigma_phi:
+    min: 0.0
+    max: 200.0
+  
+  # Slab half-width for burn_slab model (rad/m²)
+  # Full slab width = 2 × delta_phi
+  delta_phi:
+    min: 0.0
+    max: 200.0
+
+# =============================================================================
+# NOISE CONFIGURATION
+# =============================================================================
+# Additive per-channel noise: sigma_k = sigma_base / sqrt(w_k)
+# sigma_base is drawn uniformly from [sigma_min*min_factor, sigma_max*max_factor]
+
+noise:
+  mode: "additive"        # additive sigma (physically motivated)
+  sigma_min: 0.001        # minimum base noise std dev
+  sigma_max: 0.05         # maximum base noise std dev
+  augmentation:
+    enable: true
+    min_factor: 0.5       # draw sigma_base >= sigma_min * 0.5
+    max_factor: 2.0       # draw sigma_base <= sigma_max * 2.0
+
+# =============================================================================
+# TRAINING SETTINGS
+# =============================================================================
+
+training:
+  # Simulation generation
+  n_simulations: 30000              # Base simulations (for N=1)
+  simulation_scaling: true          # Scale up for more components
+  simulation_scaling_mode: "power"  # Options: linear, quadratic, subquadratic, power
+  scaling_power: 2.5                # Exponent for power mode (N^2.5)
+  
+  # Data generation mode
+  mode: "online"                    # GPU on-the-fly, no disk (A100)
+  sampling_method: "uniform"        # online prior sampler: "uniform" (default) or "sobol"
+  steps_per_epoch: 500              # online: fresh GPU batches per epoch
+  val_size: 50000                   # online: fixed validation set size
+
+  # GPU performance levers (online mode; ignored on CPU / non-Ampere)
+  tf32: true                        # TF32 tensor-core matmuls (A100/Ampere+)
+  amp: "none"                       # NOTE: bf16/fp16 currently break the NSF flow
+                                  # (nflows index_put under autocast). TF32 above is
+                                  # the safe A100 lever. Leave amp=none for NSF.
+
+  # Chunked streaming (for large datasets)
+  simulation_batch_size: 30000      # Samples per chunk file (tune for RAM)
+
+  # Neural network training
+  training_batch_size: 8192         # Large batch — memory is cheap online (A100 40-80GB)
+  learning_rate: 0.0001            # lr-test: 5x lower base (5e-4 -> 1e-4)
+  validation_fraction: 0.1          # Fraction for validation
+  stop_after_epochs: 20             # Early stopping patience
+  
+  # Hardware
+  device: "cuda"                    # cuda or cpu
+  
+  # Output
+  save_dir: "models_lrtest"            # lr-test: keep production models intact
+
+# =============================================================================
+# MODEL SELECTION
+# =============================================================================
+
+model_selection:
+  min_components: 1       # Minimum components to train
+  max_components: 5       # Maximum components to train
+  use_classifier: false   # Train classifier for model selection
+  classifier_only: false  # Skip posterior training (requires existing simulations)
+
+# =============================================================================
+# PHYSICAL MODELS
+# =============================================================================
+
+physics:
+  # List of model types to train
+  # Options: faraday_thin, burn_slab, external_dispersion, internal_dispersion
+  model_types:
+    - "faraday_thin"
+    # - "burn_slab"
+    # - "external_dispersion"
+    # - "internal_dispersion"
+
+# =============================================================================
+# WEIGHT AUGMENTATION
+# =============================================================================
+# Simulates realistic data with missing channels, RFI gaps, etc.
+
+weight_augmentation:
+  enable: true
+  scattered_prob: 0.3     # Probability of scattered missing channels
+  gap_prob: 0.3           # Probability of contiguous gaps
+  large_block_prob: 0.1   # Probability of large RFI blocks
+  noise_variation: true   # Add noise variation to weights (legacy binary mode)
+  continuous_weights: true  # Use lognormal continuous weights in [w_min, 1]
+  w_min: 0.001              # Minimum weight for surviving channels
+
+# =============================================================================
+# CLASSIFIER (Model Selection)
+# =============================================================================
+# 1D CNN that predicts number of components from spectra
+
+classifier:
+  conv_channels: [32, 64, 128]
+  kernel_sizes: [7, 5, 3]
+  dropout: 0.1
+  n_epochs: 50
+  batch_size: 1024
+  learning_rate: 0.0001
+  validation_fraction: 0.2
+  use_posterior_simulations: true
+
+# =============================================================================
+# SBI ARCHITECTURE (Neural Spline Flow)
+# =============================================================================
+
+sbi:
+  model: "nsf"            # nsf (Neural Spline Flow) or maf
+  num_bins: 16            # Spline resolution
+  embedding_dim: 64       # Spectral embedding output dimension
+  
+  # Architecture per component count
+  # Same architecture for all N to isolate effect of simulation scaling
+  architecture_scaling:
+    1:
+      hidden_features: 256
+      num_transforms: 15
+    2:
+      hidden_features: 256
+      num_transforms: 15
+    3:
+      hidden_features: 256
+      num_transforms: 15
+    4:
+      hidden_features: 256
+      num_transforms: 15
+    5:
+      hidden_features: 256
+      num_transforms: 15
