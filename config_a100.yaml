@@ -90,7 +90,8 @@ training:
 
   # Neural network training
   training_batch_size: 8192         # Large batch — memory is cheap online (A100 40-80GB)
-  learning_rate: 0.0005             # Adam learning rate
+  learning_rate: 0.0002             # Adam learning rate (lowered from 5e-4: calibration
+                                  # probe for val-rises-post-min issue; revisit after SBC)
   validation_fraction: 0.1          # Fraction for validation
   stop_after_epochs: 20             # Early stopping patience
   
