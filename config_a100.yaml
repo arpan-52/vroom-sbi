@@ -89,7 +89,8 @@ training:
   simulation_batch_size: 30000      # Samples per chunk file (tune for RAM)
 
   # Neural network training
-  training_batch_size: 8192         # Large batch — memory is cheap online (A100 40-80GB)
+  training_batch_size: 65536        # A100-40GB sweet spot: ~50k/s N=1, ~17GB at N=5
+                                  # (131072 throughput knee + N=5 hits 33.6/40GB = unsafe)
   learning_rate: 0.0002             # Adam learning rate (lowered from 5e-4: calibration
                                   # probe for val-rises-post-min issue; revisit after SBC)
   validation_fraction: 0.1          # Fraction for validation
@@ -97,6 +98,10 @@ training:
   
   # Hardware
   device: "cuda"                    # cuda or cpu
+
+  # Sub-models
+  train_pol: true                   # RM / polarization posteriors (the matrix)
+  train_spectra: true               # spectral-shape (total-intensity) model
   
   # Output
   save_dir: "models"
@@ -108,7 +113,7 @@ training:
 model_selection:
   min_components: 1       # Minimum components to train
   max_components: 5       # Maximum components to train
-  use_classifier: false   # Train classifier for model selection
+  use_classifier: true    # Train classifier for model selection
   classifier_only: false  # Skip posterior training (requires existing simulations)
 
 # =============================================================================
@@ -120,9 +125,9 @@ physics:
   # Options: faraday_thin, burn_slab, external_dispersion, internal_dispersion
   model_types:
     - "faraday_thin"
-    # - "burn_slab"
-    # - "external_dispersion"
-    # - "internal_dispersion"
+    - "burn_slab"
+    - "external_dispersion"
+    - "internal_dispersion"
 
 # =============================================================================
 # WEIGHT AUGMENTATION
