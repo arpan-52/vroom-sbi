@@ -25,6 +25,8 @@ Run:
 """
 
 import argparse
+import json
+from pathlib import Path
 
 import torch
 from sbi.inference.posteriors import DirectPosterior
@@ -95,6 +97,7 @@ def run_probe(
     device: str = "cuda",
     batch_size: int = 8192,
     freq_file: str | None = None,
+    output_dir: str | Path | None = None,
 ) -> dict:
     device = device if torch.cuda.is_available() else "cpu"
 
@@ -176,7 +179,7 @@ def run_probe(
     print("-" * 48)
     print("(bias/rmse in prior-width units; ideal cov68~0.68, cov90~0.90)\n")
 
-    return {
+    result = {
         "labels": labels,
         "bias": bias.cpu(),
         "rmse": rmse.cpu(),
@@ -184,6 +187,28 @@ def run_probe(
         "cov90": cov90.cpu(),
         "best_val_loss": best_val,
     }
+
+    # Machine-readable coverage summary for paper figures (F2), when requested.
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(posterior_path).stem.replace("posterior_", "")
+        probe_summary = {
+            "model_type": model_type,
+            "n_components": n_components,
+            "labels": labels,
+            "bias": bias.cpu().tolist(),
+            "rmse": rmse.cpu().tolist(),
+            "cov68": cov68.cpu().tolist(),
+            "cov90": cov90.cpu().tolist(),
+            "best_val_loss": best_val,
+        }
+        json_path = output_dir / f"probe_{stem}.json"
+        with json_path.open("w") as fh:
+            json.dump(probe_summary, fh, indent=2)
+        print(f"Probe JSON : {json_path}\n")
+
+    return result
 
 
 def main():
@@ -195,6 +220,8 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--freq-file", default=None, metavar="PATH",
                     help="override freq_file from config")
+    ap.add_argument("--output-dir", default=None, metavar="PATH",
+                    help="if set, also write probe_<stem>.json coverage summary here")
     args = ap.parse_args()
     run_probe(
         config_path=args.config,
@@ -203,6 +230,7 @@ def main():
         n_samples=args.n_samples,
         device=args.device,
         freq_file=args.freq_file,
+        output_dir=args.output_dir,
     )
 
 

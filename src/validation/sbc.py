@@ -23,6 +23,7 @@ Run:
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib
@@ -125,11 +126,53 @@ def run_sbc_for_posterior(
     print("-" * 40)
     print("(KS p>=0.05 => ranks consistent with uniform; C2ST ideal ~0.5)\n")
 
+    # Machine-readable summary consumed by the matrix driver and paper figures.
+    params = [
+        {
+            "name": name,
+            "ks_pval": ks_pvals[j].item(),
+            "c2st": c2st[j].item(),
+            "pass": ks_pvals[j].item() >= 0.05,
+        }
+        for j, name in enumerate(labels)
+    ]
+    summary = {
+        "model_type": model_type,
+        "n_components": n_components,
+        "n_cases": n_cases,
+        "n_samples": n_samples,
+        "freq_file": config.freq_file,
+        "params": params,
+        "n_pass": sum(p["pass"] for p in params),
+        "n_fail": sum(not p["pass"] for p in params),
+        "hist_path": str(hist_path),
+    }
+    json_path = output_dir / f"sbc_{stem}.json"
+    with json_path.open("w") as fh:
+        json.dump(summary, fh, indent=2)
+    print(f"Summary JSON  : {json_path}\n")
+
+    # Persist raw ranks so paper figures can recompose grids without re-running
+    # SBC (the expensive step). Small tensor: (n_cases, n_params).
+    ranks_path = output_dir / f"sbc_{stem}_ranks.pt"
+    torch.save(
+        {
+            "ranks": ranks.cpu(),
+            "num_posterior_samples": n_samples,
+            "labels": labels,
+            "model_type": model_type,
+            "n_components": n_components,
+        },
+        ranks_path,
+    )
+
     return {
         "labels": labels,
         "ks_pvals": ks_pvals,
         "c2st_ranks": c2st,
         "hist_path": str(hist_path),
+        "json_path": str(json_path),
+        "summary": summary,
     }
 
 
