@@ -140,7 +140,19 @@ class GPUSimulator:
         Q_obs = torch.where(good, Q_nl + noise_Q, torch.zeros_like(weights))
         U_obs = torch.where(good, U_nl + noise_U, torch.zeros_like(weights))
 
-        x = torch.cat([Q_obs, U_obs, weights], dim=1).to(torch.float32)
+        # Third channel. Default: relative weights (network must infer the
+        # absolute noise scale -> conservative, under-confident posteriors).
+        # condition_on_noise: expose the *absolute* per-channel noise as masked
+        # log-precision so the posterior conditions on the (known-at-inference)
+        # noise instead of marginalizing the 200x sigma_base range. Shifted
+        # strictly positive so 0 uniquely marks a flagged channel, /4 -> O(1).
+        if getattr(self.config.noise, "condition_on_noise", False):
+            log_prec = -torch.log10(sigma_per_chan + 1e-30)  # high where noise low
+            chan3 = torch.where(good, (log_prec + 1.0) / 4.0, torch.zeros_like(weights))
+        else:
+            chan3 = weights
+
+        x = torch.cat([Q_obs, U_obs, chan3], dim=1).to(torch.float32)
         return theta.to(torch.float32), x
 
 

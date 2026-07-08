@@ -122,6 +122,10 @@ class NoiseConfig:
     augmentation_enable: bool = True
     augmentation_min_factor: float = 0.5
     augmentation_max_factor: float = 2.0
+    # Expose absolute per-channel noise to the network (masked log-precision
+    # third channel) so posteriors condition on known noise instead of
+    # marginalizing sigma_base. Default False = legacy relative-weights channel.
+    condition_on_noise: bool = False
 
 
 @dataclass
@@ -368,6 +372,7 @@ class Configuration:
             augmentation_enable=bool(aug_raw.get("enable", True)),
             augmentation_min_factor=float(aug_raw.get("min_factor", 0.5)),
             augmentation_max_factor=float(aug_raw.get("max_factor", 2.0)),
+            condition_on_noise=bool(noise_raw.get("condition_on_noise", False)),
         )
 
         # Extract hardware config
@@ -540,6 +545,7 @@ class Configuration:
                 "sigma_min": self.noise.sigma_min,
                 "sigma_max": self.noise.sigma_max,
                 "base_percent": self.noise.base_percent,
+                "condition_on_noise": self.noise.condition_on_noise,
                 "augmentation": {
                     "enable": self.noise.augmentation_enable,
                     "min_factor": self.noise.augmentation_min_factor,
