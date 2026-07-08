@@ -23,6 +23,7 @@ Run:
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib
@@ -140,12 +141,34 @@ def run_tarp(
     print(f"  <0 = under-confident (posterior too broad)")
     print(f"ATRC curve: {out_png}\n")
 
+    # Machine-readable summary for the paper TARP figure (ATRC-gap matrix) and
+    # for cross-checking against SBC/coverage without re-sampling.
+    summary = {
+        "model_type": model_type,
+        "n_components": n_components,
+        "n_cases": n_cases,
+        "n_samples": n_samples,
+        "atrc_gap": atrc_gap,
+        "verdict": verdict,
+        "calibrated": calibrated,
+        "alphas": np.asarray(alphas).tolist(),
+        "ecp": np.asarray(ecp).tolist(),
+        "out_png": str(out_png),
+    }
+    json_path = output_dir / f"tarp_{stem}.json"
+    with json_path.open("w") as fh:
+        json.dump(summary, fh, indent=2)
+    print(f"Summary JSON : {json_path}\n")
+
     return {
         "alphas": alphas,
         "ecp": ecp,
         "atrc_gap": atrc_gap,
         "verdict": verdict,
+        "calibrated": calibrated,
         "out_png": str(out_png),
+        "json_path": str(json_path),
+        "summary": summary,
     }
 
 

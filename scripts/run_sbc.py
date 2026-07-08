@@ -26,6 +26,14 @@ Usage
     # Subset of N, custom case/sample counts:
     pixi run -e gpu python scripts/run_sbc.py --config config_a100.yaml \
         --model burn_slab --n-range 1-3 --n-cases 2000 --n-samples 1000
+
+    # Both marginal (SBC) and joint (TARP) calibration in one pass:
+    pixi run -e gpu python scripts/run_sbc.py --config config_a100.yaml \
+        --tests sbc tarp --n-cases 5000 --n-samples 2000
+
+Despite the name, ``--tests tarp`` runs the joint DRP/TARP coverage test too;
+SBC and TARP share the simulator/posterior-rebuild contract so they see
+identical models and data.
 """
 
 import argparse
@@ -66,6 +74,10 @@ def main():
                     help="Directory holding posterior_*.pt (default: training.save_dir)")
     ap.add_argument("--output-dir", default="validation_results/sbc",
                     help="Directory for rank histograms + summaries")
+    ap.add_argument("--tests", nargs="+", default=["sbc"],
+                    choices=["sbc", "tarp"],
+                    help="calibration tests per posterior: sbc (marginal ranks), "
+                         "tarp (joint DRP coverage), or both")
     ap.add_argument("--n-cases", type=int, default=2000,
                     help="Prior draws (simulated cases) per posterior")
     ap.add_argument("--n-samples", type=int, default=1000,
@@ -100,11 +112,15 @@ def main():
     print(f"  models dir  : {save_dir}")
     print(f"  model types : {model_types}")
     print(f"  N range     : {n_list}")
+    print(f"  tests       : {args.tests}")
     print(f"  cases/draws : {args.n_cases} / {args.n_samples}")
     print(f"  output      : {output_dir}")
     print(f"{'=' * 60}\n")
 
-    results = []
+    if "tarp" in args.tests:
+        from src.validation.tarp_test import run_tarp
+
+    results = []  # one record per posterior, holding results from each test
     missing = []
     for model_type in model_types:
         for n in n_list:
@@ -113,49 +129,71 @@ def main():
                 print(f"[SKIP] {pt} not found", flush=True)
                 missing.append(str(pt))
                 continue
-            print(f"\n{'#' * 60}\n# SBC: {model_type} N={n}\n{'#' * 60}", flush=True)
-            out = run_sbc_for_posterior(
-                config_path=args.config,
-                posterior_path=str(pt),
-                output_dir=output_dir,
-                n_cases=args.n_cases,
-                n_samples=args.n_samples,
-                device=args.device,
-                freq_file=args.freq_file,
-            )
-            results.append(out["summary"])
+            record = {"model_type": model_type, "n_components": n}
+            if "sbc" in args.tests:
+                print(f"\n{'#' * 60}\n# SBC: {model_type} N={n}\n{'#' * 60}", flush=True)
+                out = run_sbc_for_posterior(
+                    config_path=args.config, posterior_path=str(pt),
+                    output_dir=output_dir, n_cases=args.n_cases,
+                    n_samples=args.n_samples, device=args.device,
+                    freq_file=args.freq_file,
+                )
+                record["sbc"] = out["summary"]
+            if "tarp" in args.tests:
+                print(f"\n{'#' * 60}\n# TARP: {model_type} N={n}\n{'#' * 60}", flush=True)
+                out = run_tarp(
+                    config_path=args.config, posterior_path=str(pt),
+                    output_dir=output_dir, n_cases=args.n_cases,
+                    n_samples=args.n_samples, device=args.device,
+                    freq_file=args.freq_file,
+                )
+                record["tarp"] = out["summary"]
+            results.append(record)
 
     # Combined matrix summary
     matrix = {
         "config": args.config,
         "save_dir": save_dir,
+        "tests": args.tests,
         "n_cases": args.n_cases,
         "n_samples": args.n_samples,
         "results": results,
         "missing": missing,
     }
-    matrix_path = output_dir / "sbc_matrix_summary.json"
+    matrix_path = output_dir / "calibration_matrix_summary.json"
     with matrix_path.open("w") as fh:
         json.dump(matrix, fh, indent=2)
 
-    # Printed roll-up: one row per posterior
-    print(f"\n{'=' * 60}")
-    print("SBC MATRIX SUMMARY")
-    print(f"{'=' * 60}")
-    print(f"{'model':<22}{'N':>3}{'pass':>6}{'fail':>6}{'verdict':>10}")
-    print("-" * 47)
+    # Printed roll-up: one row per posterior, columns per test.
+    print(f"\n{'=' * 62}")
+    print("CALIBRATION MATRIX SUMMARY")
+    print(f"{'=' * 62}")
+    header = f"{'model':<22}{'N':>3}"
+    if "sbc" in args.tests:
+        header += f"{'sbc pass/fail':>16}"
+    if "tarp" in args.tests:
+        header += f"{'tarp gap':>12}{'verdict':>16}"
+    print(header)
+    print("-" * 62)
     for r in results:
-        verdict = "PASS" if r["n_fail"] == 0 else "FAIL"
-        print(f"{r['model_type']:<22}{r['n_components']:>3}"
-              f"{r['n_pass']:>6}{r['n_fail']:>6}{verdict:>10}")
-    print("-" * 47)
+        row = f"{r['model_type']:<22}{r['n_components']:>3}"
+        if "sbc" in args.tests and "sbc" in r:
+            row += f"{r['sbc']['n_pass']:>7}/{r['sbc']['n_fail']:<8}"
+        if "tarp" in args.tests and "tarp" in r:
+            row += f"{r['tarp']['atrc_gap']:>+12.4f}{r['tarp']['verdict']:>16}"
+        print(row)
+    print("-" * 62)
     print(f"Combined summary: {matrix_path}")
     if missing:
         print(f"({len(missing)} posterior(s) missing — see summary JSON)")
     print()
 
-    # Non-zero exit if any posterior had a failing parameter, for CI/automation.
-    any_fail = any(r["n_fail"] > 0 for r in results)
+    # Non-zero exit if any SBC parameter failed OR any TARP was uncalibrated.
+    any_fail = any(
+        ("sbc" in r and r["sbc"]["n_fail"] > 0)
+        or ("tarp" in r and not r["tarp"]["calibrated"])
+        for r in results
+    )
     sys.exit(1 if any_fail else 0)
 
 
