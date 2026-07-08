@@ -49,7 +49,7 @@ def run_tarp(
 ) -> dict:
     """Run TARP joint calibration test and save the ATRC curve plot."""
     try:
-        from tarp import get_drp_coverage
+        from tarp import get_tarp_coverage
     except ImportError as exc:
         raise ImportError(
             "tarp is required: pip install tarp  (or add to pyproject.toml)"
@@ -103,12 +103,13 @@ def run_tarp(
     samples = torch.stack(samples_list, dim=0).numpy()
     theta_np = theta_true.cpu().numpy()  # (N, n_params)
 
-    # tarp.get_drp_coverage expects:
+    # tarp.get_tarp_coverage expects:
     #   samples: (n_samples, n_cases, n_params)  -- note the axis order
     #   theta:   (n_cases, n_params)
+    # and returns (ecp, alpha) in that order.
     samples_tarp = np.transpose(samples, (1, 0, 2))  # (n_samples, N, n_params)
 
-    alphas, ecp = get_drp_coverage(samples_tarp, theta_np, norm=True)
+    ecp, alphas = get_tarp_coverage(samples_tarp, theta_np, norm=True)
 
     atrc_gap = float(np.trapz(ecp - alphas, alphas))
 
