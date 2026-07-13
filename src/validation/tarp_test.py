@@ -32,9 +32,119 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
+# numpy>=2.0 renamed np.trapz -> np.trapezoid; keep working on both.
+_trapz = getattr(np, "trapezoid", None) or np.trapz
+
 from ..config import Configuration
 from ..simulator.gpu_simulator import GPUSimulator
 from .online_probe import VAL_SEED, _param_labels, _rebuild_posterior
+
+
+def _coverage_stats(ecp: np.ndarray, alphas: np.ndarray) -> dict:
+    """Alpha-resolved summary of an ECP curve, not just the signed gap.
+
+    The signed ATRC gap ``∫(ECP-α)dα`` collapses the whole curve to one scalar
+    and *cancels*: a posterior over-confident at some α and under-confident at
+    others can integrate to ~0 and masquerade as calibrated. We report, instead:
+
+      - signed_gap    : net direction (as before; >0 over-, <0 under-confident)
+      - unsigned_area : ∫|ECP-α|dα — total miscalibration magnitude, never cancels
+      - max_dev       : worst signed deviation and the α where it occurs
+      - crosses       : whether the curve crosses the diagonal (shape, not scale)
+      - mixed         : significant cancellation — a scalar temperature can't fix it
+    """
+    dev = ecp - alphas
+    signed_gap = float(_trapz(dev, alphas))
+    unsigned_area = float(_trapz(np.abs(dev), alphas))
+    imax = int(np.argmax(np.abs(dev)))
+    nz = dev[np.abs(dev) > 1e-12]
+    crosses = bool(np.any(np.diff(np.sign(nz)) != 0)) if nz.size else False
+    mixed = bool(crosses and abs(signed_gap) < 0.5 * unsigned_area)
+    return {
+        "signed_gap": signed_gap,
+        "unsigned_area": unsigned_area,
+        "max_dev": float(dev[imax]),
+        "max_dev_alpha": float(alphas[imax]),
+        "crosses": crosses,
+        "mixed": mixed,
+    }
+
+
+def verdict_from_stats(stats: dict, area_thresh: float) -> str:
+    """Map coverage stats + null threshold to a verdict, in one place.
+
+    Gates on the *unsigned* area (never cancels); a curve that crosses the
+    diagonal with little net bias is "mixed" (shape error, not a scale error).
+    Shared by ``run_tarp`` and the plotting module so color and label always agree.
+    """
+    if stats["unsigned_area"] <= area_thresh:
+        return "calibrated"
+    if stats["mixed"]:
+        return "mixed"
+    return "over-confident" if stats["signed_gap"] > 0 else "under-confident"
+
+
+def _null_thresholds(
+    n_cases: int, alphas: np.ndarray,
+    level: float = 0.95, n_boot: int = 2000, seed: int = 0,
+) -> dict:
+    """Monte-Carlo null for the coverage statistics — a *derived* threshold.
+
+    Under perfect calibration the per-case credibility levels are iid U(0,1), so
+    ECP(α) is the empirical CDF of ``n_cases`` uniforms and ECP-α is a standard
+    empirical process (Kolmogorov-Smirnov family). Simulating that null gives
+    finite-sample critical values for the unsigned area and sup deviation at this
+    exact ``n_cases`` and α grid, replacing the hard-coded 0.02 with a threshold
+    tied to the estimator's own sampling noise.
+
+    NOTE: with ``get_tarp_coverage(norm=True)`` the random reference point adds
+    mild correlation beyond iid-uniform, so this null slightly understates the
+    true variance (thresholds run a touch tight). Upgrade path: parametric
+    bootstrap through get_tarp_coverage on known-calibrated mock samples.
+    """
+    alphas = np.asarray(alphas)
+    rng = np.random.default_rng(seed)
+    area = np.empty(n_boot)
+    sup = np.empty(n_boot)
+    for b in range(n_boot):
+        u = np.sort(rng.random(n_cases))
+        ecp0 = np.searchsorted(u, alphas, side="right") / n_cases
+        dev = ecp0 - alphas
+        area[b] = _trapz(np.abs(dev), alphas)
+        sup[b] = float(np.max(np.abs(dev)))
+    return {
+        "area_thresh": float(np.quantile(area, level)),
+        "sup_thresh": float(np.quantile(sup, level)),
+        "level": level,
+        "n_boot": n_boot,
+        "n_cases": n_cases,
+    }
+
+
+def null_band(
+    n_cases: int, alphas: np.ndarray,
+    level: float = 0.95, n_boot: int = 2000, seed: int = 0,
+) -> dict:
+    """Per-α envelope of ECP under perfect calibration (for plotting).
+
+    Same iid-uniform null as ``_null_thresholds`` but keeps the per-bin structure:
+    returns the central ``level`` band of ECP(α) at each α, so a plot can show
+    where a perfectly-calibrated curve would lie given ``n_cases``. A curve that
+    stays inside this envelope is indistinguishable from calibrated.
+    """
+    alphas = np.asarray(alphas)
+    rng = np.random.default_rng(seed)
+    ecp0 = np.empty((n_boot, alphas.size))
+    for b in range(n_boot):
+        u = np.sort(rng.random(n_cases))
+        ecp0[b] = np.searchsorted(u, alphas, side="right") / n_cases
+    lo = (1.0 - level) / 2.0
+    return {
+        "alphas": alphas,
+        "ecp_lo": np.quantile(ecp0, lo, axis=0),
+        "ecp_hi": np.quantile(ecp0, 1.0 - lo, axis=0),
+        "level": level,
+    }
 
 
 def run_tarp(
@@ -46,8 +156,15 @@ def run_tarp(
     device: str = "cuda",
     batch_size: int = 8192,
     freq_file: str | None = None,
+    num_bootstrap: int = 0,
 ) -> dict:
-    """Run TARP joint calibration test and save the ATRC curve plot."""
+    """Run TARP joint calibration test and save the ATRC curve plot.
+
+    ``num_bootstrap`` > 0 turns on tarp's resample-over-cases bootstrap: the ECP
+    curve is then the *mean* over bootstraps and we additionally save its per-α
+    standard deviation (``ecp_std``) and the bootstrap spread of the scalar
+    gap/area — i.e. the sampling uncertainty of the coverage estimate itself.
+    """
     try:
         from tarp import get_tarp_coverage
     except ImportError as exc:
@@ -109,15 +226,47 @@ def run_tarp(
     # and returns (ecp, alpha) in that order.
     samples_tarp = np.transpose(samples, (1, 0, 2))  # (n_samples, N, n_params)
 
-    ecp, alphas = get_tarp_coverage(samples_tarp, theta_np, norm=True)
+    # Point estimate with a fixed reference seed so the curve is reproducible.
+    ecp, alphas = get_tarp_coverage(samples_tarp, theta_np, norm=True, seed=0)
+    ecp = np.asarray(ecp)
+    alphas = np.asarray(alphas)
 
-    atrc_gap = float(np.trapz(ecp - alphas, alphas))
+    ecp_std = None
+    gap_bs_std = area_bs_std = None
+    if num_bootstrap and num_bootstrap > 0:
+        # Proper bootstrap: resample cases WITH REPLACEMENT and redraw the random
+        # DRP reference each iteration, capturing both the case-sampling and the
+        # reference-point variance. Runs on the GPU via a torch reimplementation
+        # of the exact DRP algorithm (validated bit-for-bit against the numpy
+        # library, max|dECP| ~ 6e-8), so 50k resamples take seconds instead of the
+        # hours the numpy library needs single-threaded. The band is evaluated on
+        # the point-estimate ``alphas`` grid so every bootstrap curve shares it.
+        # (tarp's own bootstrap=True is unusable: it mutates the array cumulatively
+        # and, with a fixed seed, freezes the references, collapsing the spread.)
+        from .tarp_gpu import bootstrap_bands_torch
+
+        bands = bootstrap_bands_torch(
+            samples_tarp, theta_np, alphas, num_bootstrap=num_bootstrap,
+            norm=True, device=device, seed=0,
+            chunk_report=max(0, num_bootstrap // 10),
+        )
+        ecp_std = bands["ecp_std"]
+        gap_bs_std = bands["gap_bs_std"]
+        area_bs_std = bands["area_bs_std"]
+
+    stats = _coverage_stats(ecp, alphas)
+    null = _null_thresholds(n_cases, alphas)
+    atrc_gap = stats["signed_gap"]  # kept for backward-compat (readers/exit code)
 
     stem = Path(posterior_path).stem.replace("posterior_", "")
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.plot([0, 1], [0, 1], "k--", lw=1, label="ideal")
-    ax.plot(alphas, ecp, lw=2, label=f"TARP  (gap={atrc_gap:+.4f})")
+    ax.plot(alphas, ecp, lw=2,
+            label=f"TARP  (gap={atrc_gap:+.4f}, area={stats['unsigned_area']:.4f})")
     ax.fill_between(alphas, alphas, ecp, alpha=0.15)
+    if ecp_std is not None:
+        ax.fill_between(alphas, ecp - 2 * ecp_std, ecp + 2 * ecp_std,
+                        color="C0", alpha=0.20, label="±2σ bootstrap")
     ax.set_xlabel("Credible level α")
     ax.set_ylabel("Expected coverage probability")
     ax.set_title(f"TARP ATRC curve: {model_type} N={n_components}")
@@ -131,15 +280,22 @@ def run_tarp(
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-    calibrated = abs(atrc_gap) < 0.02
-    verdict = "calibrated" if calibrated else ("over-confident" if atrc_gap > 0 else "under-confident")
+    # Verdict gates on the *unsigned* area against the MC-null threshold — a real
+    # "distinguishable from calibrated at this n_cases" test, not the old |gap|<0.02
+    # convention. Direction comes from the signed gap; a curve that crosses the
+    # diagonal (cancellation) is flagged "mixed" — a scalar rescale can't fix it.
+    verdict = verdict_from_stats(stats, null["area_thresh"])
+    calibrated = verdict == "calibrated"
 
     print(f"\nPosterior : {posterior_path}")
     print(f"Model     : {model_type}  N={n_components}")
     print(f"Cases     : {n_cases}   posterior draws/case: {n_samples}")
-    print(f"TARP ATRC gap : {atrc_gap:+.4f}  ({verdict})")
-    print(f"  >0 = over-confident (posterior too narrow)")
-    print(f"  <0 = under-confident (posterior too broad)")
+    print(f"TARP verdict  : {verdict}")
+    print(f"  signed gap    : {atrc_gap:+.4f}   (>0 over-, <0 under-confident)")
+    print(f"  unsigned area : {stats['unsigned_area']:.4f}   "
+          f"(null {null['level']:.0%} threshold {null['area_thresh']:.4f})")
+    print(f"  max deviation : {stats['max_dev']:+.4f} @ α={stats['max_dev_alpha']:.2f}"
+          f"   crosses diagonal: {stats['crosses']}")
     print(f"ATRC curve: {out_png}\n")
 
     # Machine-readable summary for the paper TARP figure (ATRC-gap matrix) and
@@ -150,10 +306,23 @@ def run_tarp(
         "n_cases": n_cases,
         "n_samples": n_samples,
         "atrc_gap": atrc_gap,
+        "signed_gap": stats["signed_gap"],
+        "unsigned_area": stats["unsigned_area"],
+        "max_dev": stats["max_dev"],
+        "max_dev_alpha": stats["max_dev_alpha"],
+        "crosses": stats["crosses"],
+        "mixed": stats["mixed"],
+        "null_area_thresh": null["area_thresh"],
+        "null_sup_thresh": null["sup_thresh"],
+        "null_level": null["level"],
         "verdict": verdict,
         "calibrated": calibrated,
         "alphas": np.asarray(alphas).tolist(),
         "ecp": np.asarray(ecp).tolist(),
+        "ecp_std": None if ecp_std is None else np.asarray(ecp_std).tolist(),
+        "num_bootstrap": int(num_bootstrap),
+        "gap_bs_std": gap_bs_std,
+        "area_bs_std": area_bs_std,
         "out_png": str(out_png),
     }
     json_path = output_dir / f"tarp_{stem}.json"
@@ -183,6 +352,8 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--freq-file", default=None, metavar="PATH",
                     help="override freq_file from config")
+    ap.add_argument("--num-bootstrap", type=int, default=0,
+                    help="bootstrap iterations for per-α coverage error bands (0 = off)")
     args = ap.parse_args()
     run_tarp(
         config_path=args.config,
@@ -192,6 +363,7 @@ def main():
         n_samples=args.n_samples,
         device=args.device,
         freq_file=args.freq_file,
+        num_bootstrap=args.num_bootstrap,
     )
 
 

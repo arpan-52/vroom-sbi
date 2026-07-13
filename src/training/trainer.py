@@ -35,7 +35,7 @@ from ..simulator.augmentation import (
     augment_weights_combined,
     augment_weights_continuous,
 )
-from .networks import SpectralEmbedding
+from .networks import SpectralEmbedding, SpectralEmbeddingCNN
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +116,28 @@ class SBITrainer:
         if n_simulations is None:
             n_simulations = self.config.training.get_scaled_simulations(n_components)
 
+        online_mode = getattr(self.config.training, "mode", "chunked") == "online"
+
         logger.info(f"\n{'=' * 60}")
         logger.info(f"Training {model_type} N={n_components}")
-        logger.info(f"Simulations: {n_simulations:,}")
+        if online_mode:
+            # Online mode ignores n_simulations: it draws a fresh batch every step.
+            # Report the actual per-epoch budget so the number isn't misread as a
+            # fixed (and potentially too-small) training-set size.
+            scaled_steps = self.config.training.get_scaled_steps_per_epoch(
+                n_components
+            )
+            per_epoch = scaled_steps * self.config.training.training_batch_size
+            logger.info(
+                f"Simulations: online (fresh draws) — "
+                f"{per_epoch:,}/epoch "
+                f"({scaled_steps} steps x "
+                f"{self.config.training.training_batch_size:,} batch, "
+                f"N={n_components} scaled from base "
+                f"{self.config.training.steps_per_epoch})"
+            )
+        else:
+            logger.info(f"Simulations: {n_simulations:,}")
         logger.info(f"Device: {self.device}")
         logger.info(f"{'=' * 60}")
 
@@ -144,8 +163,6 @@ class SBITrainer:
             f"Simulator: n_params={simulator.n_params}, n_freq={simulator.n_freq}"
         )
 
-        online_mode = getattr(self.config.training, "mode", "chunked") == "online"
-
         # ============================================================
         # PHASE 1: Generate simulations (chunked path only)
         # ============================================================
@@ -160,12 +177,23 @@ class SBITrainer:
 
         # Build embedding network — 3 channels: [Q/I, U/I, weights]
         use_weights = getattr(self.config.weight_augmentation, "continuous_weights", True)
-        input_dim = 3 * simulator.n_freq if use_weights else 2 * simulator.n_freq
+        in_channels = 3 if use_weights else 2
+        input_dim = in_channels * simulator.n_freq
         embedding_dim = self.config.sbi.embedding_dim
-        embedding_net = SpectralEmbedding(
-            input_dim=input_dim,
-            output_dim=embedding_dim,
-        ).to(self.device)
+        embedding_type = getattr(self.config.sbi, "embedding_type", "mlp")
+        if embedding_type == "cnn":
+            embedding_net = SpectralEmbeddingCNN(
+                n_freq=simulator.n_freq,
+                output_dim=embedding_dim,
+                in_channels=in_channels,
+                conv_channels=self.config.sbi.embedding_conv_channels,
+                kernel_sizes=self.config.sbi.embedding_kernel_sizes,
+            ).to(self.device)
+        else:
+            embedding_net = SpectralEmbedding(
+                input_dim=input_dim,
+                output_dim=embedding_dim,
+            ).to(self.device)
 
         # Get architecture config
         arch_config = self.config.sbi.get_architecture(n_components)
@@ -529,7 +557,9 @@ class SBITrainer:
             num_bins=self.config.sbi.num_bins,
             learning_rate=learning_rate,
             training_batch_size=training_batch_size,
-            steps_per_epoch=self.config.training.steps_per_epoch,
+            steps_per_epoch=self.config.training.get_scaled_steps_per_epoch(
+                n_components
+            ),
             val_size=self.config.training.val_size,
             max_epochs=500,
             stop_after_epochs=stop_after_epochs,
@@ -782,6 +812,13 @@ class SBITrainer:
             "architecture": {
                 "input_dim": input_dim,
                 "embedding_dim": self.config.sbi.embedding_dim,
+                "embedding_type": getattr(self.config.sbi, "embedding_type", "mlp"),
+                "embedding_conv_channels": getattr(
+                    self.config.sbi, "embedding_conv_channels", [32, 64, 128]
+                ),
+                "embedding_kernel_sizes": getattr(
+                    self.config.sbi, "embedding_kernel_sizes", [7, 5, 3]
+                ),
                 "sbi_model": self.config.sbi.model,
                 "hidden_features": arch_config.hidden_features,
                 "num_transforms": arch_config.num_transforms,

@@ -35,7 +35,7 @@ from sbi.utils import BoxUniform
 
 from ..config import Configuration
 from ..simulator.gpu_simulator import GPUSimulator
-from ..training.networks import SpectralEmbedding
+from ..training.networks import SpectralEmbedding, SpectralEmbeddingCNN
 
 # Per-component parameter names (mirrors validator.ValidationRunner.PARAM_DEFS).
 PARAM_NAMES = {
@@ -62,9 +62,19 @@ def _rebuild_posterior(ckpt: dict, sim: GPUSimulator, device: str) -> DirectPost
     are overwritten by load_state_dict.
     """
     arch = ckpt["architecture"]
-    embedding_net = SpectralEmbedding(
-        input_dim=arch["input_dim"], output_dim=arch["embedding_dim"]
-    ).to(device)
+    embedding_type = arch.get("embedding_type", "mlp")
+    if embedding_type == "cnn":
+        embedding_net = SpectralEmbeddingCNN(
+            n_freq=ckpt["n_freq"],
+            output_dim=arch["embedding_dim"],
+            in_channels=ckpt.get("input_channels", 3),
+            conv_channels=arch.get("embedding_conv_channels", [32, 64, 128]),
+            kernel_sizes=arch.get("embedding_kernel_sizes", [7, 5, 3]),
+        ).to(device)
+    else:
+        embedding_net = SpectralEmbedding(
+            input_dim=arch["input_dim"], output_dim=arch["embedding_dim"]
+        ).to(device)
     embedding_net.load_state_dict(ckpt["embedding_net_state"])
 
     shape_gen = torch.Generator(device=device)

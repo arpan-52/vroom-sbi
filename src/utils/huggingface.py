@@ -74,6 +74,11 @@ def push_to_hub(
                 continue
         files_to_upload.append(f)
 
+    # Spectral-shape posterior (named spectral_shape_posterior.pt, so it is not
+    # matched by the posterior_*.pt glob above but is part of the release set).
+    for f in model_dir.glob("spectral_shape_posterior.pt"):
+        files_to_upload.append(f)
+
     # Legacy .pkl files
     for f in model_dir.glob("posterior_*.pkl"):
         files_to_upload.append(f)
@@ -110,7 +115,9 @@ def push_to_hub(
     converted = []
     for f in files_to_upload:
         is_model = f.suffix in {".pt", ".pkl"} and (
-            f.name.startswith("posterior_") or f.name.startswith("classifier")
+            f.name.startswith("posterior_")
+            or f.name.startswith("classifier")
+            or f.name == "spectral_shape_posterior.pt"
         )
         if not is_model:
             converted.append(f)
@@ -202,6 +209,35 @@ def pull_from_hub(
     logger.info(f"Models downloaded to {output_dir}")
 
 
+def _load_tarp_summary(model_dir: Path) -> list[dict] | None:
+    """Load the (model_type, n_components) -> TARP verdict table, if present."""
+    import json
+
+    summary_path = model_dir.parent / "validation_results" / "tarp" / "calibration_matrix_summary.json"
+    if not summary_path.exists():
+        return None
+    try:
+        with open(summary_path) as f:
+            data = json.load(f)
+        rows = []
+        for r in data.get("results", []):
+            t = r.get("tarp", {})
+            rows.append(
+                {
+                    "model_type": r["model_type"],
+                    "n_components": r["n_components"],
+                    "verdict": t.get("verdict"),
+                    "unsigned_area": t.get("unsigned_area"),
+                    "calibrated": t.get("calibrated"),
+                }
+            )
+        rows.sort(key=lambda r: (r["model_type"], r["n_components"]))
+        return {"n_cases": data.get("n_cases"), "n_samples": data.get("n_samples"), "rows": rows}
+    except Exception as e:
+        logger.warning(f"Could not load TARP summary for model card: {e}")
+        return None
+
+
 def _create_model_card(model_dir: Path, files: list[Path]) -> str:
     """Create a model card for HuggingFace."""
 
@@ -226,12 +262,14 @@ tags:
 - rm-synthesis
 - simulation-based-inference
 - pytorch
-license: mit
+license: apache-2.0
 ---
 
 # VROOM-SBI Trained Models
 
 Trained neural posterior estimators for Rotation Measure (RM) synthesis.
+
+Repository: [github.com/skunkworks-ra/vroom-sbi](https://github.com/skunkworks-ra/vroom-sbi)
 
 ## Model Information
 
@@ -261,19 +299,39 @@ Trained neural posterior estimators for Rotation Measure (RM) synthesis.
             desc = ""
         card += f"| {f.name} | {desc} |\n"
 
+    tarp = _load_tarp_summary(model_dir)
+    if tarp:
+        card += f"""
+
+## TARP Calibration
+
+Joint posterior coverage was verified with the TARP (Test of Accuracy with
+Random Points) diagnostic (`{tarp["n_cases"]}` cases, `{tarp["n_samples"]}` posterior
+samples each). `calibrated` means the empirical coverage curve stayed within
+the null band around the diagonal; `under-confident` / `over-confident` /
+`mixed` describe the direction of any deviation.
+
+| Model Type | N | Verdict | Unsigned Area | Calibrated |
+|---|---|---|---|---|
+"""
+        for r in tarp["rows"]:
+            card += (
+                f"| {r['model_type']} | {r['n_components']} | {r['verdict']} | "
+                f"{r['unsigned_area']:.4f} | {'yes' if r['calibrated'] else 'no'} |\n"
+            )
+
     card += """
 
 ## Usage
 
 ```python
-from vroom_sbi.inference import InferenceEngine
+from src.inference import InferenceEngine
 
-# Load models
-engine = InferenceEngine(model_dir="path/to/downloaded/models")
+engine = InferenceEngine(model_dir="path/to/downloaded/models", device="cuda")  # falls back to CPU
 engine.load_models()
 
-# Run inference
-result, all_results = engine.infer(qu_obs)
+# qu_obs: np.ndarray, shape (2*n_freq,) = [Q_0..Q_{n-1}, U_0..U_{n-1}]
+result, all_results = engine.infer(qu_obs, n_samples=5000)
 print(f"Best model: {result.n_components} components")
 ```
 
@@ -282,7 +340,7 @@ print(f"Best model: {result.n_components} components")
 If you use these models, please cite:
 
 ```
-[Citation information to be added]
+Pal & Jagannathan, submitted to AJ (The Astronomical Journal).
 ```
 """
 

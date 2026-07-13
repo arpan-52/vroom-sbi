@@ -210,6 +210,23 @@ class TrainingConfig:
 
         return int(self.n_simulations * factor)
 
+    def get_scaled_steps_per_epoch(self, n_components: int) -> int:
+        """Scale online steps_per_epoch by model complexity (linear table).
+
+        Online mode has no fixed dataset, so ``scaling_power`` (which only feeds
+        the offline ``n_simulations``) does not apply here. Instead we scale the
+        per-epoch fresh-draw budget by a gentle linear factor, so higher-N
+        posteriors (more parameters) see proportionally more data each epoch
+        without the N**scaling_power per-epoch blow-up. Gated on
+        ``simulation_scaling`` so it can be disabled. N=1 stays at the base.
+        """
+        if not self.simulation_scaling:
+            return self.steps_per_epoch
+
+        scaling_factors = {1: 1, 2: 2, 3: 4, 4: 6, 5: 8}
+        factor = scaling_factors.get(n_components, n_components * 2)
+        return int(self.steps_per_epoch * factor)
+
 
 @dataclass
 class MemoryConfig:
@@ -255,6 +272,9 @@ class SBIConfig:
     model: str = "nsf"  # Neural Spline Flow
     num_bins: int = 16
     embedding_dim: int = 64
+    embedding_type: str = "mlp"  # "mlp" or "cnn"
+    embedding_conv_channels: list[int] = field(default_factory=lambda: [32, 64, 128])
+    embedding_kernel_sizes: list[int] = field(default_factory=lambda: [7, 5, 3])
     architecture_scaling: dict[int, SBIArchitectureConfig] = field(
         default_factory=lambda: {
             1: SBIArchitectureConfig(256, 15),
@@ -465,6 +485,9 @@ class Configuration:
             model=str(sbi_raw.get("model", "nsf")),
             num_bins=int(sbi_raw.get("num_bins", 16)),
             embedding_dim=int(sbi_raw.get("embedding_dim", 64)),
+            embedding_type=str(sbi_raw.get("embedding_type", "mlp")),
+            embedding_conv_channels=list(sbi_raw.get("embedding_conv_channels", [32, 64, 128])),
+            embedding_kernel_sizes=list(sbi_raw.get("embedding_kernel_sizes", [7, 5, 3])),
             architecture_scaling=arch_scaling,
         )
 

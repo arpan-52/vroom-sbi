@@ -82,6 +82,7 @@ pyyaml          = ">=6.0"
 corner          = ">=2.2"
 huggingface_hub = ">=0.10"
 safetensors     = ">=0.4"        # pickle-free export format for HF push
+deprecation = ">=2.1.0,<3"
 
 # PyPI-only packages installed alongside conda deps
 # sbi is pulled in transitively via the editable vroom-sbi install

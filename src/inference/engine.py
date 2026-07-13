@@ -52,16 +52,29 @@ def _rebuild_posterior_from_statedict(data: dict, device: str) -> "_SafePosterio
     """
     from sbi.neural_nets.net_builders import build_maf, build_nsf
 
-    from ..training.networks import SpectralEmbedding
+    from ..training.networks import SpectralEmbedding, SpectralEmbeddingCNN
 
     arch = data["architecture"]
     n_params = data["n_params"]
 
-    # Rebuild embedding net and load weights
-    embedding_net = SpectralEmbedding(
-        input_dim=arch["input_dim"],
-        output_dim=arch["embedding_dim"],
-    )
+    # Rebuild embedding net and load weights. Older checkpoints have no
+    # embedding_type key -- they all predate the CNN embedding, default "mlp".
+    embedding_type = arch.get("embedding_type", "mlp")
+    if embedding_type == "cnn":
+        n_freq = data["n_freq"]
+        in_channels = data.get("input_channels", 3)
+        embedding_net = SpectralEmbeddingCNN(
+            n_freq=n_freq,
+            output_dim=arch["embedding_dim"],
+            in_channels=in_channels,
+            conv_channels=arch.get("embedding_conv_channels", [32, 64, 128]),
+            kernel_sizes=arch.get("embedding_kernel_sizes", [7, 5, 3]),
+        )
+    else:
+        embedding_net = SpectralEmbedding(
+            input_dim=arch["input_dim"],
+            output_dim=arch["embedding_dim"],
+        )
     embedding_net.load_state_dict(data["embedding_net_state"])
     embedding_net.eval()
 
@@ -212,6 +225,7 @@ class InferenceEngine(InferenceEngineInterface):
         return bool(
             list(self.model_dir.glob("posterior_*.pt"))
             + list(self.model_dir.glob("posterior_*.pkl"))
+            + list(self.model_dir.glob("posterior_*.safetensors"))
         )
 
     def load_models(
@@ -242,6 +256,8 @@ class InferenceEngine(InferenceEngineInterface):
             for n in range(1, max_components + 1):
                 model_path = self.model_dir / f"posterior_{model_type}_n{n}.pt"
                 if not model_path.exists():
+                    model_path = self.model_dir / f"posterior_{model_type}_n{n}.safetensors"
+                if not model_path.exists():
                     model_path = self.model_dir / f"posterior_{model_type}_n{n}.pkl"
 
                 if model_path.exists():
@@ -258,7 +274,7 @@ class InferenceEngine(InferenceEngineInterface):
                         logger.warning(f"  Failed to load {model_path}: {e}")
 
         # Load classifier
-        for ext in [".pt", ".pkl"]:
+        for ext in [".pt", ".safetensors", ".pkl"]:
             classifier_path = self.model_dir / f"classifier{ext}"
             if classifier_path.exists():
                 try:

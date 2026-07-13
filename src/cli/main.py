@@ -581,7 +581,7 @@ vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
         "--model-dir", default="models", help="Local directory to save models (default: models/)"
     )
     dl_p.add_argument(
-        "--repo-id", default=None, help="HuggingFace repo ID (default: arpan-52/vroom-sbi)"
+        "--repo-id", default=None, help="HuggingFace repo ID (default: skunkworks-ra/vroomsbi)"
     )
     dl_p.add_argument("--token", default=None, help="HF token for private repos")
     dl_p.set_defaults(func=download_command)

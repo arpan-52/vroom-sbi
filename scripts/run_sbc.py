@@ -85,6 +85,13 @@ def main():
     ap.add_argument("--freq-file", default=None,
                     help="Override freq_file from config (must match training band)")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--num-bootstrap", type=int, default=0,
+                    help="TARP: bootstrap iterations for per-α coverage error bands "
+                         "(0 = off; the plots fall back to the binomial approximation)")
+    ap.add_argument("--prescribe", action="store_true",
+                    help="with --tests tarp: also run the coverage probe (RMSE) and "
+                         "print a train/recalibrate/accept action per posterior "
+                         "(doubles sampling cost — TARP alone can't tell the axes apart)")
     args = ap.parse_args()
 
     with open(args.config) as fh:
@@ -119,6 +126,11 @@ def main():
 
     if "tarp" in args.tests:
         from src.validation.tarp_test import run_tarp
+    if args.prescribe:
+        if "tarp" not in args.tests:
+            sys.exit("--prescribe requires --tests tarp")
+        from src.validation.calibration_verdict import prescribe
+        from src.validation.online_probe import run_probe
 
     results = []  # one record per posterior, holding results from each test
     missing = []
@@ -145,9 +157,20 @@ def main():
                     config_path=args.config, posterior_path=str(pt),
                     output_dir=output_dir, n_cases=args.n_cases,
                     n_samples=args.n_samples, device=args.device,
-                    freq_file=args.freq_file,
+                    freq_file=args.freq_file, num_bootstrap=args.num_bootstrap,
                 )
                 record["tarp"] = out["summary"]
+            if args.prescribe:
+                probe_out = run_probe(
+                    config_path=args.config, posterior_path=str(pt),
+                    n_cases=args.n_cases, n_samples=args.n_samples,
+                    device=args.device, freq_file=args.freq_file,
+                    output_dir=output_dir,
+                )
+                probe_summary = {"rmse": [v.item() for v in probe_out["rmse"]]}
+                record["prescription"] = prescribe(record["tarp"], probe_summary)
+                print(f"  -> action: {record['prescription']['action']}  "
+                      f"({record['prescription']['reason']})", flush=True)
             results.append(record)
 
     # Combined matrix summary
@@ -172,15 +195,22 @@ def main():
     if "sbc" in args.tests:
         header += f"{'sbc pass/fail':>16}"
     if "tarp" in args.tests:
-        header += f"{'tarp gap':>12}{'verdict':>16}"
+        header += f"{'signed gap':>12}{'|area|':>9}{'verdict':>16}"
+        if args.prescribe:
+            header += f"{'action':>16}"
     print(header)
-    print("-" * 62)
+    print("-" * (78 + (16 if args.prescribe else 0)))
     for r in results:
         row = f"{r['model_type']:<22}{r['n_components']:>3}"
         if "sbc" in args.tests and "sbc" in r:
             row += f"{r['sbc']['n_pass']:>7}/{r['sbc']['n_fail']:<8}"
         if "tarp" in args.tests and "tarp" in r:
-            row += f"{r['tarp']['atrc_gap']:>+12.4f}{r['tarp']['verdict']:>16}"
+            t = r["tarp"]
+            row += (f"{t['atrc_gap']:>+12.4f}"
+                    f"{t.get('unsigned_area', float('nan')):>9.4f}"
+                    f"{t['verdict']:>16}")
+            if args.prescribe and "prescription" in r:
+                row += f"{r['prescription']['action']:>16}"
         print(row)
     print("-" * 62)
     print(f"Combined summary: {matrix_path}")

@@ -39,7 +39,7 @@ spectral_shape:
 # =============================================================================
 
 training:
-  n_simulations: 50000
+  n_simulations: 50000        # ignored in online mode (fresh batches per step)
   simulation_batch_size: 10000
   training_batch_size: 1024
   learning_rate: 0.0005
@@ -49,6 +49,15 @@ training:
   train_spectra: true   # train spectral shape model
   device: "cuda"
   save_dir: "models"
+  # GPU-online training (same path as the polarization models in config_a100).
+  # Fresh GPU-simulated batches every step -> ~steps_per_epoch*batch unique
+  # sims/epoch instead of a fixed 50k reused set. Fixes under-confidence.
+  mode: "online"              # GPU on-the-fly, no disk chunks
+  sampling_method: "uniform"  # online prior sampler
+  steps_per_epoch: 500        # fresh GPU batches per epoch
+  val_size: 50000             # fixed online validation set size
+  tf32: true                  # Ampere+ tensor-core matmuls
+  amp: "none"                 # NSF flow requires fp32
 
 # =============================================================================
 # WEIGHT AUGMENTATION (same as pol training)

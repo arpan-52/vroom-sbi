@@ -10,7 +10,7 @@ from .validation import validate_all_models
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HF_REPO = "arpan-52/vroom-sbi"
+DEFAULT_HF_REPO = "skunkworks-ra/vroomsbi"
 
 __all__ = [
     "DEFAULT_HF_REPO",
@@ -47,12 +47,7 @@ def push_to_huggingface(
     private : bool
         Whether to create a private repository
     """
-    try:
-        from huggingface_hub import HfApi, create_repo
-    except ImportError:
-        raise ImportError(
-            "huggingface_hub not installed. Run: pip install huggingface_hub"
-        )
+    from .huggingface import push_to_hub
 
     if token is None:
         token = get_huggingface_token()
@@ -62,35 +57,7 @@ def push_to_huggingface(
             "HuggingFace token required. Set HF_TOKEN environment variable or pass token parameter."
         )
 
-    api = HfApi(token=token)
-
-    # Create repo if needed
-    try:
-        create_repo(repo_id, token=token, private=private, exist_ok=True)
-        logger.info(f"Created/verified repository: {repo_id}")
-    except Exception as e:
-        logger.warning(f"Could not create repository: {e}")
-
-    # Upload all model files
-    model_dir = Path(model_dir)
-
-    files_to_upload = list(model_dir.glob("*.pt")) + list(model_dir.glob("*.pkl"))
-    files_to_upload += list(model_dir.glob("*.png"))  # Training plots
-    files_to_upload += list(model_dir.glob("*.txt"))  # Summaries
-
-    for file_path in files_to_upload:
-        try:
-            api.upload_file(
-                path_or_fileobj=str(file_path),
-                path_in_repo=file_path.name,
-                repo_id=repo_id,
-                token=token,
-            )
-            logger.info(f"Uploaded: {file_path.name}")
-        except Exception as e:
-            logger.warning(f"Failed to upload {file_path.name}: {e}")
-
-    logger.info(f"Models uploaded to: https://huggingface.co/{repo_id}")
+    push_to_hub(model_dir=Path(model_dir), repo_id=repo_id, token=token, private=private)
 
 
 def download_from_huggingface(
