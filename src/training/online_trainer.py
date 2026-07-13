@@ -37,6 +37,9 @@ class OnlineNPETrainer:
         self.training_history = {
             "train_loss": [],
             "val_loss": [],
+            "val_median": [],
+            "val_p99": [],
+            "val_max": [],
             "learning_rates": [],
         }
 
@@ -87,17 +90,31 @@ class OnlineNPETrainer:
             remaining -= b
         return torch.cat(thetas), torch.cat(xs)
 
-    def _validation_loss(self, val_theta, val_x, batch_size: int) -> float:
+    def _validation_loss(self, val_theta, val_x, batch_size: int) -> dict[str, float]:
+        """Per-sample validation loss statistics.
+
+        The mean alone is misleading when posteriors are sharp: a handful of
+        val points in near-zero-density regions can move the 50k-sample mean
+        by whole nats. The median tracks typical performance; p99/max expose
+        whether divergence is a tail phenomenon rather than a global one.
+        """
         self.density_estimator.eval()
-        total, n = 0.0, 0
+        all_losses = []
         with torch.no_grad():
             for i in range(0, len(val_theta), batch_size):
                 tb = val_theta[i : i + batch_size]
                 xb = val_x[i : i + batch_size]
-                losses = self.density_estimator.loss(tb, condition=xb)
-                total += losses.sum().item()
-                n += len(losses)
-        return total / n if n > 0 else float("inf")
+                all_losses.append(self.density_estimator.loss(tb, condition=xb))
+        if not all_losses:
+            return {"mean": float("inf"), "median": float("inf"),
+                    "p99": float("inf"), "max": float("inf")}
+        losses = torch.cat(all_losses)
+        return {
+            "mean": losses.mean().item(),
+            "median": losses.median().item(),
+            "p99": torch.quantile(losses, 0.99).item(),
+            "max": losses.max().item(),
+        }
 
     def train(
         self,
@@ -202,10 +219,14 @@ class OnlineNPETrainer:
                 pbar.set_postfix({"loss": f"{loss.item():.4f}"})
 
             train_loss = train_loss_sum / n_train
-            val_loss = self._validation_loss(val_theta, val_x, training_batch_size)
+            val_stats = self._validation_loss(val_theta, val_x, training_batch_size)
+            val_loss = val_stats["mean"]
 
             self.training_history["train_loss"].append(train_loss)
             self.training_history["val_loss"].append(val_loss)
+            self.training_history["val_median"].append(val_stats["median"])
+            self.training_history["val_p99"].append(val_stats["p99"])
+            self.training_history["val_max"].append(val_stats["max"])
             self.training_history["learning_rates"].append(
                 optimizer.param_groups[0]["lr"]
             )
@@ -222,6 +243,10 @@ class OnlineNPETrainer:
                 f"Epoch {epoch + 1}: train={train_loss:.4f}, val={val_loss:.4f}, "
                 f"best={best_val_loss:.4f}, "
                 f"patience={epochs_without_improvement}/{stop_after_epochs}"
+            )
+            logger.info(
+                f"  val per-sample: median={val_stats['median']:.4f}, "
+                f"p99={val_stats['p99']:.2f}, max={val_stats['max']:.2f}"
             )
 
             if epochs_without_improvement >= stop_after_epochs:
