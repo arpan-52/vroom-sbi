@@ -34,6 +34,11 @@ from sbi.neural_nets.net_builders import build_maf, build_nsf
 from sbi.utils import BoxUniform
 
 from ..config import Configuration
+from ..simulator.chi0_reparam import (
+    Chi0ReparamPosterior,
+    expand_bounds,
+    expand_theta,
+)
 from ..simulator.gpu_simulator import GPUSimulator
 from ..training.networks import SpectralEmbedding, SpectralEmbeddingCNN
 
@@ -81,6 +86,13 @@ def _rebuild_posterior(ckpt: dict, sim: GPUSimulator, device: str) -> DirectPost
     shape_gen.manual_seed(0)
     theta0, x0 = sim.generate_batch(256, generator=shape_gen)
 
+    # chi0-reparam checkpoints: the flow lives in (sin 2chi0, cos 2chi0)
+    # space. Expand the shape sample and prior; contract samples on the way
+    # out so every caller stays in physical parameter space.
+    chi0_reparam = arch.get("chi0_reparam", False)
+    if chi0_reparam:
+        theta0 = expand_theta(theta0, ckpt["n_components"], ckpt["model_type"])
+
     flow = arch.get("sbi_model", "nsf").lower()
     kwargs = {
         "hidden_features": arch["hidden_features"],
@@ -95,6 +107,15 @@ def _rebuild_posterior(ckpt: dict, sim: GPUSimulator, device: str) -> DirectPost
     estimator.load_state_dict(ckpt["density_estimator_state"])
     estimator = estimator.to(device)
 
+    if chi0_reparam:
+        lo, hi = expand_bounds(
+            sim.low, sim.high, ckpt["n_components"], ckpt["model_type"]
+        )
+        prior = BoxUniform(low=lo, high=hi, device=device)
+        inner = DirectPosterior(posterior_estimator=estimator, prior=prior)
+        return Chi0ReparamPosterior(
+            inner, ckpt["n_components"], ckpt["model_type"]
+        )
     prior = BoxUniform(low=sim.low, high=sim.high, device=device)
     return DirectPosterior(posterior_estimator=estimator, prior=prior)
 

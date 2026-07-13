@@ -118,6 +118,13 @@ class SBITrainer:
 
         online_mode = getattr(self.config.training, "mode", "chunked") == "online"
 
+        if getattr(self.config.sbi, "chi0_reparam", False) and not online_mode:
+            raise ValueError(
+                "sbi.chi0_reparam is only wired into the online training path; "
+                "the chunked path would train on untransformed theta and "
+                "silently produce a mislabeled checkpoint."
+            )
+
         logger.info(f"\n{'=' * 60}")
         logger.info(f"Training {model_type} N={n_components}")
         if online_mode:
@@ -257,9 +264,10 @@ class SBITrainer:
         # density_estimator is already a StandardizedFlowWrapper from streaming training
         from sbi.inference.posteriors import DirectPosterior
 
+        flow_prior = getattr(self, "_flow_prior", None)
         posterior = DirectPosterior(
             posterior_estimator=density_estimator,
-            prior=prior,
+            prior=flow_prior if flow_prior is not None else prior,
         )
 
         # Save model with torch.save()
@@ -547,6 +555,24 @@ class SBITrainer:
             ),
         )
 
+        if getattr(self.config.sbi, "chi0_reparam", False):
+            from sbi.utils import BoxUniform
+
+            from ..simulator.chi0_reparam import Chi0ReparamSimulator
+
+            gpu_sim = Chi0ReparamSimulator(gpu_sim)
+            # The flow lives in expanded space; DirectPosterior needs a prior
+            # over the same dimensionality for its support checks.
+            self._flow_prior = BoxUniform(
+                low=gpu_sim.low, high=gpu_sim.high, device=self.device
+            )
+            logger.info(
+                "chi0 circular reparameterization: flow dims "
+                f"{gpu_sim.n_params} (physical + 1/component)"
+            )
+        else:
+            self._flow_prior = None
+
         trainer = OnlineNPETrainer(simulator=gpu_sim, device=self.device)
         density_estimator, history = trainer.train(
             prior=prior,
@@ -823,6 +849,9 @@ class SBITrainer:
                 "hidden_features": arch_config.hidden_features,
                 "num_transforms": arch_config.num_transforms,
                 "num_bins": self.config.sbi.num_bins,
+                # Flow trained on (sin 2chi0, cos 2chi0) per component; loaders
+                # must expand/contract at the flow boundary when True.
+                "chi0_reparam": getattr(self.config.sbi, "chi0_reparam", False),
             },
             # Prior info
             "prior_bounds": prior_bounds,

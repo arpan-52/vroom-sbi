@@ -273,6 +273,10 @@ class SBIConfig:
     num_bins: int = 16
     embedding_dim: int = 64
     embedding_type: str = "mlp"  # "mlp" or "cnn"
+    # Train the flow on (sin 2chi0, cos 2chi0) instead of chi0 (circular
+    # reparameterization; online mode only). Physical theta is unchanged
+    # everywhere outside the flow.
+    chi0_reparam: bool = False
     embedding_conv_channels: list[int] = field(default_factory=lambda: [32, 64, 128])
     embedding_kernel_sizes: list[int] = field(default_factory=lambda: [7, 5, 3])
     architecture_scaling: dict[int, SBIArchitectureConfig] = field(
@@ -488,6 +492,7 @@ class Configuration:
             embedding_type=str(sbi_raw.get("embedding_type", "mlp")),
             embedding_conv_channels=list(sbi_raw.get("embedding_conv_channels", [32, 64, 128])),
             embedding_kernel_sizes=list(sbi_raw.get("embedding_kernel_sizes", [7, 5, 3])),
+            chi0_reparam=bool(sbi_raw.get("chi0_reparam", False)),
             architecture_scaling=arch_scaling,
         )
 

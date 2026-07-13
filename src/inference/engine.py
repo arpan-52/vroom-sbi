@@ -27,8 +27,17 @@ class _SafePosteriorWrapper:
     live Python objects.  Used when loading the new state-dict-only format.
     """
 
-    def __init__(self, density_estimator: torch.nn.Module):
+    def __init__(
+        self,
+        density_estimator: torch.nn.Module,
+        chi0_reparam: bool = False,
+        n_components: int | None = None,
+        model_type: str | None = None,
+    ):
         self.posterior_estimator = density_estimator
+        self.chi0_reparam = chi0_reparam
+        self.n_components = n_components
+        self.model_type = model_type
 
     def sample(
         self,
@@ -42,7 +51,12 @@ class _SafePosteriorWrapper:
             x, event_shape=self.posterior_estimator.condition_shape
         )
         samples = self.posterior_estimator.sample(sample_shape, condition=x)
-        return samples.squeeze(1)
+        samples = samples.squeeze(1)
+        if self.chi0_reparam:
+            from ..simulator.chi0_reparam import contract_theta
+
+            samples = contract_theta(samples, self.n_components, self.model_type)
+        return samples
 
 
 def _rebuild_posterior_from_statedict(data: dict, device: str) -> "_SafePosteriorWrapper":
@@ -56,6 +70,11 @@ def _rebuild_posterior_from_statedict(data: dict, device: str) -> "_SafePosterio
 
     arch = data["architecture"]
     n_params = data["n_params"]
+    # chi0-reparam flows have one extra dimension per component; n_params in
+    # the checkpoint is always physical.
+    chi0_reparam = arch.get("chi0_reparam", False)
+    if chi0_reparam:
+        n_params = n_params + data["n_components"]
 
     # Rebuild embedding net and load weights. Older checkpoints have no
     # embedding_type key -- they all predate the CNN embedding, default "mlp".
@@ -99,7 +118,12 @@ def _rebuild_posterior_from_statedict(data: dict, device: str) -> "_SafePosterio
     density_estimator.to(device)
     density_estimator.eval()
 
-    return _SafePosteriorWrapper(density_estimator)
+    return _SafePosteriorWrapper(
+        density_estimator,
+        chi0_reparam=chi0_reparam,
+        n_components=data.get("n_components"),
+        model_type=data.get("model_type"),
+    )
 
 
 def load_posterior(model_path: Path, device: str = "cpu") -> tuple[Any, dict[str, Any]]:
