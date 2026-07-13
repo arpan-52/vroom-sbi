@@ -11,6 +11,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _group_norm_groups(num_channels: int, max_groups: int = 8) -> int:
+    """Largest divisor of ``num_channels`` that is <= ``max_groups``.
+
+    Avoids hardcoding a fixed group count that would break if conv_channels
+    is configured with values not divisible by it.
+    """
+    for g in range(min(max_groups, num_channels), 0, -1):
+        if num_channels % g == 0:
+            return g
+    return 1
+
+
 class SpectralEmbedding(nn.Module):
     """
     Custom embedding network for high-dimensional spectral data.
@@ -126,7 +138,14 @@ class SpectralEmbeddingCNN(nn.Module):
             conv_layers.extend(
                 [
                     nn.Conv1d(prev_channels, out_channels, kernel_size, padding=padding),
-                    nn.BatchNorm1d(out_channels),
+                    # GroupNorm, not BatchNorm: online training draws a fresh,
+                    # heavily-augmented batch every step (noise_ratio 2-300x,
+                    # RFI gaps), so per-batch statistics vary too much for
+                    # BatchNorm's train-time batch stats / eval-time running
+                    # average to stay in sync -- that mismatch caused val loss
+                    # to diverge while train loss looked fine. GroupNorm
+                    # normalizes per-sample, so train/eval are identical.
+                    nn.GroupNorm(_group_norm_groups(out_channels), out_channels),
                     nn.ReLU(),
                     nn.MaxPool1d(2),
                     nn.Dropout(dropout),
