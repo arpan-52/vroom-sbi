@@ -126,13 +126,16 @@ class SpectralShapeTrainer:
 
         prior = build_spectral_shape_prior(spectral_cfg, device=self.device)
 
-        # ----------------------------------------------------------------
-        # Phase 1: Generate chunked simulations
-        # ----------------------------------------------------------------
-        chunk_dir = self._generate_chunks(simulator, spectral_cfg, n_simulations)
+        online_mode = getattr(self.config.training, "mode", "chunked") == "online"
 
         # ----------------------------------------------------------------
-        # Phase 2: Train on chunks
+        # Phase 1: Generate chunked simulations (chunked path only)
+        # ----------------------------------------------------------------
+        if not online_mode:
+            chunk_dir = self._generate_chunks(simulator, spectral_cfg, n_simulations)
+
+        # ----------------------------------------------------------------
+        # Phase 2: Train
         # ----------------------------------------------------------------
         # Embedding input is n_freq (real flux), NOT 2*n_freq like pol models
         input_dim = simulator.n_freq
@@ -153,9 +156,14 @@ class SpectralShapeTrainer:
 
         start_time = datetime.now()
 
-        density_estimator, history = self._train_on_chunks(
-            chunk_dir, prior, embedding_net, arch_config
-        )
+        if online_mode:
+            density_estimator, history = self._train_online(
+                prior, embedding_net, arch_config
+            )
+        else:
+            density_estimator, history = self._train_on_chunks(
+                chunk_dir, prior, embedding_net, arch_config
+            )
 
         training_time = (datetime.now() - start_time).total_seconds()
 
@@ -312,6 +320,46 @@ class SpectralShapeTrainer:
 
         logger.info(f"Generated {n_simulations:,} simulations in {n_chunks} chunk(s)")
         return chunk_dir
+
+    def _train_online(
+        self,
+        prior,
+        embedding_net: nn.Module,
+        arch_config,
+    ) -> tuple:
+        """Train with GPU on-the-fly spectral simulation (no disk)."""
+        from ..simulator.gpu_simulator import GPUSpectralSimulator
+        from .online_trainer import OnlineNPETrainer
+
+        logger.info("Using on-the-fly GPU NPE training (no disk)")
+
+        gpu_sim = GPUSpectralSimulator(
+            config=self.config,
+            device=self.device,
+            sampling_method=getattr(
+                self.config.training, "sampling_method", "uniform"
+            ),
+        )
+
+        trainer = OnlineNPETrainer(simulator=gpu_sim, device=self.device)
+        return trainer.train(
+            prior=prior,
+            embedding_net=embedding_net,
+            flow_type=self.config.sbi.model,
+            hidden_features=arch_config.hidden_features,
+            num_transforms=arch_config.num_transforms,
+            num_bins=self.config.sbi.num_bins,
+            learning_rate=self.config.training.learning_rate,
+            training_batch_size=self.config.training.training_batch_size,
+            steps_per_epoch=self.config.training.steps_per_epoch,
+            val_size=self.config.training.val_size,
+            max_epochs=500,
+            stop_after_epochs=self.config.training.stop_after_epochs,
+            clip_grad_norm=5.0,
+            tf32=getattr(self.config.training, "tf32", True),
+            amp=getattr(self.config.training, "amp", "none"),
+            show_progress=True,
+        )
 
     def _train_on_chunks(
         self,

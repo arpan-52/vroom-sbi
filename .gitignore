@@ -23,7 +23,7 @@ wheels/
 
 compare_methods.py
 run_rmtools.py
-scripts
+# scripts/  -- removed blanket ignore; sweep_bands.py and other reusable scripts now tracked
 # Virtual environments
 venv/
 env/
@@ -75,6 +75,10 @@ notebooks/weights.fits
 # *.csv
 # Added by code-review-graph
 .code-review-graph/
+
+# Internal session notes and training logs (not for distribution)
+SESSION_SUMMARY*.md
+logs/
 
 # Agentic / AI assistant files
 .claude/

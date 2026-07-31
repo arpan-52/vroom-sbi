@@ -122,6 +122,10 @@ class NoiseConfig:
     augmentation_enable: bool = True
     augmentation_min_factor: float = 0.5
     augmentation_max_factor: float = 2.0
+    # Expose absolute per-channel noise to the network (masked log-precision
+    # third channel) so posteriors condition on known noise instead of
+    # marginalizing sigma_base. Default False = legacy relative-weights channel.
+    condition_on_noise: bool = False
 
 
 @dataclass
@@ -166,6 +170,18 @@ class TrainingConfig:
     simulation_scaling_mode: str = "power"
     scaling_power: float = 2.0
     simulation_batch_size: int = 10000  # Chunk size for saving simulations to disk
+
+    # Data generation mode
+    #   "chunked": generate to disk, stream back (legacy, default)
+    #   "online":  generate each mini-batch on the GPU, no disk round-trip
+    mode: str = "chunked"
+    sampling_method: str = "uniform"  # prior sampler for online mode: uniform|sobol
+    steps_per_epoch: int = 200  # online mode: fresh batches per epoch
+    val_size: int = 10000  # online mode: fixed validation set size
+
+    # GPU performance levers (online mode)
+    tf32: bool = True  # enable TF32 matmuls (A100/Ampere+); ignored on older HW
+    amp: str = "none"  # autocast for the flow loss: none|bf16|fp16
 
     # Neural network training parameters
     learning_rate: float = 5e-4
@@ -356,6 +372,7 @@ class Configuration:
             augmentation_enable=bool(aug_raw.get("enable", True)),
             augmentation_min_factor=float(aug_raw.get("min_factor", 0.5)),
             augmentation_max_factor=float(aug_raw.get("max_factor", 2.0)),
+            condition_on_noise=bool(noise_raw.get("condition_on_noise", False)),
         )
 
         # Extract hardware config
@@ -384,6 +401,12 @@ class Configuration:
             ),
             scaling_power=float(train_raw.get("scaling_power", 2.0)),
             simulation_batch_size=int(train_raw.get("simulation_batch_size", 10000)),
+            mode=str(train_raw.get("mode", "chunked")),
+            sampling_method=str(train_raw.get("sampling_method", "uniform")),
+            steps_per_epoch=int(train_raw.get("steps_per_epoch", 200)),
+            val_size=int(train_raw.get("val_size", 10000)),
+            tf32=bool(train_raw.get("tf32", True)),
+            amp=str(train_raw.get("amp", "none")),
             learning_rate=float(train_raw.get("learning_rate", 5e-4)),
             training_batch_size=int(train_raw.get("training_batch_size", 1024)),
             stop_after_epochs=int(train_raw.get("stop_after_epochs", 20)),
@@ -522,6 +545,7 @@ class Configuration:
                 "sigma_min": self.noise.sigma_min,
                 "sigma_max": self.noise.sigma_max,
                 "base_percent": self.noise.base_percent,
+                "condition_on_noise": self.noise.condition_on_noise,
                 "augmentation": {
                     "enable": self.noise.augmentation_enable,
                     "min_factor": self.noise.augmentation_min_factor,

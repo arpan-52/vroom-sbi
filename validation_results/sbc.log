@@ -1,0 +1,146 @@
+######## N=1 ########
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/sbi/utils/diagnostics_utils.py:45: UserWarning: Capping max_sampling_batch_size from 10000 to 50 to avoid excessive memory usage.
+  posterior_samples = posterior.sample_batched(
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/nflows/transforms/lu.py:80: UserWarning: torch.triangular_solve is deprecated in favor of torch.linalg.solve_triangularand will be removed in a future PyTorch release.
+torch.linalg.solve_triangular has its arguments reversed and does not return a copy of one of the inputs.
+X = torch.triangular_solve(B, A).solution
+should be replaced with
+X = torch.linalg.solve_triangular(A, B). (Triggered internally at /home/conda/feedstock_root/build_artifacts/libtorch_1780524358179/work/aten/src/ATen/native/BatchLinearAlgebra.cpp:2259.)
+  outputs, _ = torch.triangular_solve(
+
+Posterior : models/posterior_faraday_thin_n1.pt
+Model     : faraday_thin  N=1
+Cases     : 2000   posterior draws/case: 1000
+Rank histogram: validation_results/sbc_hist_faraday_thin_n1.png
+
+param       KS p-value      C2ST    flag
+----------------------------------------
+RM_1            0.0000     0.751    FAIL
+amp_1           0.0000     0.710    FAIL
+chi0_1          0.0000     0.721    FAIL
+----------------------------------------
+(KS p>=0.05 => ranks consistent with uniform; C2ST ideal ~0.5)
+
+######## N=2 ########
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/sbi/utils/diagnostics_utils.py:45: UserWarning: Capping max_sampling_batch_size from 10000 to 50 to avoid excessive memory usage.
+  posterior_samples = posterior.sample_batched(
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/nflows/transforms/lu.py:80: UserWarning: torch.triangular_solve is deprecated in favor of torch.linalg.solve_triangularand will be removed in a future PyTorch release.
+torch.linalg.solve_triangular has its arguments reversed and does not return a copy of one of the inputs.
+X = torch.triangular_solve(B, A).solution
+should be replaced with
+X = torch.linalg.solve_triangular(A, B). (Triggered internally at /home/conda/feedstock_root/build_artifacts/libtorch_1780524358179/work/aten/src/ATen/native/BatchLinearAlgebra.cpp:2259.)
+  outputs, _ = torch.triangular_solve(
+
+Posterior : models/posterior_faraday_thin_n2.pt
+Model     : faraday_thin  N=2
+Cases     : 2000   posterior draws/case: 1000
+Rank histogram: validation_results/sbc_hist_faraday_thin_n2.png
+
+param       KS p-value      C2ST    flag
+----------------------------------------
+RM_1            0.0000     0.727    FAIL
+amp_1           0.0000     0.707    FAIL
+chi0_1          0.0000     0.705    FAIL
+RM_2            0.0000     0.741    FAIL
+amp_2           0.0000     0.687    FAIL
+chi0_2          0.0000     0.716    FAIL
+----------------------------------------
+(KS p>=0.05 => ranks consistent with uniform; C2ST ideal ~0.5)
+
+######## N=3 ########
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/sbi/utils/diagnostics_utils.py:45: UserWarning: Capping max_sampling_batch_size from 10000 to 50 to avoid excessive memory usage.
+  posterior_samples = posterior.sample_batched(
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/nflows/transforms/lu.py:80: UserWarning: torch.triangular_solve is deprecated in favor of torch.linalg.solve_triangularand will be removed in a future PyTorch release.
+torch.linalg.solve_triangular has its arguments reversed and does not return a copy of one of the inputs.
+X = torch.triangular_solve(B, A).solution
+should be replaced with
+X = torch.linalg.solve_triangular(A, B). (Triggered internally at /home/conda/feedstock_root/build_artifacts/libtorch_1780524358179/work/aten/src/ATen/native/BatchLinearAlgebra.cpp:2259.)
+  outputs, _ = torch.triangular_solve(
+
+Posterior : models/posterior_faraday_thin_n3.pt
+Model     : faraday_thin  N=3
+Cases     : 2000   posterior draws/case: 1000
+Rank histogram: validation_results/sbc_hist_faraday_thin_n3.png
+
+param       KS p-value      C2ST    flag
+----------------------------------------
+RM_1            0.0000     0.714    FAIL
+amp_1           0.0000     0.738    FAIL
+chi0_1          0.0000     0.703    FAIL
+RM_2            0.0000     0.712    FAIL
+amp_2           0.0000     0.705    FAIL
+chi0_2          0.0000     0.702    FAIL
+RM_3            0.0000     0.720    FAIL
+amp_3           0.0000     0.727    FAIL
+chi0_3          0.0000     0.710    FAIL
+----------------------------------------
+(KS p>=0.05 => ranks consistent with uniform; C2ST ideal ~0.5)
+
+######## N=4 ########
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/sbi/utils/diagnostics_utils.py:45: UserWarning: Capping max_sampling_batch_size from 10000 to 50 to avoid excessive memory usage.
+  posterior_samples = posterior.sample_batched(
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/nflows/transforms/lu.py:80: UserWarning: torch.triangular_solve is deprecated in favor of torch.linalg.solve_triangularand will be removed in a future PyTorch release.
+torch.linalg.solve_triangular has its arguments reversed and does not return a copy of one of the inputs.
+X = torch.triangular_solve(B, A).solution
+should be replaced with
+X = torch.linalg.solve_triangular(A, B). (Triggered internally at /home/conda/feedstock_root/build_artifacts/libtorch_1780524358179/work/aten/src/ATen/native/BatchLinearAlgebra.cpp:2259.)
+  outputs, _ = torch.triangular_solve(
+
+Posterior : models/posterior_faraday_thin_n4.pt
+Model     : faraday_thin  N=4
+Cases     : 2000   posterior draws/case: 1000
+Rank histogram: validation_results/sbc_hist_faraday_thin_n4.png
+
+param       KS p-value      C2ST    flag
+----------------------------------------
+RM_1            0.0000     0.732    FAIL
+amp_1           0.0000     0.712    FAIL
+chi0_1          0.0000     0.711    FAIL
+RM_2            0.0000     0.718    FAIL
+amp_2           0.0000     0.717    FAIL
+chi0_2          0.0000     0.709    FAIL
+RM_3            0.0000     0.716    FAIL
+amp_3           0.0000     0.708    FAIL
+chi0_3          0.0000     0.705    FAIL
+RM_4            0.0000     0.725    FAIL
+amp_4           0.0000     0.726    FAIL
+chi0_4          0.0000     0.698    FAIL
+----------------------------------------
+(KS p>=0.05 => ranks consistent with uniform; C2ST ideal ~0.5)
+
+######## N=5 ########
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/sbi/utils/diagnostics_utils.py:45: UserWarning: Capping max_sampling_batch_size from 10000 to 50 to avoid excessive memory usage.
+  posterior_samples = posterior.sample_batched(
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/nflows/transforms/lu.py:80: UserWarning: torch.triangular_solve is deprecated in favor of torch.linalg.solve_triangularand will be removed in a future PyTorch release.
+torch.linalg.solve_triangular has its arguments reversed and does not return a copy of one of the inputs.
+X = torch.triangular_solve(B, A).solution
+should be replaced with
+X = torch.linalg.solve_triangular(A, B). (Triggered internally at /home/conda/feedstock_root/build_artifacts/libtorch_1780524358179/work/aten/src/ATen/native/BatchLinearAlgebra.cpp:2259.)
+  outputs, _ = torch.triangular_solve(
+
+Posterior : models/posterior_faraday_thin_n5.pt
+Model     : faraday_thin  N=5
+Cases     : 2000   posterior draws/case: 1000
+Rank histogram: validation_results/sbc_hist_faraday_thin_n5.png
+
+param       KS p-value      C2ST    flag
+----------------------------------------
+RM_1            0.0000     0.722    FAIL
+amp_1           0.0000     0.707    FAIL
+chi0_1          0.0000     0.709    FAIL
+RM_2            0.0000     0.699    FAIL
+amp_2           0.0000     0.703    FAIL
+chi0_2          0.0000     0.695    FAIL
+RM_3            0.0000     0.703    FAIL
+amp_3           0.0000     0.694    FAIL
+chi0_3          0.0002     0.703    FAIL
+RM_4            0.0000     0.699    FAIL
+amp_4           0.0000     0.726    FAIL
+chi0_4          0.0000     0.715    FAIL
+RM_5            0.0000     0.710    FAIL
+amp_5           0.0000     0.743    FAIL
+chi0_5          0.0000     0.692    FAIL
+----------------------------------------
+(KS p>=0.05 => ranks consistent with uniform; C2ST ideal ~0.5)
+
+ALL DONE

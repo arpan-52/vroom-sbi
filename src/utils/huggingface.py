@@ -98,6 +98,37 @@ def push_to_hub(
         logger.warning(f"No files found in {model_dir}")
         return
 
+    # Convert pickle model files (.pt) to pickle-free .safetensors before upload
+    # so Hugging Face's picklescan does not flag the repo. Plots/text/cards are
+    # left untouched. Converted files live in a temp dir cleaned up on exit;
+    # the local .pt working files are never modified.
+    import tempfile
+
+    from .safetensors_io import pt_to_safetensors
+
+    export_dir = Path(tempfile.mkdtemp(prefix="vroom_st_"))
+    converted = []
+    for f in files_to_upload:
+        is_model = f.suffix in {".pt", ".pkl"} and (
+            f.name.startswith("posterior_") or f.name.startswith("classifier")
+        )
+        if not is_model:
+            converted.append(f)
+            continue
+        if f.suffix == ".pkl":
+            logger.warning(
+                f"  Skipping {f.name}: legacy pickled object cannot be auto-"
+                "converted to safetensors; re-save in state-dict format to include it."
+            )
+            continue
+        try:
+            out = pt_to_safetensors(f, export_dir / (f.stem + ".safetensors"))
+            converted.append(out)
+            logger.info(f"  Converted {f.name} -> {out.name} (pickle-free)")
+        except Exception as e:
+            logger.error(f"  Failed to convert {f.name}, skipping upload: {e}")
+    files_to_upload = converted
+
     logger.info(f"Uploading {len(files_to_upload)} files to {repo_id}")
 
     # Create model card
@@ -120,6 +151,11 @@ def push_to_hub(
             logger.info(f"  Uploaded: {f.name}")
         except Exception as e:
             logger.error(f"  Failed to upload {f.name}: {e}")
+
+    # Clean up the temporary safetensors export dir.
+    import shutil
+
+    shutil.rmtree(export_dir, ignore_errors=True)
 
     logger.info(f"\nModels uploaded to: https://huggingface.co/{repo_id}")
 

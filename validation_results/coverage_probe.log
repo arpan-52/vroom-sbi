@@ -1,0 +1,136 @@
+######## N=1 ########
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/nflows/transforms/lu.py:80: UserWarning: torch.triangular_solve is deprecated in favor of torch.linalg.solve_triangularand will be removed in a future PyTorch release.
+torch.linalg.solve_triangular has its arguments reversed and does not return a copy of one of the inputs.
+X = torch.triangular_solve(B, A).solution
+should be replaced with
+X = torch.linalg.solve_triangular(A, B). (Triggered internally at /home/conda/feedstock_root/build_artifacts/libtorch_1780524358179/work/aten/src/ATen/native/BatchLinearAlgebra.cpp:2259.)
+  outputs, _ = torch.triangular_solve(
+
+Posterior : models/posterior_faraday_thin_n1.pt
+Model     : faraday_thin  N=1
+Cases     : 2000   posterior draws/case: 1000
+Best val_loss (history): -3.7831
+
+param           bias      rmse    cov68    cov90
+------------------------------------------------
+RM_1          0.0002    0.0158    0.881    0.978
+amp_1        -0.0094    0.0330    0.601    0.858
+chi0_1        0.0029    0.0857    0.865    0.971
+------------------------------------------------
+(bias/rmse in prior-width units; ideal cov68~0.68, cov90~0.90)
+
+######## N=2 ########
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/nflows/transforms/lu.py:80: UserWarning: torch.triangular_solve is deprecated in favor of torch.linalg.solve_triangularand will be removed in a future PyTorch release.
+torch.linalg.solve_triangular has its arguments reversed and does not return a copy of one of the inputs.
+X = torch.triangular_solve(B, A).solution
+should be replaced with
+X = torch.linalg.solve_triangular(A, B). (Triggered internally at /home/conda/feedstock_root/build_artifacts/libtorch_1780524358179/work/aten/src/ATen/native/BatchLinearAlgebra.cpp:2259.)
+  outputs, _ = torch.triangular_solve(
+
+Posterior : models/posterior_faraday_thin_n2.pt
+Model     : faraday_thin  N=2
+Cases     : 2000   posterior draws/case: 1000
+Best val_loss (history): -2.4977
+
+param           bias      rmse    cov68    cov90
+------------------------------------------------
+RM_1          0.0030    0.0517    0.879    0.985
+amp_1        -0.0001    0.1028    0.652    0.901
+chi0_1       -0.0043    0.1492    0.830    0.961
+RM_2          0.0030    0.0461    0.891    0.988
+amp_2         0.0044    0.1023    0.673    0.911
+chi0_2        0.0020    0.1424    0.846    0.970
+------------------------------------------------
+(bias/rmse in prior-width units; ideal cov68~0.68, cov90~0.90)
+
+######## N=3 ########
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/nflows/transforms/lu.py:80: UserWarning: torch.triangular_solve is deprecated in favor of torch.linalg.solve_triangularand will be removed in a future PyTorch release.
+torch.linalg.solve_triangular has its arguments reversed and does not return a copy of one of the inputs.
+X = torch.triangular_solve(B, A).solution
+should be replaced with
+X = torch.linalg.solve_triangular(A, B). (Triggered internally at /home/conda/feedstock_root/build_artifacts/libtorch_1780524358179/work/aten/src/ATen/native/BatchLinearAlgebra.cpp:2259.)
+  outputs, _ = torch.triangular_solve(
+
+Posterior : models/posterior_faraday_thin_n3.pt
+Model     : faraday_thin  N=3
+Cases     : 2000   posterior draws/case: 1000
+Best val_loss (history): 0.3770
+
+param           bias      rmse    cov68    cov90
+------------------------------------------------
+RM_1          0.0003    0.0481    0.842    0.971
+amp_1        -0.0388    0.1399    0.559    0.838
+chi0_1        0.0017    0.1622    0.820    0.947
+RM_2         -0.0036    0.0813    0.804    0.947
+amp_2         0.0086    0.1606    0.710    0.914
+chi0_2       -0.0075    0.2021    0.787    0.940
+RM_3          0.0023    0.0489    0.821    0.969
+amp_3        -0.0239    0.1352    0.726    0.926
+chi0_3        0.0046    0.1638    0.806    0.954
+------------------------------------------------
+(bias/rmse in prior-width units; ideal cov68~0.68, cov90~0.90)
+
+######## N=4 ########
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/nflows/transforms/lu.py:80: UserWarning: torch.triangular_solve is deprecated in favor of torch.linalg.solve_triangularand will be removed in a future PyTorch release.
+torch.linalg.solve_triangular has its arguments reversed and does not return a copy of one of the inputs.
+X = torch.triangular_solve(B, A).solution
+should be replaced with
+X = torch.linalg.solve_triangular(A, B). (Triggered internally at /home/conda/feedstock_root/build_artifacts/libtorch_1780524358179/work/aten/src/ATen/native/BatchLinearAlgebra.cpp:2259.)
+  outputs, _ = torch.triangular_solve(
+
+Posterior : models/posterior_faraday_thin_n4.pt
+Model     : faraday_thin  N=4
+Cases     : 2000   posterior draws/case: 1000
+Best val_loss (history): 3.1239
+
+param           bias      rmse    cov68    cov90
+------------------------------------------------
+RM_1         -0.0016    0.0462    0.841    0.971
+amp_1        -0.0262    0.1561    0.671    0.907
+chi0_1       -0.0034    0.1741    0.799    0.949
+RM_2          0.0033    0.0899    0.787    0.956
+amp_2         0.0178    0.1919    0.722    0.922
+chi0_2       -0.0010    0.2216    0.781    0.939
+RM_3          0.0063    0.0871    0.821    0.970
+amp_3         0.0004    0.1899    0.795    0.949
+chi0_3        0.0038    0.2242    0.779    0.939
+RM_4          0.0032    0.0450    0.860    0.969
+amp_4        -0.0291    0.1588    0.553    0.790
+chi0_4       -0.0060    0.1787    0.792    0.938
+------------------------------------------------
+(bias/rmse in prior-width units; ideal cov68~0.68, cov90~0.90)
+
+######## N=5 ########
+/var/home/pjaganna/Software/vroom-sbi/.pixi/envs/gpu/lib/python3.12/site-packages/nflows/transforms/lu.py:80: UserWarning: torch.triangular_solve is deprecated in favor of torch.linalg.solve_triangularand will be removed in a future PyTorch release.
+torch.linalg.solve_triangular has its arguments reversed and does not return a copy of one of the inputs.
+X = torch.triangular_solve(B, A).solution
+should be replaced with
+X = torch.linalg.solve_triangular(A, B). (Triggered internally at /home/conda/feedstock_root/build_artifacts/libtorch_1780524358179/work/aten/src/ATen/native/BatchLinearAlgebra.cpp:2259.)
+  outputs, _ = torch.triangular_solve(
+
+Posterior : models/posterior_faraday_thin_n5.pt
+Model     : faraday_thin  N=5
+Cases     : 2000   posterior draws/case: 1000
+Best val_loss (history): 6.4379
+
+param           bias      rmse    cov68    cov90
+------------------------------------------------
+RM_1         -0.0033    0.0344    0.806    0.959
+amp_1        -0.0211    0.1575    0.670    0.916
+chi0_1       -0.0003    0.1779    0.785    0.934
+RM_2         -0.0069    0.0870    0.741    0.938
+amp_2        -0.0042    0.2033    0.679    0.925
+chi0_2        0.0084    0.2340    0.749    0.924
+RM_3         -0.0027    0.0960    0.791    0.966
+amp_3        -0.0214    0.2199    0.632    0.906
+chi0_3       -0.0075    0.2546    0.744    0.940
+RM_4          0.0055    0.0827    0.783    0.953
+amp_4        -0.0527    0.2132    0.573    0.863
+chi0_4       -0.0032    0.2423    0.768    0.937
+RM_5          0.0030    0.0400    0.800    0.950
+amp_5        -0.0439    0.1674    0.398    0.727
+chi0_5        0.0040    0.1882    0.771    0.929
+------------------------------------------------
+(bias/rmse in prior-width units; ideal cov68~0.68, cov90~0.90)
+
+ALL DONE

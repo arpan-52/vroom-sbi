@@ -14,6 +14,22 @@ def train_command(args):
     config = Configuration.from_yaml(args.config)
     if args.device:
         config.training.device = args.device
+    if args.freq_file:
+        config.freq_file = args.freq_file
+    if args.save_dir:
+        config.training.save_dir = args.save_dir
+
+    # Single-model mode: train one (model_type, N) posterior. Lets several
+    # models run as separate processes (e.g. one per GPU).
+    n_comp = getattr(args, "n_components", None)
+    if n_comp is not None:
+        from ..training import SBITrainer
+
+        model_type = args.model_type or config.physics.model_types[0]
+        trainer = SBITrainer(config)
+        trainer.train_model(model_type, n_comp)
+        return
+
     train_all_models(config, classifier_only=args.classifier_only)
 
 
@@ -158,6 +174,7 @@ def cube_infer_pol(args):
         snr_threshold=args.snr_threshold if args.snr_threshold is not None else 5.0,
         n_samples=args.n_samples,
         i_cube=i_cube,
+        ci95=getattr(args, "ci95", False),
     )
 
     write_results_maps(results, wcs_2d, args.output_dir)
@@ -202,6 +219,46 @@ def cube_infer_spectra(args):
     write_results_maps(results, wcs_2d, args.output_dir)
 
 
+def corner_command(args):
+    from ..validation.corner_plot import make_corner_plot, _extract_pixel, _extract_region
+    import numpy as np
+
+    Q = U = freq_hz = weights = None
+
+    if args.q and args.u:
+        Q = np.array([float(v) for v in args.q.split(",")])
+        U = np.array([float(v) for v in args.u.split(",")])
+        if args.freq_file:
+            from ..simulator.physics import load_frequencies
+            freq_hz, _ = load_frequencies(args.freq_file)
+    elif args.cube_q and args.cube_u:
+        if args.pixel:
+            ra, dec = args.pixel
+            Q, U, freq_hz, weights = _extract_pixel(args.cube_q, args.cube_u, ra, dec)
+        elif args.region:
+            ra, dec, radius = args.region
+            Q, U, freq_hz, weights = _extract_region(args.cube_q, args.cube_u, ra, dec, radius)
+        else:
+            raise ValueError("With --cube-q/--cube-u supply --pixel or --region")
+    else:
+        raise ValueError("Supply --q/--u or --cube-q/--cube-u with --pixel or --region")
+
+    make_corner_plot(
+        config_path=args.config,
+        model_dir=args.model_dir,
+        Q=Q,
+        U=U,
+        freq_hz=freq_hz,
+        weights=weights,
+        n_samples=args.n_samples,
+        device=args.device,
+        model_type=args.model_type,
+        n_components=args.n_components,
+        output=args.output,
+        title=args.title,
+    )
+
+
 def download_command(args):
     from ..utils import DEFAULT_HF_REPO, download_from_huggingface
 
@@ -231,6 +288,29 @@ def main():
     train_p.add_argument("--config", default="config.yaml")
     train_p.add_argument("--device", default=None)
     train_p.add_argument("--classifier-only", action="store_true")
+    train_p.add_argument(
+        "--n-components",
+        type=int,
+        default=None,
+        help="train only this single N (one (model_type, N) posterior)",
+    )
+    train_p.add_argument(
+        "--model-type",
+        default=None,
+        help="model type for single-model mode (default: first in config)",
+    )
+    train_p.add_argument(
+        "--freq-file",
+        default=None,
+        metavar="PATH",
+        help="override freq_file from config (path to frequency list in Hz)",
+    )
+    train_p.add_argument(
+        "--save-dir",
+        default=None,
+        metavar="DIR",
+        help="override training.save_dir from config",
+    )
     train_p.set_defaults(func=train_command)
 
     # Infer
@@ -427,6 +507,11 @@ vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
         default=1,
         help="Pixels per progress chunk (default: 1, serial)",
     )
+    cube_p.add_argument(
+        "--ci95",
+        action="store_true",
+        help="Also write 95%% CI (p2.5/p97.5) uncertainty maps per parameter",
+    )
     cube_p.set_defaults(func=cube_infer_pol)
 
     # Cube infer (spectral shape — total intensity)
@@ -461,6 +546,32 @@ vroom-sbi validate --posterior model.pt --model faraday_thin --n-components 1 \\
     spectra_p.add_argument("--device", default=None)
     spectra_p.add_argument("--n-samples", type=int, default=1000)
     spectra_p.set_defaults(func=cube_infer_spectra)
+
+    # Corner plot
+    corner_p = subparsers.add_parser(
+        "corner",
+        help="Joint posterior corner plot for a spectrum, pixel, or sky region",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    corner_p.add_argument("--config", default=None)
+    corner_p.add_argument("--model-dir", default="models")
+    corner_p.add_argument("--device", default="cuda")
+    corner_p.add_argument("--n-samples", type=int, default=10000)
+    corner_p.add_argument("--model-type", default=None,
+                          choices=["faraday_thin", "burn_slab", "external_dispersion", "internal_dispersion"])
+    corner_p.add_argument("--n-components", type=int, default=None)
+    corner_p.add_argument("--output", default="corner.png")
+    corner_p.add_argument("--title", default=None)
+    # Input mode 1: raw spectrum
+    corner_p.add_argument("--q", default=None, help="Comma-separated Q values")
+    corner_p.add_argument("--u", default=None, help="Comma-separated U values")
+    corner_p.add_argument("--freq-file", default=None, metavar="PATH")
+    # Input mode 2/3: FITS cubes
+    corner_p.add_argument("--cube-q", default=None, metavar="PATH")
+    corner_p.add_argument("--cube-u", default=None, metavar="PATH")
+    corner_p.add_argument("--pixel", nargs=2, type=float, metavar=("RA", "DEC"))
+    corner_p.add_argument("--region", nargs=3, type=float, metavar=("RA", "DEC", "RADIUS_ARCMIN"))
+    corner_p.set_defaults(func=corner_command)
 
     # Download
     dl_p = subparsers.add_parser(

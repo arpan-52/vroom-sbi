@@ -1,0 +1,82 @@
+# =============================================================================
+# VROOM-SBI Ablation Config — noise-conditioning calibration loop
+# =============================================================================
+# Single cheap model (faraday_thin N=1) for the train -> TARP -> adjust -> retrain
+# loop. Driven by scripts/ablation.py. Edit the training block + condition_on_noise
+# between iterations; everything else mirrors config_a100.yaml so results transfer.
+
+freq_file: "freq_bands/freq_vla_l.txt"
+
+priors:
+  rm:        {min: -500.0, max: 500.0}
+  amp:       {min: 0.01,   max: 1.0}
+  chi0:      {min: 0.0,    max: 3.14159265}
+  sigma_phi: {min: 0.0,    max: 200.0}
+  delta_phi: {min: 0.0,    max: 200.0}
+
+noise:
+  mode: "additive"
+  sigma_min: 0.001
+  sigma_max: 0.05
+  condition_on_noise: true      # <-- the ablation knob (false = legacy baseline)
+  augmentation:
+    enable: true
+    min_factor: 0.5
+    max_factor: 2.0
+
+training:
+  n_simulations: 30000
+  simulation_scaling: true
+  simulation_scaling_mode: "power"
+  scaling_power: 2.5
+  mode: "online"
+  sampling_method: "uniform"
+  steps_per_epoch: 100          # fast: ~1/5 of the full run
+  val_size: 20000
+  tf32: true
+  amp: "none"
+  simulation_batch_size: 30000
+  training_batch_size: 65536
+  learning_rate: 0.0005         # reverted from the 2e-4 probe; tune per iteration
+  validation_fraction: 0.1
+  stop_after_epochs: 15         # tighter patience for a quick calibration signal
+  device: "cuda"
+  train_pol: true
+  train_spectra: false
+  save_dir: "models_ablation"
+
+model_selection:
+  min_components: 1
+  max_components: 1
+  use_classifier: false
+  classifier_only: false
+
+physics:
+  model_types:
+    - "faraday_thin"
+
+weight_augmentation:
+  enable: true
+  scattered_prob: 0.3
+  gap_prob: 0.3
+  large_block_prob: 0.1
+  noise_variation: true
+  continuous_weights: true
+  w_min: 0.001
+
+classifier:
+  conv_channels: [32, 64, 128]
+  kernel_sizes: [7, 5, 3]
+  dropout: 0.1
+  n_epochs: 50
+  batch_size: 1024
+  learning_rate: 0.0001
+  validation_fraction: 0.2
+  use_posterior_simulations: true
+
+sbi:
+  model: "nsf"
+  num_bins: 16
+  embedding_dim: 64
+  architecture_scaling:
+    1: {hidden_features: 256, num_transforms: 15}

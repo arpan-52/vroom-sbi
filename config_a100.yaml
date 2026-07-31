@@ -3,7 +3,10 @@
 # =============================================================================
 
 # Frequency file path (required)
-freq_file: "freq.txt"
+# A100 full-band training: point this at the band you want to train, e.g.
+#   freq_bands/freq_vla_l.txt   freq_bands/freq_vla_c.txt   freq_bands/freq_vla_x.txt
+#   freq_bands/freq_vla_p.txt   freq_bands/freq_meerkat_uhf.txt   freq_bands/freq_meerkat_l.txt
+freq_file: "freq_bands/freq_vla_l.txt"
 
 # =============================================================================
 # PRIOR RANGES
@@ -71,26 +74,34 @@ training:
   scaling_power: 2.5                # Exponent for power mode (N^2.5)
   
   # Data generation mode
-  mode: "chunked"                   # "chunked" (disk) or "online" (GPU on-the-fly, no disk)
+  mode: "online"                    # GPU on-the-fly, no disk (A100)
   sampling_method: "uniform"        # online prior sampler: "uniform" (default) or "sobol"
-  steps_per_epoch: 200              # online: fresh GPU batches per epoch
-  val_size: 10000                   # online: fixed validation set size
+  steps_per_epoch: 500              # online: fresh GPU batches per epoch
+  val_size: 50000                   # online: fixed validation set size
 
   # GPU performance levers (online mode; ignored on CPU / non-Ampere)
   tf32: true                        # TF32 tensor-core matmuls (A100/Ampere+)
-  amp: "none"                       # autocast for the flow loss: none | bf16 | fp16
+  amp: "none"                       # NOTE: bf16/fp16 currently break the NSF flow
+                                  # (nflows index_put under autocast). TF32 above is
+                                  # the safe A100 lever. Leave amp=none for NSF.
 
   # Chunked streaming (for large datasets)
   simulation_batch_size: 30000      # Samples per chunk file (tune for RAM)
 
   # Neural network training
-  training_batch_size: 1024         # Mini-batch size for GPU
-  learning_rate: 0.0005             # Adam learning rate
+  training_batch_size: 65536        # A100-40GB sweet spot: ~50k/s N=1, ~17GB at N=5
+                                  # (131072 throughput knee + N=5 hits 33.6/40GB = unsafe)
+  learning_rate: 0.0002             # Adam learning rate (lowered from 5e-4: calibration
+                                  # probe for val-rises-post-min issue; revisit after SBC)
   validation_fraction: 0.1          # Fraction for validation
   stop_after_epochs: 20             # Early stopping patience
   
   # Hardware
   device: "cuda"                    # cuda or cpu
+
+  # Sub-models
+  train_pol: true                   # RM / polarization posteriors (the matrix)
+  train_spectra: true               # spectral-shape (total-intensity) model
   
   # Output
   save_dir: "models"
@@ -102,7 +113,7 @@ training:
 model_selection:
   min_components: 1       # Minimum components to train
   max_components: 5       # Maximum components to train
-  use_classifier: false   # Train classifier for model selection
+  use_classifier: true    # Train classifier for model selection
   classifier_only: false  # Skip posterior training (requires existing simulations)
 
 # =============================================================================
@@ -114,9 +125,9 @@ physics:
   # Options: faraday_thin, burn_slab, external_dispersion, internal_dispersion
   model_types:
     - "faraday_thin"
-    # - "burn_slab"
-    # - "external_dispersion"
-    # - "internal_dispersion"
+    - "burn_slab"
+    - "external_dispersion"
+    - "internal_dispersion"
 
 # =============================================================================
 # WEIGHT AUGMENTATION
