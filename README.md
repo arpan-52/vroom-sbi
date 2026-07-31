@@ -1,14 +1,14 @@
 # VROOM-SBI
 
-[![Tests](https://github.com/arpan-52/vroom-sbi/actions/workflows/tests.yml/badge.svg)](https://github.com/arpan-52/vroom-sbi/actions/workflows/tests.yml)
-[![Lint](https://github.com/arpan-52/vroom-sbi/actions/workflows/lint.yml/badge.svg)](https://github.com/arpan-52/vroom-sbi/actions/workflows/lint.yml)
+[![Tests](https://github.com/skunkworks-ra/vroom-sbi/actions/workflows/tests.yml/badge.svg)](https://github.com/skunkworks-ra/vroom-sbi/actions/workflows/tests.yml)
+[![Lint](https://github.com/skunkworks-ra/vroom-sbi/actions/workflows/lint.yml/badge.svg)](https://github.com/skunkworks-ra/vroom-sbi/actions/workflows/lint.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
-[![HuggingFace](https://img.shields.io/badge/HuggingFace-arpan--52%2Fvroom--sbi-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/arpan-52/vroom-sbi)
+[![HuggingFace](https://img.shields.io/badge/HuggingFace-arpan--52%2Fvroom--sbi-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/skunkworks-ra/vroom-sbi)
 
 Simulation-Based Inference for Rotation Measure Synthesis. Given observed Q(λ²) and U(λ²) spectra, VROOM-SBI returns a full posterior probability distribution over Faraday depth structure using pre-trained neural posterior estimators.
 
-Pre-trained models: [huggingface.co/arpan-52/vroom-sbi](https://huggingface.co/arpan-52/vroom-sbi)
+Pre-trained models: [huggingface.co/skunkworks-ra/vroom-sbi](https://huggingface.co/skunkworks-ra/vroom-sbi)
 
 Paper: Pal & Jagannathan (submitted)
 
@@ -38,7 +38,7 @@ Paper: Pal & Jagannathan (submitted)
 If you just want to run inference with the pre-trained models:
 
 ```bash
-git clone https://github.com/arpan-52/vroom-sbi
+git clone https://github.com/skunkworks-ra/vroom-sbi
 cd vroom-sbi
 pip install -e .
 ```
@@ -58,7 +58,7 @@ We develop with [pixi](https://pixi.sh), a fast cross-platform package manager b
 curl -fsSL https://pixi.sh/install.sh | sh
 
 # Clone and set up
-git clone https://github.com/arpan-52/vroom-sbi
+git clone https://github.com/skunkworks-ra/vroom-sbi
 cd vroom-sbi
 pixi install        # installs all environments defined in pixi.toml
 pixi shell          # activates the default environment
