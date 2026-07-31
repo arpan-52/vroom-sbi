@@ -220,8 +220,13 @@ def cube_infer_spectra(args):
 
 
 def corner_command(args):
-    from ..validation.corner_plot import make_corner_plot, _extract_pixel, _extract_region
     import numpy as np
+
+    from ..validation.corner_plot import (
+        _extract_pixel,
+        _extract_region,
+        make_corner_plot,
+    )
 
     Q = U = freq_hz = weights = None
 

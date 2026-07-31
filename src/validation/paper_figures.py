@@ -51,6 +51,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+
 def parse_n_range(spec: str) -> list[int]:
     """Parse an N specification: "1-5", "3", or "1,3,5" -> sorted int list."""
     ns: set[int] = set()

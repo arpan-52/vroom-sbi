@@ -27,6 +27,7 @@ import json
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -34,7 +35,7 @@ import torch
 
 from ..config import Configuration
 from ..simulator.gpu_simulator import GPUSimulator
-from .online_probe import VAL_SEED, _param_labels, _rebuild_posterior
+from .online_probe import VAL_SEED, _rebuild_posterior
 
 
 def run_tarp(
@@ -66,7 +67,6 @@ def run_tarp(
     ckpt = torch.load(posterior_path, map_location="cpu", weights_only=False)
     model_type = ckpt["model_type"]
     n_components = ckpt["n_components"]
-    labels = _param_labels(model_type, n_components)
 
     sim = GPUSimulator(
         config=config,
@@ -137,8 +137,8 @@ def run_tarp(
     print(f"Model     : {model_type}  N={n_components}")
     print(f"Cases     : {n_cases}   posterior draws/case: {n_samples}")
     print(f"TARP ATRC gap : {atrc_gap:+.4f}  ({verdict})")
-    print(f"  >0 = over-confident (posterior too narrow)")
-    print(f"  <0 = under-confident (posterior too broad)")
+    print("  >0 = over-confident (posterior too narrow)")
+    print("  <0 = under-confident (posterior too broad)")
     print(f"ATRC curve: {out_png}\n")
 
     # Machine-readable summary for the paper TARP figure (ATRC-gap matrix) and

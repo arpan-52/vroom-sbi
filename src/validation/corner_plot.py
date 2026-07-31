@@ -40,15 +40,15 @@ Run:
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from ..inference import InferenceEngine
 from ..config import Configuration
+from ..inference import InferenceEngine
 
 
 def _extract_pixel(q_fits: str, u_fits: str, ra: float, dec: float):
@@ -98,10 +98,10 @@ def _extract_pixel(q_fits: str, u_fits: str, ra: float, dec: float):
 
 def _extract_region(q_fits: str, u_fits: str, ra: float, dec: float, radius_arcmin: float):
     """Return (Q, U, freq_hz, weights) averaged over a circular region."""
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
     from astropy.io import fits
     from astropy.wcs import WCS
-    from astropy.coordinates import SkyCoord
-    import astropy.units as u
 
     with fits.open(q_fits) as hq, fits.open(u_fits) as hu:
         wcs2 = WCS(hq[0].header, naxis=2)

@@ -24,6 +24,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -32,7 +33,7 @@ import torch
 from ..config import Configuration
 from ..simulator.gpu_simulator import GPUSimulator
 from ..simulator.torch_physics import polarization_signal
-from .online_probe import VAL_SEED, _param_labels, _rebuild_posterior
+from .online_probe import VAL_SEED, _rebuild_posterior
 
 
 def run_ppc(
@@ -57,7 +58,6 @@ def run_ppc(
     ckpt = torch.load(posterior_path, map_location="cpu", weights_only=False)
     model_type = ckpt["model_type"]
     n_components = ckpt["n_components"]
-    labels = _param_labels(model_type, n_components)
 
     sim = GPUSimulator(
         config=config,
