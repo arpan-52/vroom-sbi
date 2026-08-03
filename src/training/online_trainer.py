@@ -13,7 +13,9 @@ comparable across epochs. SBC remains the arbiter of posterior calibration.
 """
 
 import logging
+import os
 from copy import deepcopy
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -117,8 +119,11 @@ class OnlineNPETrainer:
         tf32: bool = True,
         amp: str = "none",
         show_progress: bool = True,
+        checkpoint_path: Path | None = None,
+        resume: bool = True,
     ) -> tuple[nn.Module, dict[str, list[float]]]:
         self.prior = prior
+        checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
 
         # --- GPU performance levers -------------------------------------
         cuda = self.device == "cuda" or str(self.device).startswith("cuda")
@@ -160,6 +165,22 @@ class OnlineNPETrainer:
         best_val_loss = float("inf")
         best_state = None
         epochs_without_improvement = 0
+        start_epoch = 0
+
+        if checkpoint_path is not None and resume and checkpoint_path.exists():
+            ckpt = torch.load(checkpoint_path, map_location=self.device)
+            self.density_estimator.load_state_dict(ckpt["density_estimator_state"])
+            optimizer.load_state_dict(ckpt["optimizer_state"])
+            scheduler.load_state_dict(ckpt["scheduler_state"])
+            best_val_loss = ckpt["best_val_loss"]
+            best_state = ckpt["best_state"]
+            epochs_without_improvement = ckpt["epochs_without_improvement"]
+            self.training_history = ckpt["training_history"]
+            start_epoch = ckpt["epoch"] + 1
+            logger.info(
+                f"Resumed from checkpoint {checkpoint_path} at epoch {start_epoch + 1} "
+                f"(best_val_loss={best_val_loss:.4f})"
+            )
 
         logger.info("Starting on-the-fly GPU NPE training")
         logger.info(
@@ -167,7 +188,7 @@ class OnlineNPETrainer:
             f"val_size: {val_size}, device: {self.device}"
         )
 
-        for epoch in range(max_epochs):
+        for epoch in range(start_epoch, max_epochs):
             self.density_estimator.train()
             train_loss_sum, n_train = 0.0, 0
 
@@ -224,6 +245,17 @@ class OnlineNPETrainer:
                 f"patience={epochs_without_improvement}/{stop_after_epochs}"
             )
 
+            if checkpoint_path is not None:
+                self._save_checkpoint(
+                    checkpoint_path,
+                    epoch=epoch,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    best_val_loss=best_val_loss,
+                    best_state=best_state,
+                    epochs_without_improvement=epochs_without_improvement,
+                )
+
             if epochs_without_improvement >= stop_after_epochs:
                 logger.info(f"Early stopping at epoch {epoch + 1}")
                 break
@@ -233,6 +265,35 @@ class OnlineNPETrainer:
             logger.info(f"Restored best model (val_loss={best_val_loss:.4f})")
 
         return self.density_estimator, self.training_history
+
+    def _save_checkpoint(
+        self,
+        checkpoint_path: Path,
+        epoch: int,
+        optimizer,
+        scheduler,
+        best_val_loss: float,
+        best_state,
+        epochs_without_improvement: int,
+    ) -> None:
+        """Save resume state after an epoch. Atomic: write to tmp, then rename."""
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".tmp")
+        torch.save(
+            {
+                "epoch": epoch,
+                "density_estimator_state": self.density_estimator.state_dict(),
+                "optimizer_state": optimizer.state_dict(),
+                "scheduler_state": scheduler.state_dict(),
+                "best_val_loss": best_val_loss,
+                "best_state": best_state,
+                "epochs_without_improvement": epochs_without_improvement,
+                "training_history": self.training_history,
+            },
+            tmp_path,
+        )
+        os.replace(tmp_path, checkpoint_path)
+        logger.debug(f"Checkpoint saved: {checkpoint_path} (epoch {epoch + 1})")
 
     def build_posterior(self, prior=None) -> DirectPosterior:
         if self.density_estimator is None:

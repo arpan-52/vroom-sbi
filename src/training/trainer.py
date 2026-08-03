@@ -519,6 +519,13 @@ class SBITrainer:
             ),
         )
 
+        checkpoint_dir = getattr(self.config.training, "checkpoint_dir", None)
+        checkpoint_path = (
+            Path(checkpoint_dir) / f"checkpoint_online_{model_type}_n{n_components}.pt"
+            if checkpoint_dir
+            else None
+        )
+
         trainer = OnlineNPETrainer(simulator=gpu_sim, device=self.device)
         density_estimator, history = trainer.train(
             prior=prior,
@@ -537,6 +544,7 @@ class SBITrainer:
             tf32=getattr(self.config.training, "tf32", True),
             amp=getattr(self.config.training, "amp", "none"),
             show_progress=True,
+            checkpoint_path=checkpoint_path,
         )
 
         self._streaming_trainer = trainer

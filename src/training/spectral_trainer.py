@@ -341,6 +341,13 @@ class SpectralShapeTrainer:
             ),
         )
 
+        checkpoint_dir = getattr(self.config.training, "checkpoint_dir", None)
+        checkpoint_path = (
+            Path(checkpoint_dir) / "checkpoint_online_spectral_shape.pt"
+            if checkpoint_dir
+            else None
+        )
+
         trainer = OnlineNPETrainer(simulator=gpu_sim, device=self.device)
         return trainer.train(
             prior=prior,
@@ -359,6 +366,7 @@ class SpectralShapeTrainer:
             tf32=getattr(self.config.training, "tf32", True),
             amp=getattr(self.config.training, "amp", "none"),
             show_progress=True,
+            checkpoint_path=checkpoint_path,
         )
 
     def _train_on_chunks(

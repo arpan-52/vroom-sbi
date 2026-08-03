@@ -197,6 +197,10 @@ class TrainingConfig:
     device: str = "cuda"
     save_dir: str = "models"
 
+    # Resume support (online mode): epoch checkpoint written after every epoch,
+    # loaded automatically if present at train start. None disables checkpointing.
+    checkpoint_dir: str | None = None
+
     def get_scaled_simulations(self, n_components: int) -> int:
         """Calculate scaled number of simulations based on model complexity."""
         if not self.simulation_scaling:
@@ -415,6 +419,11 @@ class Configuration:
             train_spectra=bool(train_raw.get("train_spectra", False)),
             device=str(train_raw.get("device", "cuda")),
             save_dir=str(train_raw.get("save_dir", "models")),
+            checkpoint_dir=(
+                str(train_raw["checkpoint_dir"])
+                if train_raw.get("checkpoint_dir")
+                else None
+            ),
         )
 
         # MemoryConfig controls chunked inference RAM/VRAM budgets in engine.py

@@ -106,6 +106,10 @@ training:
   # Output
   save_dir: "models"
 
+  # Resume support: checkpoint written after every epoch, auto-loaded on restart.
+  # Needed because this box is subject to maintenance kills.
+  checkpoint_dir: "models/checkpoints"
+
 # =============================================================================
 # MODEL SELECTION
 # =============================================================================
